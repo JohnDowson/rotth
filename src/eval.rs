@@ -9,7 +9,7 @@ pub fn eval(ops: Vec<Op>) -> u64 {
         .iter()
         .enumerate()
         .filter_map(|(i, op)| {
-            if let Op::Label(l) = op {
+            if let Op::Label(l) | Op::Proc(l) = op {
                 (l.clone(), i).some()
             } else {
                 None
@@ -42,7 +42,9 @@ pub fn eval(ops: Vec<Op>) -> u64 {
                 let v = stack[stack.len() - 2];
                 stack.push(v);
             }
+
             Op::Dump => println!("{:?}", stack),
+            Op::Print => println!("{:?}", stack.pop().unwrap()),
 
             Op::Add => {
                 let (b, a) = (stack.pop().unwrap(), stack.pop().unwrap());
@@ -87,6 +89,8 @@ pub fn eval(ops: Vec<Op>) -> u64 {
                 stack.push((a >= b) as u64);
             }
 
+            Op::Proc(_) => (),
+            Op::ProcEnd => (),
             Op::Label(_) => (),
             Op::Jump(l) => i = labels[l],
             Op::JumpF(l) => {

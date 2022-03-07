@@ -14,6 +14,7 @@ pub enum Op {
     Over,
 
     Dump,
+    Print,
 
     Add,
     Sub,
@@ -27,6 +28,8 @@ pub enum Op {
     Gt,
     Ge,
 
+    Proc(String),
+    ProcEnd,
     Label(String),
     Jump(String),
     JumpF(String),
@@ -61,10 +64,11 @@ impl Compiler {
         self.label = 0;
         self.current_name = name.clone();
         let label = name;
-        self.emit(Label(label));
+        self.emit(Proc(label));
 
         self.compile_body(proc.body);
 
+        self.emit(ProcEnd);
         self.emit(Return);
     }
 
@@ -91,6 +95,7 @@ impl Compiler {
                     ">=" => self.emit(Ge),
 
                     "&?" => self.emit(Dump),
+                    "print" => self.emit(Print),
 
                     _ => self.emit(Call(w)),
                 },

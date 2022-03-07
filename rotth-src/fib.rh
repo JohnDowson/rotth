@@ -1,5 +1,6 @@
 proc main : uint do
-    25 fib &?
+    1 fib print
+    0
 end
 
 proc fib uint : uint do

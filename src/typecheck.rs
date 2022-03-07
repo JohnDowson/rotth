@@ -152,7 +152,7 @@ fn typecheck_body(
                     println!("{:?}", types);
                     return error(node.span, CompStop, "");
                 }
-                "pop" => {
+                "print" | "pop" => {
                     stack.pop(heap).ok_or_else(|| {
                         Error::new(node.span, NotEnoughData, "Not enough data to pop")
                     })?;
