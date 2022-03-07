@@ -53,8 +53,10 @@ impl Compiler {
 
         self.emit(Exit);
 
-        for (name, (proc, _, _)) in procs {
-            self.compile_proc(name, proc);
+        for (name, (proc, _, needed)) in procs {
+            if needed {
+                self.compile_proc(name, proc);
+            }
         }
 
         self.result
