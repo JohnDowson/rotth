@@ -1,3 +1,0 @@
-proc main : uint do
-    true 1 over ?&?
-end

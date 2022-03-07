@@ -1,6 +1,0 @@
-proc main : uint do
-   true while dup do pop false end pop 1
-end
-
-proc foo do
-end
