@@ -1,0 +1,11 @@
+proc main : uint do
+    25 fib &?
+end
+
+proc fib uint : uint do
+    dup 3 <= if
+        pop 1
+    else
+        dup 1 - swap 2 - swap fib swap fib +
+    end
+end

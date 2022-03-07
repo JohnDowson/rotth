@@ -1,0 +1,11 @@
+proc main : uint do
+    10 count
+end
+
+proc count uint : uint do
+    dup 0 = if
+    else
+        &?
+        2 - count
+    end
+end

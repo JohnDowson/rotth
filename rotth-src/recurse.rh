@@ -1,0 +1,7 @@
+proc foo do
+    foo
+end
+
+proc main : uint do
+    foo 1
+end

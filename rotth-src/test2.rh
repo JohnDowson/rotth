@@ -1,0 +1,13 @@
+proc / uint uint : uint do
+    %/ pop
+end
+
+proc % uint uint : uint do
+    %/ swap pop
+end
+
+
+proc main : uint do
+   5 2 / &? pop
+   5 2 % &?
+end
