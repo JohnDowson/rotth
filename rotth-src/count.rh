@@ -5,7 +5,7 @@ end
 proc count uint : uint do
     dup 0 = if
     else
-        &?
-        2 - count
+        dup print
+        1 - count
     end
 end

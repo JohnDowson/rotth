@@ -1,0 +1,8 @@
+proc main : uint do
+    5 2 div print
+    0
+end
+
+proc div uint uint : uint do
+    divmod drop
+end

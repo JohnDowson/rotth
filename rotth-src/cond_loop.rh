@@ -1,6 +1,11 @@
 proc main : uint do
-    1 while dup 0 > do
+    ;0 while dup 10 < do
+    ;    dup print
+    ;    1 +
+    ;end drop
+    10 while dup 0 > do
         dup print
         1 -
-    end
+    end drop
+    0
 end

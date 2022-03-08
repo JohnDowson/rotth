@@ -1,11 +1,11 @@
 proc main : uint do
-    1 fib print
+    25 fib print
     0
 end
 
 proc fib uint : uint do
     dup 3 <= if
-        pop 1
+        drop 1
     else
         dup 1 - swap 2 - swap fib swap fib +
     end

@@ -152,7 +152,7 @@ fn typecheck_body(
                     println!("{:?}", types);
                     return error(node.span, CompStop, "");
                 }
-                "print" | "pop" => {
+                "print" | "drop" => {
                     stack.pop(heap).ok_or_else(|| {
                         Error::new(node.span, NotEnoughData, "Not enough data to pop")
                     })?;
@@ -186,7 +186,7 @@ fn typecheck_body(
                     stack.push(heap, b);
                 }
                 "+" | "-" | "*" => typecheck_binop(stack, heap, node)?,
-                "%/" => typecheck_divmod(stack, heap, node)?,
+                "divmod" => typecheck_divmod(stack, heap, node)?,
                 "=" | "!=" | "<" | "<=" | ">" | ">=" => typecheck_boolean(stack, heap, node)?,
                 "&?" => (),
                 proc => {

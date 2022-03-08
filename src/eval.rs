@@ -26,7 +26,7 @@ pub fn eval(ops: Vec<Op>) -> u64 {
         println!("{}:\t{:?}", i, op);
         match op {
             Op::Push(c) => stack.push(c.bytes()),
-            Op::Pop => {
+            Op::Drop => {
                 stack.pop();
             }
             Op::Dup => {
@@ -68,7 +68,7 @@ pub fn eval(ops: Vec<Op>) -> u64 {
                 let (b, a) = (stack.pop().unwrap(), stack.pop().unwrap());
                 stack.push((a == b) as u64);
             }
-            Op::Neq => {
+            Op::Ne => {
                 let (b, a) = (stack.pop().unwrap(), stack.pop().unwrap());
                 stack.push((a != b) as u64);
             }

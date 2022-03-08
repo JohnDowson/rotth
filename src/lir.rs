@@ -8,7 +8,7 @@ use crate::{
 #[derive(Debug)]
 pub enum Op {
     Push(Const),
-    Pop,
+    Drop,
     Dup,
     Swap,
     Over,
@@ -22,7 +22,7 @@ pub enum Op {
     Mul,
 
     Eq,
-    Neq,
+    Ne,
     Lt,
     Le,
     Gt,
@@ -79,18 +79,18 @@ impl Compiler {
             match node.ast {
                 AstKind::Literal(c) => self.emit(Push(c)),
                 AstKind::Word(w) => match w.as_str() {
-                    "pop" => self.emit(Pop),
+                    "drop" => self.emit(Drop),
                     "dup" => self.emit(Dup),
                     "swap" => self.emit(Swap),
                     "over" => self.emit(Over),
 
                     "+" => self.emit(Add),
                     "-" => self.emit(Sub),
-                    "%/" => self.emit(Divmod),
+                    "divmod" => self.emit(Divmod),
                     "*" => self.emit(Sub),
 
                     "=" => self.emit(Eq),
-                    "!=" => self.emit(Neq),
+                    "!=" => self.emit(Ne),
                     "<" => self.emit(Lt),
                     "<=" => self.emit(Le),
                     ">" => self.emit(Gt),
@@ -142,7 +142,7 @@ impl Compiler {
     }
 
     fn gen_label(&mut self) -> String {
-        let res = format!("{}{}", self.current_name, self.label);
+        let res = format!(".{}{}", self.current_name, self.label);
         self.label += 1;
         res
     }

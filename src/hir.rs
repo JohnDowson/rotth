@@ -4,7 +4,7 @@ use chumsky::prelude::*;
 use somok::Somok;
 
 use crate::{
-    parser::{KeyWord, Token},
+    lexer::{KeyWord, Token},
     span::Span,
 };
 
@@ -141,7 +141,7 @@ fn proc() -> impl Parser<Token, (String, (Proc, Span)), Error = Simple<Token, Sp
 fn test_proc() {
     use chumsky::Stream;
     let src = "proc foo int : int do end";
-    let tokens = crate::parser::lexer()
+    let tokens = crate::lexer::lexer()
         .parse(Stream::from_iter(
             Span::new(src.len(), src.len()),
             src.chars().enumerate().map(|(i, c)| (c, Span::point(i))),
@@ -264,7 +264,7 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
 fn test_body() {
     use chumsky::Stream;
     let src = "while true do end";
-    let tokens = crate::parser::lexer()
+    let tokens = crate::lexer::lexer()
         .parse(Stream::from_iter(
             Span::new(src.len(), src.len()),
             src.chars().enumerate().map(|(i, c)| (c, Span::point(i))),
@@ -288,7 +288,7 @@ fn test_cond() {
         else
             other
         end";
-    let tokens = crate::parser::lexer()
+    let tokens = crate::lexer::lexer()
         .parse(Stream::from_iter(
             Span::new(src.len(), src.len()),
             src.chars().enumerate().map(|(i, c)| (c, Span::point(i))),
@@ -311,7 +311,7 @@ fn test_procs() {
     use chumsky::Stream;
     let src = "proc foo : int do 1 end
     proc bar : int do 2 end";
-    let tokens = crate::parser::lexer()
+    let tokens = crate::lexer::lexer()
         .parse(Stream::from_iter(
             Span::new(src.len(), src.len()),
             src.chars().enumerate().map(|(i, c)| (c, Span::point(i))),

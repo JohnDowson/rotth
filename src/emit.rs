@@ -17,42 +17,10 @@ impl Compiler {
             BITS 64
             section .text
             global _start
-
-            __print__:
-                mov     r9, -368934881474191032
-                sub     rsp, 40
-                mov     BYTE [rsp+31], 10
-                lea     rcx, [rsp+30]
-            .L2:
-                mov     rax, rdi
-                lea     r8, [rsp+32]
-                mul     r9
-                mov     rax, rdi
-                sub     r8, rcx
-                shr     rdx, 3
-                lea     rsi, [rdx+rdx*4]
-                add     rsi, rsi
-                sub     rax, rsi
-                add     eax, 48
-                mov     BYTE [rcx], al
-                mov     rax, rdi
-                mov     rdi, rdx
-                mov     rdx, rcx
-                sub     rcx, 1
-                cmp     rax, 9
-                ja      .L2
-                lea     rax, [rsp+32]
-                mov     edi, 1
-                sub     rdx, rax
-                xor     eax, eax
-                lea     rsi, [rsp+32+rdx]
-                mov     rdx, r8
-                mov     rax, 1
-                syscall
-                add     rsp, 40
-                ret
+            extern print
 
             _start:
+                mov QWORD [ret_stack_rsp], ret_stack
         "},
         )?;
         for op in ops {
@@ -63,7 +31,6 @@ impl Compiler {
                     ; {:?}
                         mov rax, {:?}
                         push rax
-
                     "},
                     op,
                     c.bytes()
@@ -75,7 +42,6 @@ impl Compiler {
                         pop rax
                         push rax
                         push rax
-
                     "},
                     op
                 )?,
@@ -87,7 +53,6 @@ impl Compiler {
                         pop rbx
                         push rax
                         push rbx
-
                     "},
                     op
                 )?,
@@ -100,16 +65,14 @@ impl Compiler {
                         push rbx
                         push rax
                         push rbx
-
                     "},
                     op
                 )?,
-                Pop => write!(
+                Drop => write!(
                     sink,
                     indoc! {"
                     ; {:?}
                         pop rax
-
                     "},
                     op
                 )?,
@@ -119,8 +82,7 @@ impl Compiler {
                     indoc! {"
                     ; {:?}
                         pop rdi
-                        call __print__
-
+                        call print
                     "},
                     op
                 )?,
@@ -133,7 +95,6 @@ impl Compiler {
                         pop rbx
                         sub rbx, rax
                         push rbx
-
                     "},
                     op
                 )?,
@@ -145,11 +106,76 @@ impl Compiler {
                         pop rbx
                         add rbx, rax
                         push rbx
-
+                    "},
+                    op
+                )?,
+                Divmod => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        xor rdx, rdx
+                        pop rbx
+                        pop rax
+                        div rbx
+                        push rax
+                        push rdx
+                    "},
+                    op
+                )?,
+                Mul => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        pop rax
+                        pop rbx
+                        mul rbx
+                        push rax
                     "},
                     op
                 )?,
 
+                Ne => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        mov rcx, 0
+                        mov rdx, 1
+                        pop rbx
+                        pop rax
+                        cmp rax, rbx
+                        cmovne rcx, rdx
+                        push rcx
+                    "},
+                    op
+                )?,
+                Lt => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        mov rcx, 0
+                        mov rdx, 1
+                        pop rbx
+                        pop rax
+                        cmp rax, rbx
+                        cmovl rcx, rdx
+                        push rcx
+                    "},
+                    op
+                )?,
+                Ge => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        mov rcx, 0
+                        mov rdx, 1
+                        pop rbx
+                        pop rax
+                        cmp rax, rbx
+                        cmovge rcx, rdx
+                        push rcx
+                    "},
+                    op
+                )?,
                 Le => write!(
                     sink,
                     indoc! {"
@@ -161,7 +187,6 @@ impl Compiler {
                         cmp rax, rbx
                         cmovle rcx, rdx
                         push rcx
-
                     "},
                     op
                 )?,
@@ -176,7 +201,20 @@ impl Compiler {
                         cmp rax, rbx
                         cmovg rcx, rdx
                         push rcx
-
+                    "},
+                    op
+                )?,
+                Eq => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        mov rcx, 0
+                        mov rdx, 1
+                        pop rbx
+                        pop rax
+                        cmp rax, rbx
+                        cmove rcx, rdx
+                        push rcx
                     "},
                     op
                 )?,
@@ -186,7 +224,6 @@ impl Compiler {
                     indoc! {"
                     ; {:?}
                         ret
-
                     "},
                     op
                 )?,
@@ -205,7 +242,6 @@ impl Compiler {
                         pop rdi
                         mov rax, 60
                         syscall
-
                     "},
                     op
                 )?,
@@ -215,9 +251,10 @@ impl Compiler {
                     {}:
                     ; save return address
                         pop rdi
-                        inc QWORD [ret_stack_rsp]
-                        mov QWORD [ret_stack_rsp], rdi
-
+                        mov rax, 8
+                        add [ret_stack_rsp], rax
+                        mov QWORD rax, [ret_stack_rsp]
+                        mov QWORD [rax], rdi
                     "},
                     l
                 )?,
@@ -225,8 +262,10 @@ impl Compiler {
                     sink,
                     indoc! {"
                     ; load return adderss
-                        mov QWORD rdi, [ret_stack_rsp]
-                        dec QWORD [ret_stack_rsp]
+                        mov QWORD rax, [ret_stack_rsp]
+                        mov QWORD rdi, [rax]
+                        mov rax, 8
+                        sub [ret_stack_rsp], rax
                         push rdi
                     "},
                 )?,
@@ -245,7 +284,6 @@ impl Compiler {
                         test rax, rax
                         syscall
                         jz {}
-
                     "},
                     op, l
                 )?,
@@ -254,12 +292,11 @@ impl Compiler {
                     indoc! {"
                     ; {:?}
                         jmp {}
-
                     "},
                     op, l
                 )?,
                 Dump => {}
-                op => todo!("{:?}", op),
+                JumpT(_) => todo!(), // op => todo!("{:?}", op),
             }
         }
         write!(

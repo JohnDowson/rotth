@@ -1,7 +1,7 @@
 use chumsky::{Parser, Stream};
 use clap::Parser as ClapParser;
 use rotth::{
-    emit, eval::eval, hir::procs, lir, parser::lexer, span::Span, typecheck::typecheck_program,
+    emit, eval::eval, hir::procs, lexer::lexer, lir, span::Span, typecheck::typecheck_program,
 };
 use somok::Somok;
 use std::{

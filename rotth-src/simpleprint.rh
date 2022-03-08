@@ -1,0 +1,7 @@
+proc main : uint do
+    1000 print
+    100 print
+    10 print
+    1 print
+    0
+end
