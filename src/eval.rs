@@ -4,7 +4,7 @@ use somok::Somok;
 
 use crate::{hir::IConst, lir::Op};
 
-pub fn eval(ops: Vec<Op>, strings: &[(usize, *mut u8)]) -> Result<u64, String> {
+pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<u64, String> {
     let labels = ops
         .iter()
         .enumerate()
@@ -16,6 +16,14 @@ pub fn eval(ops: Vec<Op>, strings: &[(usize, *mut u8)]) -> Result<u64, String> {
             }
         })
         .collect::<HashMap<String, usize>>();
+    let rawstrs: Vec<(usize, *mut u8)> = strings
+        .iter()
+        .map(|s| {
+            let (ptr, _, _) = s.clone().into_raw_parts();
+            let len = s.len();
+            (len, ptr)
+        })
+        .collect();
 
     let mut call_stack = Vec::new();
     let mut stack = Vec::new();
@@ -26,9 +34,9 @@ pub fn eval(ops: Vec<Op>, strings: &[(usize, *mut u8)]) -> Result<u64, String> {
         println!("{}:\t{:?}", i, op);
         match op {
             Op::PushStr(i) => {
-                let len = strings[*i].0 as u64;
+                let len = rawstrs[*i].0 as u64;
                 stack.push(len);
-                stack.push(strings[*i].1 as u64);
+                stack.push(rawstrs[*i].1 as u64);
             }
             Op::Push(c) => match c {
                 IConst::Bool(b) => stack.push(*b as u64),

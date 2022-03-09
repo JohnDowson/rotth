@@ -59,6 +59,27 @@ where
     let string = just('"')
         .ignore_then(none_of(['"']).repeated().collect())
         .then_ignore(just('"'))
+        .map(|s: String| {
+            let mut res = Vec::new();
+            let mut escape = false;
+            for b in s.into_bytes() {
+                if escape {
+                    match b {
+                        b'n' => res.push(b'\n'),
+                        b't' => res.push(b'\t'),
+                        b'\\' => res.push(b'\\'),
+                        _ => panic!("Invalid escape sequence \\{}!", b as char),
+                    }
+                    escape = false;
+                } else if b == b'\\' {
+                    escape = true;
+                    continue;
+                } else {
+                    res.push(b)
+                }
+            }
+            String::from_utf8(res).unwrap()
+        })
         .map(Token::Str);
 
     let num = text::int(10).map(Token::Num);
