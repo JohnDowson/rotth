@@ -4,7 +4,7 @@ use simplearena::{Heap, Ref};
 use somok::Somok;
 
 use crate::{
-    hir::{AstKind, AstNode, Const, If, Proc, Signature, Type},
+    hir::{AstKind, AstNode, IConst, If, Intrinsic, Signature, TopLevel, Type},
     span::Span,
 };
 
@@ -31,10 +31,12 @@ pub enum ErrorKind {
         actual: Vec<Type>,
     },
     NotEnoughData,
-    ProcUndefined(String),
+    Undefined(String),
     InvalidMain,
     InvalidWhile,
     CompStop,
+    Unexpected,
+    CallInConst,
 }
 use ErrorKind::*;
 fn error<T>(span: Span, kind: ErrorKind, message: impl ToString) -> Result<T> {
@@ -44,28 +46,96 @@ fn error<T>(span: Span, kind: ErrorKind, message: impl ToString) -> Result<T> {
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub fn typecheck_program(
-    procs: HashMap<String, (Proc, Span)>,
-) -> Result<HashMap<String, (Proc, Span, bool)>> {
-    let mut procs = procs
+    items: HashMap<String, (TopLevel, Span)>,
+) -> Result<HashMap<String, (TopLevel, Span, bool)>> {
+    let mut items = items
         .into_iter()
         .map(|(k, (p, s))| (k, (p, s, false)))
         .collect();
 
-    typecheck_proc("main", &mut procs)?;
-    procs.okay()
+    typecheck_proc("main", &mut items)?;
+    items.okay()
 }
 
-fn typecheck_proc(name: &str, procs: &mut HashMap<String, (Proc, Span, bool)>) -> Result<()> {
-    let (proc, span, typechecked) = procs
+fn typecheck_const(
+    const_name: &str,
+    items: &mut HashMap<String, (TopLevel, Span, bool)>,
+) -> Result<()> {
+    let (const_, span, typechecked) = items
+        .get(const_name)
+        .ok_or_else(|| {
+            Error::new(
+                Span::point(0),
+                Undefined(const_name.to_string()),
+                format!("Proc `{}` does not exist", const_name),
+            )
+        })?
+        .clone();
+    let const_ = match const_ {
+        TopLevel::Const(c) => c,
+        TopLevel::Proc(_) => {
+            return error(
+                span,
+                Unexpected,
+                format!("Unexpected const {}, expected proc", const_name),
+            )
+        }
+    };
+    if typechecked {
+        return ().okay();
+    }
+
+    let mut heap = THeap::default();
+    let mut actual = TypeStack::default();
+    let mut expected = TypeStack::default();
+    expected.push(&mut heap, const_.ty);
+
+    typecheck_body(
+        const_name,
+        &const_.body,
+        &mut actual,
+        &mut heap,
+        items,
+        true,
+    )?;
+
+    if actual.eq(&expected, &heap) {
+        let (_, _, typechecked) = items.get_mut(const_name).unwrap();
+        *typechecked = true;
+        ().okay()
+    } else {
+        error(
+            span,
+            TypeMismatch {
+                expected: vec![const_.ty],
+                actual: actual.into_deq(&heap).into(),
+            },
+            "Const body does not equal const type",
+        )
+    }
+}
+
+fn typecheck_proc(name: &str, items: &mut HashMap<String, (TopLevel, Span, bool)>) -> Result<()> {
+    let (proc, span, typechecked) = items
         .get(name)
         .ok_or_else(|| {
             Error::new(
                 Span::point(0),
-                ProcUndefined(name.to_string()),
+                Undefined(name.to_string()),
                 format!("Proc `{}` does not exist", name),
             )
         })?
         .clone();
+    let proc = match proc {
+        TopLevel::Proc(p) => p,
+        TopLevel::Const(_) => {
+            return error(
+                span,
+                Unexpected,
+                format!("Unexpected const {}, expected proc", name),
+            )
+        }
+    };
     if typechecked {
         return ().okay();
     }
@@ -90,7 +160,7 @@ fn typecheck_proc(name: &str, procs: &mut HashMap<String, (Proc, Span, bool)>) -
         expected.push(&mut heap, *ty)
     }
 
-    typecheck_body(name, &proc.body, &mut actual, &mut heap, procs)?;
+    typecheck_body(name, &proc.body, &mut actual, &mut heap, items, false)?;
 
     if !actual.eq(&expected, &heap) {
         error(
@@ -102,9 +172,28 @@ fn typecheck_proc(name: &str, procs: &mut HashMap<String, (Proc, Span, bool)>) -
             "Type mismatch: proc body does not equal proc outputs",
         )
     } else {
-        let (_, _, typechecked) = procs.get_mut(name).unwrap();
+        let (_, _, typechecked) = items.get_mut(name).unwrap();
         *typechecked = true;
         ().okay()
+    }
+}
+
+fn is_proc(name: &str, items: &HashMap<String, (TopLevel, Span, bool)>) -> bool {
+    match items.get(name) {
+        Some((t, _, _)) => match t {
+            TopLevel::Proc(_) => true,
+            TopLevel::Const(_) => false,
+        },
+        None => false,
+    }
+}
+fn is_const(name: &str, items: &HashMap<String, (TopLevel, Span, bool)>) -> bool {
+    match items.get(name) {
+        Some((t, _, _)) => match t {
+            TopLevel::Proc(_) => false,
+            TopLevel::Const(_) => true,
+        },
+        None => false,
     }
 }
 
@@ -113,18 +202,22 @@ fn typecheck_body(
     body: &[AstNode],
     stack: &mut TypeStack,
     heap: &mut THeap,
-    procs: &mut HashMap<String, (Proc, Span, bool)>,
+    items: &mut HashMap<String, (TopLevel, Span, bool)>,
+    in_const: bool,
 ) -> Result<()> {
     for node in body {
         match &node.ast {
             AstKind::Literal(c) => match c {
-                Const::Bool(_) => stack.push(heap, Type::Bool),
-                Const::U64(_) => stack.push(heap, Type::U64),
-                Const::I64(_) => stack.push(heap, Type::I64),
+                IConst::Bool(_) => stack.push(heap, Type::Bool),
+                IConst::U64(_) => stack.push(heap, Type::U64),
+                IConst::I64(_) => stack.push(heap, Type::I64),
             },
             AstKind::Word(w) => match w.as_str() {
                 rec if rec == name => {
-                    for ty_expected in &procs[rec].0.signature.ins {
+                    let proc = &items[rec].0.as_proc().ok_or_else(|| {
+                        Error::new(node.span, Unexpected, "Recursive const definition")
+                    })?;
+                    for ty_expected in &proc.signature.ins {
                         let ty_actual = stack.pop(heap).ok_or_else(|| {
                             Error::new(
                                 node.span,
@@ -143,28 +236,82 @@ fn typecheck_body(
                             );
                         }
                     }
-                    for ty in &procs[rec].0.signature.outs {
+                    for ty in &proc.signature.outs {
                         stack.push(heap, *ty)
                     }
                 }
-                "?&?" => {
+                proc_name if is_proc(proc_name, items) => {
+                    if in_const {
+                        return error(
+                            node.span,
+                            CallInConst,
+                            "Proc calls not allowed in const context",
+                        );
+                    }
+                    let proc = items[proc_name].0.as_proc().ok_or_else(|| {
+                        Error::new(node.span, Unexpected, "Recursive const definition")
+                    })?;
+                    for ty_expected in &proc.signature.ins {
+                        let ty_actual = stack.pop(heap).ok_or_else(|| {
+                            Error::new(
+                                node.span,
+                                NotEnoughData,
+                                "Not enough data for proc invocation",
+                            )
+                        })?;
+                        if *ty_expected != ty_actual {
+                            return error(
+                                node.span,
+                                TypeMismatch {
+                                    expected: vec![*ty_expected],
+                                    actual: vec![ty_actual],
+                                },
+                                "Wrong types for proc invocation",
+                            );
+                        }
+                    }
+                    typecheck_proc(proc_name, items)?;
+                    let proc = items[proc_name].0.as_proc().ok_or_else(|| {
+                        Error::new(node.span, Unexpected, "Recursive const definition")
+                    })?;
+                    for ty in &proc.signature.outs {
+                        stack.push(heap, *ty)
+                    }
+                }
+                const_name if is_const(const_name, items) => {
+                    typecheck_const(const_name, items)?;
+                    let const_ = items[const_name].0.as_const().ok_or_else(|| {
+                        Error::new(node.span, Unexpected, "Recursive const definition")
+                    })?;
+                    stack.push(heap, const_.ty)
+                }
+                word => {
+                    return error(
+                        node.span,
+                        Undefined(word.to_string()),
+                        "Encountered undefined word".to_string(),
+                    )
+                }
+            },
+            AstKind::Intrinsic(i) => match i {
+                Intrinsic::CompStop => {
                     let types: Vec<_> = stack.clone().into_deq(heap).into();
                     println!("{:?}", types);
                     return error(node.span, CompStop, "");
                 }
-                "print" | "drop" => {
+                Intrinsic::Print | Intrinsic::Drop => {
                     stack.pop(heap).ok_or_else(|| {
                         Error::new(node.span, NotEnoughData, "Not enough data to pop")
                     })?;
                 }
-                "dup" => {
+                Intrinsic::Dup => {
                     let ty = stack.pop(heap).ok_or_else(|| {
                         Error::new(node.span, NotEnoughData, "Not enough data to dup")
                     })?;
                     stack.push(heap, ty);
                     stack.push(heap, ty);
                 }
-                "swap" => {
+                Intrinsic::Swap => {
                     let a = stack.pop(heap).ok_or_else(|| {
                         Error::new(node.span, NotEnoughData, "Not enough data to swap")
                     })?;
@@ -174,7 +321,7 @@ fn typecheck_body(
                     stack.push(heap, a);
                     stack.push(heap, b);
                 }
-                "over" => {
+                Intrinsic::Over => {
                     let a = stack.pop(heap).ok_or_else(|| {
                         Error::new(node.span, NotEnoughData, "Not enough data to over")
                     })?;
@@ -185,43 +332,17 @@ fn typecheck_body(
                     stack.push(heap, a);
                     stack.push(heap, b);
                 }
-                "+" | "-" | "*" => typecheck_binop(stack, heap, node)?,
-                "divmod" => typecheck_divmod(stack, heap, node)?,
-                "=" | "!=" | "<" | "<=" | ">" | ">=" => typecheck_boolean(stack, heap, node)?,
-                "&?" => (),
-                proc => {
-                    for ty_expected in &procs
-                        .get(proc)
-                        .ok_or_else(|| {
-                            Error::new(node.span, ProcUndefined(proc.into()), "Undefined procedure")
-                        })?
-                        .0
-                        .signature
-                        .ins
-                    {
-                        let ty_actual = stack.pop(heap).ok_or_else(|| {
-                            Error::new(
-                                node.span,
-                                NotEnoughData,
-                                "Not enough data for proc invocation",
-                            )
-                        })?;
-                        if *ty_expected != ty_actual {
-                            return error(
-                                node.span,
-                                TypeMismatch {
-                                    expected: vec![*ty_expected],
-                                    actual: vec![ty_actual],
-                                },
-                                "Wrong types for proc invocation",
-                            );
-                        }
-                    }
-                    typecheck_proc(&*proc, procs)?;
-                    for ty in &procs[proc].0.signature.outs {
-                        stack.push(heap, *ty)
-                    }
+                Intrinsic::Add | Intrinsic::Sub | Intrinsic::Mul => {
+                    typecheck_binop(stack, heap, node)?
                 }
+                Intrinsic::Divmod => typecheck_divmod(stack, heap, node)?,
+                Intrinsic::Eq
+                | Intrinsic::Ne
+                | Intrinsic::Lt
+                | Intrinsic::Le
+                | Intrinsic::Gt
+                | Intrinsic::Ge => typecheck_boolean(stack, heap, node)?,
+                Intrinsic::Dump => (),
             },
             AstKind::If(cond) => {
                 let ty = stack.pop(heap).ok_or_else(|| {
@@ -237,11 +358,11 @@ fn typecheck_body(
                         "If expects a bool",
                     );
                 }
-                typecheck_if(name, cond, &node.span, heap, stack, procs)?;
+                typecheck_if(name, cond, &node.span, heap, stack, items, in_const)?;
             }
             AstKind::While(while_) => {
                 let stack_before = stack.clone().into_deq(heap);
-                typecheck_body(name, &while_.cond, stack, heap, procs)?;
+                typecheck_body(name, &while_.cond, stack, heap, items, in_const)?;
                 let ty = stack.pop(heap).ok_or_else(|| {
                     Error::new(node.span, NotEnoughData, "Not enough data for while")
                 })?;
@@ -255,7 +376,7 @@ fn typecheck_body(
                         "While expects to consume a bool",
                     );
                 }
-                typecheck_body(name, &while_.body, stack, heap, procs)?;
+                typecheck_body(name, &while_.body, stack, heap, items, in_const)?;
                 if stack.clone().into_deq(heap) != stack_before {
                     return error(
                         node.span,
@@ -264,6 +385,7 @@ fn typecheck_body(
                     );
                 }
             }
+            AstKind::Bind(_bind) => todo!(),
         }
     }
     ().okay()
@@ -345,12 +467,13 @@ fn typecheck_if(
     span: &Span,
     heap: &mut THeap,
     stack: &mut TypeStack,
-    procs: &mut HashMap<String, (Proc, Span, bool)>,
+    procs: &mut HashMap<String, (TopLevel, Span, bool)>,
+    in_const: bool,
 ) -> Result<()> {
     let (mut truth, mut lie) = (stack.clone(), stack.clone());
-    typecheck_body(name, &cond.truth, &mut truth, heap, procs)?;
+    typecheck_body(name, &cond.truth, &mut truth, heap, procs, in_const)?;
     if let Some(lie_body) = &cond.lie {
-        typecheck_body(name, &*lie_body, &mut lie, heap, procs)?;
+        typecheck_body(name, &*lie_body, &mut lie, heap, procs, in_const)?;
     } else {
         return ().okay();
     }
@@ -455,21 +578,21 @@ type THeap = Heap<TypeFrame, 0>;
 
 #[test]
 fn test_typecheck() {
-    use super::hir::{AstKind, AstNode};
+    use super::hir::{AstKind, AstNode, Proc};
     use std::assert_matches::assert_matches;
     let mut procs = [(
         "main".to_string(),
         (
-            Proc {
+            TopLevel::Proc(Proc {
                 signature: Signature {
-                    ins: vec![Type::I64],
-                    outs: vec![Type::I64, Type::U64],
+                    ins: vec![],
+                    outs: vec![Type::U64],
                 },
                 body: vec![AstNode {
                     span: Span::point(0),
-                    ast: AstKind::Literal(Const::U64(1)),
+                    ast: AstKind::Literal(IConst::U64(1)),
                 }],
-            },
+            }),
             Span::point(0),
             false,
         ),

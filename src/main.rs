@@ -115,7 +115,7 @@ fn main() -> std::io::Result<()> {
             println!("Total:\t{:?}", compiled - start);
         }
     } else {
-        eval(lir);
+        println!("exitcode: {}", eval(lir).unwrap());
         let evaluated = Instant::now();
         if args.time {
             println!("Evaluated in:\t{:?}", evaluated - transpiled);

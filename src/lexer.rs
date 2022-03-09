@@ -7,6 +7,7 @@ pub enum Token {
     Word(String),
     KeyWord(KeyWord),
     Num(String),
+    Ignore,
     SigSep,
 }
 
@@ -16,6 +17,7 @@ impl std::fmt::Debug for Token {
             Self::Word(word) => write!(f, "{}", word),
             Self::KeyWord(keyword) => keyword.fmt(f),
             Self::Num(num) => write!(f, "{}", num),
+            Self::Ignore => write!(f, "_"),
             Self::SigSep => write!(f, ":"),
         }
     }
@@ -28,6 +30,8 @@ pub enum KeyWord {
     Proc,
     While,
     Do,
+    Bind,
+    Const,
     End,
 }
 
@@ -61,18 +65,26 @@ where
             "proc" => KeyWord::Proc,
             "while" => KeyWord::While,
             "do" => KeyWord::Do,
+            "bind" => KeyWord::Bind,
+            "const" => KeyWord::Const,
             "end" => KeyWord::End,
-            _ => return Err(Simple::custom(s, "Invalid keyword".to_string())),
+            _ => return Simple::custom(s, "Invalid keyword".to_string()).error(),
         })
         .okay()
+    });
+
+    let ignore = word_parser().try_map(|i: String, s| match i.as_str() {
+        "_" => Token::Ignore.okay(),
+        _ => Simple::custom(s, "Invalid keyword".to_string()).error(),
     });
 
     let sig_sep = just(':').map(|_| Token::SigSep);
 
     let token = num
+        .or(sig_sep)
+        .or(ignore)
         .or(keyword)
         .or(word)
-        .or(sig_sep)
         .recover_with(skip_then_retry_until([]));
 
     let comment = just(";").then(take_until(just('\n'))).padded();

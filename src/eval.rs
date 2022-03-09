@@ -4,7 +4,7 @@ use somok::Somok;
 
 use crate::lir::Op;
 
-pub fn eval(ops: Vec<Op>) -> u64 {
+pub fn eval(ops: Vec<Op>) -> Result<u64, String> {
     let labels = ops
         .iter()
         .enumerate()
@@ -105,12 +105,12 @@ pub fn eval(ops: Vec<Op>) -> u64 {
             }
             Op::Call(l) => {
                 call_stack.push(i);
-                i = labels[l]
+                i = labels.get(l).copied().ok_or_else(|| l.clone())?
             }
             Op::Return => i = call_stack.pop().unwrap(),
-            Op::Exit => return stack.pop().unwrap(),
+            Op::Exit => return stack.pop().unwrap().okay(),
         }
         i += 1;
     }
-    666
+    666.okay()
 }

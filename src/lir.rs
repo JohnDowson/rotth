@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 
 use crate::{
-    hir::{AstKind, AstNode, Const, If, Proc, While},
+    eval::eval,
+    hir::{AstKind, AstNode, Const, IConst, If, Intrinsic, Proc, TopLevel, While},
     span::Span,
 };
 
 #[derive(Debug)]
 pub enum Op {
-    Push(Const),
+    Push(IConst),
     Drop,
     Dup,
     Swap,
@@ -41,22 +42,57 @@ pub enum Op {
 use somok::Somok;
 use Op::*;
 
+#[derive(Clone)]
+enum ComConst {
+    Compiled(IConst),
+    NotCompiled(Const),
+}
+
 pub struct Compiler {
     label: usize,
     current_name: String,
     result: Vec<Op>,
+    consts: HashMap<String, ComConst>,
 }
 
 impl Compiler {
-    pub fn compile(mut self, procs: HashMap<String, (Proc, Span, bool)>) -> Vec<Op> {
+    pub fn compile(mut self, items: HashMap<String, (TopLevel, Span, bool)>) -> Vec<Op> {
+        let (procs, consts) = items
+            .into_iter()
+            .partition::<Vec<_>, _>(|(_, (it, _, _))| matches!(it, TopLevel::Proc(_)));
+        let procs = procs.into_iter().filter_map(|(name, (proc, _, needed))| {
+            if let TopLevel::Proc(proc) = proc {
+                if needed {
+                    (name, proc).some()
+                } else {
+                    None
+                }
+            } else {
+                unreachable!()
+            }
+        });
+        let consts = consts
+            .into_iter()
+            .filter_map(|(name, (const_, _, needed))| {
+                if let TopLevel::Const(const_) = const_ {
+                    if needed {
+                        (name, ComConst::NotCompiled(const_)).some()
+                    } else {
+                        None
+                    }
+                } else {
+                    unreachable!()
+                }
+            })
+            .collect::<HashMap<_, _>>();
+        self.consts = consts;
+
         self.emit(Call("main".to_string()));
 
         self.emit(Exit);
 
-        for (name, (proc, _, needed)) in procs {
-            if needed {
-                self.compile_proc(name, proc);
-            }
+        for (name, proc) in procs {
+            self.compile_proc(name, proc)
         }
 
         self.result
@@ -74,35 +110,71 @@ impl Compiler {
         self.emit(Return);
     }
 
+    fn compile_const(&mut self, name: String) -> IConst {
+        let const_ = match self.consts.get(&name) {
+            Some(ComConst::Compiled(i)) => return *i,
+            Some(ComConst::NotCompiled(c)) => c.clone(),
+            None => unreachable!(),
+        };
+        let Const { body, ty } = const_;
+        let mut com = Self::with_consts(self.consts.clone());
+        com.compile_body(body.clone());
+        com.emit(Exit);
+        let ops = com.result;
+        let const_ = match eval(ops) {
+            Ok(bytes) => IConst::from_ty_bytes(ty, bytes),
+            Err(req) => {
+                self.compile_const(req);
+                let mut com = Self::with_consts(com.consts);
+                com.compile_body(body);
+                com.emit(Exit);
+                let ops = com.result;
+                self.consts = com.consts;
+                match eval(ops) {
+                    Ok(bytes) => IConst::from_ty_bytes(ty, bytes),
+                    Err(_) => unreachable!(),
+                }
+            }
+        };
+
+        self.consts.insert(name, ComConst::Compiled(const_));
+        const_
+    }
+
     fn compile_body(&mut self, body: Vec<AstNode>) {
         for node in body {
             match node.ast {
                 AstKind::Literal(c) => self.emit(Push(c)),
-                AstKind::Word(w) => match w.as_str() {
-                    "drop" => self.emit(Drop),
-                    "dup" => self.emit(Dup),
-                    "swap" => self.emit(Swap),
-                    "over" => self.emit(Over),
+                AstKind::Word(w) if self.is_const(&w) => {
+                    let c = self.compile_const(w);
+                    self.emit(Push(c))
+                }
+                AstKind::Word(w) => self.emit(Call(w)),
+                AstKind::Intrinsic(i) => match i {
+                    Intrinsic::Drop => self.emit(Drop),
+                    Intrinsic::Dup => self.emit(Dup),
+                    Intrinsic::Swap => self.emit(Swap),
+                    Intrinsic::Over => self.emit(Over),
 
-                    "+" => self.emit(Add),
-                    "-" => self.emit(Sub),
-                    "divmod" => self.emit(Divmod),
-                    "*" => self.emit(Sub),
+                    Intrinsic::Add => self.emit(Add),
+                    Intrinsic::Sub => self.emit(Sub),
+                    Intrinsic::Divmod => self.emit(Divmod),
+                    Intrinsic::Mul => self.emit(Mul),
 
-                    "=" => self.emit(Eq),
-                    "!=" => self.emit(Ne),
-                    "<" => self.emit(Lt),
-                    "<=" => self.emit(Le),
-                    ">" => self.emit(Gt),
-                    ">=" => self.emit(Ge),
+                    Intrinsic::Eq => self.emit(Eq),
+                    Intrinsic::Ne => self.emit(Ne),
+                    Intrinsic::Lt => self.emit(Lt),
+                    Intrinsic::Le => self.emit(Le),
+                    Intrinsic::Gt => self.emit(Gt),
+                    Intrinsic::Ge => self.emit(Ge),
 
-                    "&?" => self.emit(Dump),
-                    "print" => self.emit(Print),
-
-                    _ => self.emit(Call(w)),
+                    Intrinsic::Dump => self.emit(Dump),
+                    Intrinsic::Print => self.emit(Print),
+                    Intrinsic::CompStop => return,
                 },
                 AstKind::If(cond) => self.compile_cond(cond),
                 AstKind::While(while_) => self.compile_while(while_),
+                AstKind::Bind(_) => todo!(),
             }
         }
     }
@@ -151,8 +223,21 @@ impl Compiler {
         Self {
             label: 0,
             current_name: "".to_string(),
-            result: Vec::new(),
+            result: Default::default(),
+            consts: Default::default(),
         }
+    }
+    fn with_consts(consts: HashMap<String, ComConst>) -> Self {
+        Self {
+            label: 0,
+            current_name: "".to_string(),
+            result: Default::default(),
+            consts,
+        }
+    }
+
+    fn is_const(&self, w: &str) -> bool {
+        self.consts.contains_key(w)
     }
 }
 

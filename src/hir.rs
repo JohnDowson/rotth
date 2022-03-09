@@ -1,21 +1,21 @@
-use std::collections::HashMap;
-
-use chumsky::prelude::*;
-use somok::Somok;
-
 use crate::{
     lexer::{KeyWord, Token},
     span::Span,
 };
+use chumsky::prelude::*;
+use somok::Somok;
+use std::collections::HashMap;
+#[cfg(test)]
+mod test;
 
-#[derive(Clone)]
-pub enum Const {
+#[derive(Clone, Copy)]
+pub enum IConst {
     Bool(u64),
     U64(u64),
     I64(u64),
 }
 
-impl std::fmt::Debug for Const {
+impl std::fmt::Debug for IConst {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Bool(arg0) => f.debug_tuple("Bool").field(&(*arg0 != 0)).finish(),
@@ -25,36 +25,45 @@ impl std::fmt::Debug for Const {
     }
 }
 
-impl Const {
+impl IConst {
     pub fn new<T: ToConst>(v: T) -> Self {
         v.to_const()
     }
+
+    pub fn from_ty_bytes(ty: Type, bytes: u64) -> Self {
+        match ty {
+            Type::Bool => Self::Bool(bytes),
+            Type::U64 => Self::U64(bytes),
+            Type::I64 => Self::I64(bytes),
+        }
+    }
+
     pub fn bytes(&self) -> u64 {
         match self {
-            Const::Bool(c) => *c,
-            Const::U64(c) => *c,
-            Const::I64(c) => *c,
+            IConst::Bool(c) => *c,
+            IConst::U64(c) => *c,
+            IConst::I64(c) => *c,
         }
     }
 }
 
 pub trait ToConst {
-    fn to_const(self) -> Const;
+    fn to_const(self) -> IConst;
 }
 
 impl ToConst for bool {
-    fn to_const(self) -> Const {
-        Const::Bool(self as u64)
+    fn to_const(self) -> IConst {
+        IConst::Bool(self as u64)
     }
 }
 impl ToConst for u64 {
-    fn to_const(self) -> Const {
-        Const::U64(self)
+    fn to_const(self) -> IConst {
+        IConst::U64(self)
     }
 }
 impl ToConst for i64 {
-    fn to_const(self) -> Const {
-        Const::I64(self as u64)
+    fn to_const(self) -> IConst {
+        IConst::I64(self as u64)
     }
 }
 
@@ -76,9 +85,8 @@ pub struct Proc {
     pub signature: Signature,
     pub body: Vec<AstNode>,
 }
-
-fn proc() -> impl Parser<Token, (String, (Proc, Span)), Error = Simple<Token, Span>> {
-    let ty = filter_map(|s, t| match &t {
+fn ty() -> impl Parser<Token, Type, Error = Simple<Token, Span>> {
+    filter_map(|s, t| match &t {
         Token::Word(ty) => match &**ty {
             "int" => Type::I64.okay(),
             "uint" => Type::U64.okay(),
@@ -104,11 +112,14 @@ fn proc() -> impl Parser<Token, (String, (Proc, Span)), Error = Simple<Token, Sp
             Some(t),
         )
         .error(),
-    });
+    })
+}
+
+fn proc() -> impl Parser<Token, (String, (TopLevel, Span)), Error = Simple<Token, Span>> {
     let sig_sep = just(Token::SigSep);
-    let signature = ty
+    let signature = ty()
         .repeated()
-        .then(sig_sep.then(ty.repeated().at_least(1)).or_not())
+        .then(sig_sep.then(ty().repeated().at_least(1)).or_not())
         .map(|(ins, outs)| {
             let outs = if let Some((_, types)) = outs {
                 types
@@ -118,41 +129,16 @@ fn proc() -> impl Parser<Token, (String, (Proc, Span)), Error = Simple<Token, Sp
             Signature { ins, outs }
         });
 
-    let identifier = filter_map(|s, t| {
-        if let Token::Word(n) = t {
-            n.okay()
-        } else {
-            Simple::expected_input_found(s, vec![Some(Token::Word("word".to_string()))], Some(t))
-                .error()
-        }
-    });
-
     just(Token::KeyWord(KeyWord::Proc))
         .ignored()
-        .then(identifier)
+        .then(identifier())
         .then(signature)
         .then_ignore(just(Token::KeyWord(KeyWord::Do)))
         .then(body())
         .then_ignore(just(Token::KeyWord(KeyWord::End)))
-        .map_with_span(|((((), name), signature), body), s| (name, (Proc { signature, body }, s)))
-}
-
-#[test]
-fn test_proc() {
-    use chumsky::Stream;
-    let src = "proc foo int : int do end";
-    let tokens = crate::lexer::lexer()
-        .parse(Stream::from_iter(
-            Span::new(src.len(), src.len()),
-            src.chars().enumerate().map(|(i, c)| (c, Span::point(i))),
-        ))
-        .unwrap();
-    proc()
-        .parse(Stream::from_iter(
-            tokens.last().unwrap().1,
-            tokens.into_iter(),
-        ))
-        .unwrap();
+        .map_with_span(|((((), name), signature), body), s| {
+            (name, (TopLevel::Proc(Proc { signature, body }), s))
+        })
 }
 
 #[derive(Debug, Clone)]
@@ -163,10 +149,54 @@ pub struct AstNode {
 
 #[derive(Debug, Clone)]
 pub enum AstKind {
-    Literal(Const),
+    Literal(IConst),
     Word(String),
+    Intrinsic(Intrinsic),
     If(If),
     While(While),
+    Bind(Bind),
+}
+
+#[derive(Debug, Clone)]
+pub enum Intrinsic {
+    Drop,
+    Dup,
+    Swap,
+    Over,
+
+    CompStop,
+    Dump,
+    Print,
+
+    Add,
+    Sub,
+    Divmod,
+    Mul,
+
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+#[derive(Debug, Clone)]
+pub struct Const {
+    pub body: Vec<AstNode>,
+    pub ty: Type,
+}
+
+#[derive(Debug, Clone)]
+pub struct Bind {
+    pub bindings: Vec<Binding>,
+    pub body: Vec<AstNode>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Binding {
+    Ignore,
+    Bind { name: String, ty: Type },
 }
 
 #[derive(Debug, Clone)]
@@ -181,15 +211,236 @@ pub struct While {
     pub body: Vec<AstNode>,
 }
 
+fn word() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
+    filter_map(|span, token| {
+        match token {
+            Token::Word(ref w)
+                if matches!(
+                    w.as_str(),
+                    "drop"
+                        | "dup"
+                        | "swap"
+                        | "over"
+                        | "&?&"
+                        | "&?"
+                        | "print"
+                        | "="
+                        | "!="
+                        | "<"
+                        | "<="
+                        | ">"
+                        | ">="
+                ) =>
+            {
+                return Simple::expected_input_found(
+                    span,
+                    vec![Some(Token::Word("not-intrinsic".to_string()))],
+                    Some(token),
+                )
+                .error();
+            }
+            Token::Word(w) => AstNode {
+                ast: AstKind::Word(w),
+                span,
+            },
+            _ => {
+                return Simple::expected_input_found(
+                    span,
+                    vec![Some(Token::Word("not-intrinsic".to_string()))],
+                    Some(token),
+                )
+                .error();
+            }
+        }
+        .okay()
+    })
+}
+
+fn intrinsic() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
+    filter_map(|span, token| match &token {
+        Token::Word(w) => match w.as_str() {
+            "drop" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Drop),
+                span,
+            }
+            .okay(),
+            "dup" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Dup),
+                span,
+            }
+            .okay(),
+            "swap" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Swap),
+                span,
+            }
+            .okay(),
+            "over" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Over),
+                span,
+            }
+            .okay(),
+
+            "&?&" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::CompStop),
+                span,
+            }
+            .okay(),
+            "&?" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Dump),
+                span,
+            }
+            .okay(),
+            "print" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Print),
+                span,
+            }
+            .okay(),
+
+            "+" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Add),
+                span,
+            }
+            .okay(),
+            "-" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Sub),
+                span,
+            }
+            .okay(),
+            "*" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Mul),
+                span,
+            }
+            .okay(),
+            "divmod" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Divmod),
+                span,
+            }
+            .okay(),
+
+            "=" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Eq),
+                span,
+            }
+            .okay(),
+            "!=" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Ne),
+                span,
+            }
+            .okay(),
+            "<" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Lt),
+                span,
+            }
+            .okay(),
+            "<=" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Le),
+                span,
+            }
+            .okay(),
+            ">" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Gt),
+                span,
+            }
+            .okay(),
+            ">=" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Ge),
+                span,
+            }
+            .okay(),
+            _ => Simple::expected_input_found(
+                span,
+                vec![
+                    Some(Token::Word("drop".to_string())),
+                    Some(Token::Word("dup".to_string())),
+                    Some(Token::Word("swap".to_string())),
+                    Some(Token::Word("over".to_string())),
+                    Some(Token::Word("&?&".to_string())),
+                    Some(Token::Word("&?".to_string())),
+                    Some(Token::Word("print".to_string())),
+                    Some(Token::Word("+".to_string())),
+                    Some(Token::Word("-".to_string())),
+                    Some(Token::Word("*".to_string())),
+                    Some(Token::Word("divmod".to_string())),
+                    Some(Token::Word("=".to_string())),
+                    Some(Token::Word("!=".to_string())),
+                    Some(Token::Word("<".to_string())),
+                    Some(Token::Word("<=".to_string())),
+                    Some(Token::Word(">".to_string())),
+                    Some(Token::Word(">=".to_string())),
+                ],
+                Some(token),
+            )
+            .error(),
+        },
+        _ => Simple::expected_input_found(
+            span,
+            vec![
+                Some(Token::Word("drop".to_string())),
+                Some(Token::Word("dup".to_string())),
+                Some(Token::Word("swap".to_string())),
+                Some(Token::Word("over".to_string())),
+                Some(Token::Word("&?&".to_string())),
+                Some(Token::Word("&?".to_string())),
+                Some(Token::Word("print".to_string())),
+                Some(Token::Word("+".to_string())),
+                Some(Token::Word("-".to_string())),
+                Some(Token::Word("*".to_string())),
+                Some(Token::Word("divmod".to_string())),
+                Some(Token::Word("=".to_string())),
+                Some(Token::Word("!=".to_string())),
+                Some(Token::Word("<".to_string())),
+                Some(Token::Word("<=".to_string())),
+                Some(Token::Word(">".to_string())),
+                Some(Token::Word(">=".to_string())),
+            ],
+            Some(token),
+        )
+        .error(),
+    })
+}
+
+fn word_or_intrinsic() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
+    choice((intrinsic(), word()))
+}
+
+fn identifier() -> impl Parser<Token, String, Error = Simple<Token, Span>> {
+    filter(|t| matches!(t, Token::Word(_))).map(|token| match token {
+        Token::Word(w) => w,
+        _ => unreachable!(),
+    })
+}
+
 fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clone {
     recursive(|body| {
-        let word =
-            filter(|t| matches!(t, Token::Word(_))).map_with_span(|token, span| match token {
-                Token::Word(w) => AstNode {
-                    ast: AstKind::Word(w),
+        let name_type = identifier()
+            .then_ignore(just(Token::SigSep))
+            .then(ty())
+            .map(|(name, ty)| Binding::Bind { name, ty });
+        let ignore = filter_map(|span, token| {
+            if matches!(token, Token::Ignore) {
+                Binding::Ignore.okay()
+            } else {
+                Simple::expected_input_found(
                     span,
-                },
-                _ => unreachable!(),
+                    vec![
+                        Some(Token::Word("int".to_string())),
+                        Some(Token::Word("uint".to_string())),
+                        Some(Token::Word("bool".to_string())),
+                    ],
+                    Some(token),
+                )
+                .error()
+            }
+        });
+
+        let bind = just(Token::KeyWord(KeyWord::Bind))
+            .ignore_then(choice((name_type, ignore)).repeated().at_least(1))
+            .then_ignore(just(Token::KeyWord(KeyWord::Do)))
+            .then(body.clone())
+            .then_ignore(just(Token::KeyWord(KeyWord::End)))
+            .map_with_span(|(bindings, body), span| AstNode {
+                ast: AstKind::Bind(Bind { bindings, body }),
+                span,
             });
 
         let num = filter(|t| matches!(t, Token::Num(_))).map_with_span(|token, span| AstNode {
@@ -256,71 +507,50 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
                     span,
                 })
         };
-        choice((bool, word, num, cond, while_)).repeated()
+        choice((bool, word_or_intrinsic(), num, cond, while_, bind)).repeated()
     })
 }
 
-#[test]
-fn test_body() {
-    use chumsky::Stream;
-    let src = "while true do end";
-    let tokens = crate::lexer::lexer()
-        .parse(Stream::from_iter(
-            Span::new(src.len(), src.len()),
-            src.chars().enumerate().map(|(i, c)| (c, Span::point(i))),
-        ))
-        .unwrap();
-    println! {"{:?}", &tokens};
-    panic! {"{:?}",
-    body()
-    .parse(Stream::from_iter(
-        tokens.last().unwrap().1,
-        tokens.into_iter(),
-    ))
-    .unwrap()};
+fn constant() -> impl Parser<Token, (String, (TopLevel, Span)), Error = Simple<Token, Span>> {
+    just(Token::KeyWord(KeyWord::Const))
+        .ignore_then(identifier())
+        .then_ignore(just(Token::SigSep))
+        .then(ty())
+        .then_ignore(just(Token::KeyWord(KeyWord::Do)))
+        .then(body())
+        .then_ignore(just(Token::KeyWord(KeyWord::End)))
+        .map_with_span(|((name, ty), body), span| {
+            (name, (TopLevel::Const(Const { body, ty }), span))
+        })
 }
 
-#[test]
-fn test_cond() {
-    use chumsky::Stream;
-    let src = "if
-            thing
-        else
-            other
-        end";
-    let tokens = crate::lexer::lexer()
-        .parse(Stream::from_iter(
-            Span::new(src.len(), src.len()),
-            src.chars().enumerate().map(|(i, c)| (c, Span::point(i))),
-        ))
-        .unwrap();
-    body()
-        .parse(Stream::from_iter(
-            tokens.last().unwrap().1,
-            tokens.into_iter(),
-        ))
-        .unwrap();
+#[derive(Debug, Clone)]
+pub enum TopLevel {
+    Proc(Proc),
+    Const(Const),
+}
+impl TopLevel {
+    pub fn as_proc(&self) -> Option<&Proc> {
+        if let Self::Proc(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_const(&self) -> Option<&Const> {
+        if let Self::Const(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
 }
 
-pub fn procs() -> impl Parser<Token, HashMap<String, (Proc, Span)>, Error = Simple<Token, Span>> {
-    proc().repeated().at_least(1).then_ignore(end()).collect()
-}
-
-#[test]
-fn test_procs() {
-    use chumsky::Stream;
-    let src = "proc foo : int do 1 end
-    proc bar : int do 2 end";
-    let tokens = crate::lexer::lexer()
-        .parse(Stream::from_iter(
-            Span::new(src.len(), src.len()),
-            src.chars().enumerate().map(|(i, c)| (c, Span::point(i))),
-        ))
-        .unwrap();
-    panic! {"{:?}", procs()
-    .parse(Stream::from_iter(
-        tokens.last().unwrap().1,
-        tokens.into_iter(),
-    ))
-    .unwrap()};
+pub fn procs() -> impl Parser<Token, HashMap<String, (TopLevel, Span)>, Error = Simple<Token, Span>>
+{
+    choice((proc(), constant()))
+        .repeated()
+        .then_ignore(end())
+        .collect()
 }
