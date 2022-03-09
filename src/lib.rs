@@ -7,5 +7,6 @@ pub mod eval;
 pub mod hir;
 pub mod lexer;
 pub mod lir;
+// pub mod resolver;
 pub mod span;
 pub mod typecheck;

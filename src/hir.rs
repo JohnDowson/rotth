@@ -553,10 +553,22 @@ fn constant() -> impl Parser<Token, (String, (TopLevel, Span)), Error = Simple<T
         })
 }
 
+fn include() -> impl Parser<Token, (String, (TopLevel, Span)), Error = Simple<Token, Span>> {
+    just(Token::KeyWord(KeyWord::Include))
+        .ignore_then(
+            filter(|token| matches!(token, Token::Str(_))).map(|token| match token {
+                Token::Str(s) => s,
+                _ => unreachable!(),
+            }),
+        )
+        .map_with_span(|path, span| (String::new(), (TopLevel::Include(path), span)))
+}
+
 #[derive(Debug, Clone)]
 pub enum TopLevel {
     Proc(Proc),
     Const(Const),
+    Include(String),
 }
 impl TopLevel {
     pub fn as_proc(&self) -> Option<&Proc> {
@@ -574,11 +586,19 @@ impl TopLevel {
             None
         }
     }
+
+    pub fn as_include(&self) -> Option<&String> {
+        if let Self::Include(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
 }
 
 pub fn procs() -> impl Parser<Token, HashMap<String, (TopLevel, Span)>, Error = Simple<Token, Span>>
 {
-    choice((proc(), constant()))
+    choice((proc(), constant(), include()))
         .repeated()
         .then_ignore(end())
         .collect()

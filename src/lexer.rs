@@ -27,6 +27,7 @@ impl std::fmt::Debug for Token {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum KeyWord {
+    Include,
     If,
     Else,
     Proc,
@@ -89,6 +90,7 @@ where
 
     let keyword = word_parser().try_map(|i: String, s| {
         Token::KeyWord(match i.as_str() {
+            "include" => KeyWord::Include,
             "if" => KeyWord::If,
             "else" => KeyWord::Else,
             "proc" => KeyWord::Proc,

@@ -376,7 +376,7 @@ impl Compiler {
                     op, l
                 )?,
                 Dump => {}
-                JumpT(_) => todo!(),
+                JumpT(_) => todo!("Jump if true"),
             }
         }
         write!(

@@ -73,13 +73,7 @@ fn typecheck_const(
         .clone();
     let const_ = match const_ {
         TopLevel::Const(c) => c,
-        TopLevel::Proc(_) => {
-            return error(
-                span,
-                Unexpected,
-                format!("Unexpected const {}, expected proc", const_name),
-            )
-        }
+        _ => unreachable!("This can't not be const"),
     };
     if typechecked {
         return ().okay();
@@ -128,13 +122,7 @@ fn typecheck_proc(name: &str, items: &mut HashMap<String, (TopLevel, Span, bool)
         .clone();
     let proc = match proc {
         TopLevel::Proc(p) => p,
-        TopLevel::Const(_) => {
-            return error(
-                span,
-                Unexpected,
-                format!("Unexpected const {}, expected proc", name),
-            )
-        }
+        _ => unreachable!("This can't not be proc"),
     };
     if typechecked {
         return ().okay();
@@ -179,22 +167,10 @@ fn typecheck_proc(name: &str, items: &mut HashMap<String, (TopLevel, Span, bool)
 }
 
 fn is_proc(name: &str, items: &HashMap<String, (TopLevel, Span, bool)>) -> bool {
-    match items.get(name) {
-        Some((t, _, _)) => match t {
-            TopLevel::Proc(_) => true,
-            TopLevel::Const(_) => false,
-        },
-        None => false,
-    }
+    matches!(items.get(name), Some((TopLevel::Proc(_), _, _)))
 }
 fn is_const(name: &str, items: &HashMap<String, (TopLevel, Span, bool)>) -> bool {
-    match items.get(name) {
-        Some((t, _, _)) => match t {
-            TopLevel::Proc(_) => false,
-            TopLevel::Const(_) => true,
-        },
-        None => false,
-    }
+    matches!(items.get(name), Some((TopLevel::Const(_), _, _)))
 }
 
 fn typecheck_body(
@@ -316,7 +292,7 @@ fn typecheck_body(
                     stack.push(heap, Type::U64)
                 }
                 Intrinsic::WriteU8 => {
-                    todo!()
+                    todo!("Write u8")
                 }
                 Intrinsic::PtrAdd => {
                     let offset = stack.pop(heap).ok_or_else(|| {
@@ -464,7 +440,7 @@ fn typecheck_body(
                     );
                 }
             }
-            AstKind::Bind(_bind) => todo!(),
+            AstKind::Bind(_bind) => todo!("Bind"),
         }
     }
     ().okay()

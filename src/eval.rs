@@ -67,7 +67,7 @@ pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<u64, String> {
                 let read = unsafe { (ptr as *const u8).read() as u64 };
                 stack.push(read);
             }
-            Op::WriteU8 => todo!(),
+            Op::WriteU8 => todo!("Write u8"),
 
             Op::Dump => println!("{:?}", stack),
             Op::Print => println!("{:?}", stack.pop().unwrap()),

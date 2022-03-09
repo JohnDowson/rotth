@@ -148,7 +148,7 @@ impl Compiler {
                 Type::Bool => IConst::Bool(bytes != 0),
                 Type::U64 => IConst::U64(bytes),
                 Type::I64 => IConst::I64(bytes as i64),
-                Type::Ptr => todo!(),
+                Type::Ptr => IConst::Ptr(bytes),
             },
             Err(req) => {
                 self.compile_const(req);
@@ -164,7 +164,7 @@ impl Compiler {
                         Type::Bool => IConst::Bool(bytes != 0),
                         Type::U64 => IConst::U64(bytes),
                         Type::I64 => IConst::I64(bytes as i64),
-                        Type::Ptr => todo!(),
+                        Type::Ptr => IConst::Ptr(bytes),
                     },
                     Err(_) => unreachable!(),
                 }
@@ -221,7 +221,7 @@ impl Compiler {
                 },
                 AstKind::If(cond) => self.compile_cond(cond),
                 AstKind::While(while_) => self.compile_while(while_),
-                AstKind::Bind(_) => todo!(),
+                AstKind::Bind(_) => todo!("Bind"),
             }
         }
     }
