@@ -4,7 +4,7 @@ use somok::Somok;
 
 use crate::{hir::IConst, lir::Op};
 
-pub fn eval(ops: Vec<Op>, strings: &[(usize, *mut u8)]) -> Result<u64, String> {
+pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<u64, String> {
     let labels = ops
         .iter()
         .enumerate()
@@ -25,33 +25,32 @@ pub fn eval(ops: Vec<Op>, strings: &[(usize, *mut u8)]) -> Result<u64, String> {
         #[cfg(debug_assertions)]
         println!("{}:\t{:?}", i, op);
         match op {
-            Op::PushStr(i) => {
-                let len = strings[*i].0 as u64;
+            &Op::PushStr(i) => {
+                let len = strings[i].len() as u64;
                 stack.push(len);
-                stack.push(strings[*i].1 as u64);
+                stack.push(strings[i].as_ptr() as u64);
             }
             Op::Push(c) => match c {
-                IConst::Bool(b) => stack.push(*b as u64),
-                IConst::U64(u) => stack.push(*u),
-                IConst::I64(i) => stack.push(*i as u64),
-                IConst::Ptr(p) => stack.push(*p),
+                &IConst::Bool(b) => stack.push(b as u64),
+                &IConst::U64(u) => stack.push(u),
+                &IConst::I64(i) => stack.push(i as u64),
+                &IConst::Ptr(p) => stack.push(p),
                 IConst::Str(_s) => unreachable!(),
             },
             Op::Drop => {
                 stack.pop();
             }
             Op::Dup => {
-                let v = stack.last().copied().unwrap();
-                stack.push(v);
+                let i = stack.len() - 1;
+                stack.extend_from_within(i..);
             }
             Op::Swap => {
-                let (a, b) = (stack.pop().unwrap(), stack.pop().unwrap());
-                stack.push(a);
-                stack.push(b);
+                let i = stack.len() - 2;
+                stack.swap(i, i + 1);
             }
             Op::Over => {
-                let v = stack[stack.len() - 2];
-                stack.push(v);
+                let i = stack.len() - 2;
+                stack.extend_from_within(i..=i);
             }
 
             Op::ReadU8 => {
