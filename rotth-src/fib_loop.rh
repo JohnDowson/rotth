@@ -1,0 +1,15 @@
+proc main : uint do
+    1 while dup 10 < do
+        dup fib print
+        1 +
+    end drop
+    0
+end
+
+proc fib uint : uint do
+    dup 3 <= if
+        drop 1
+    else
+        dup 1 - swap 2 - swap fib swap fib +
+    end
+end

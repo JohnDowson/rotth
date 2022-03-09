@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use somok::Somok;
 
-use crate::lir::Op;
+use crate::{hir::IConst, lir::Op};
 
-pub fn eval(ops: Vec<Op>) -> Result<u64, String> {
+pub fn eval(ops: Vec<Op>, strings: &[(usize, *mut u8)]) -> Result<u64, String> {
     let labels = ops
         .iter()
         .enumerate()
@@ -25,7 +25,18 @@ pub fn eval(ops: Vec<Op>) -> Result<u64, String> {
         #[cfg(debug_assertions)]
         println!("{}:\t{:?}", i, op);
         match op {
-            Op::Push(c) => stack.push(c.bytes()),
+            Op::PushStr(i) => {
+                let len = strings[*i].0 as u64;
+                stack.push(len);
+                stack.push(strings[*i].1 as u64);
+            }
+            Op::Push(c) => match c {
+                IConst::Bool(b) => stack.push(*b as u64),
+                IConst::U64(u) => stack.push(*u),
+                IConst::I64(i) => stack.push(*i as u64),
+                IConst::Ptr(p) => stack.push(*p),
+                IConst::Str(_s) => unreachable!(),
+            },
             Op::Drop => {
                 stack.pop();
             }
@@ -43,8 +54,16 @@ pub fn eval(ops: Vec<Op>) -> Result<u64, String> {
                 stack.push(v);
             }
 
+            Op::ReadU8 => {
+                let ptr = stack.pop().unwrap();
+                let read = unsafe { (ptr as *const u8).read() as u64 };
+                stack.push(read);
+            }
+            Op::WriteU8 => todo!(),
+
             Op::Dump => println!("{:?}", stack),
             Op::Print => println!("{:?}", stack.pop().unwrap()),
+            Op::PutC => print!("{}", stack.pop().unwrap() as u8 as char),
 
             Op::Add => {
                 let (b, a) = (stack.pop().unwrap(), stack.pop().unwrap());

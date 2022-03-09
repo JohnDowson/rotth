@@ -1,4 +1,4 @@
-use crate::lir::Op;
+use crate::{hir::IConst, lir::Op};
 use indoc::indoc;
 use std::io::{BufWriter, Write};
 
@@ -9,7 +9,12 @@ impl Compiler {
         Self {}
     }
 
-    pub fn compile<S: Write>(self, ops: Vec<Op>, mut sink: BufWriter<S>) -> std::io::Result<()> {
+    pub fn compile<S: Write>(
+        self,
+        ops: Vec<Op>,
+        strings: &[String],
+        mut sink: BufWriter<S>,
+    ) -> std::io::Result<()> {
         use Op::*;
         write!(
             sink,
@@ -25,16 +30,57 @@ impl Compiler {
         )?;
         for op in ops {
             match &op {
-                Push(c) => write!(
+                PushStr(i) => write!(
                     sink,
                     indoc! {"
                     ; {:?}
-                        mov rax, {:?}
-                        push rax
+                    ;   mov rax, len
+                        push {}
+                        push str_{}
                     "},
                     op,
-                    c.bytes()
+                    strings[*i].len(),
+                    i
                 )?,
+                Push(c) => match c {
+                    IConst::Bool(b) => write!(
+                        sink,
+                        indoc! {"
+                        ; {:?}
+                            mov rax, {}
+                            push rax
+                        "},
+                        op, *b as u64
+                    )?,
+                    IConst::U64(u) => write!(
+                        sink,
+                        indoc! {"
+                        ; {:?}
+                            mov rax, {}
+                            push rax
+                        "},
+                        op, u
+                    )?,
+                    IConst::I64(i) => write!(
+                        sink,
+                        indoc! {"
+                        ; {:?}
+                            mov rax, {}
+                            push rax
+                        "},
+                        op, i
+                    )?,
+                    IConst::Ptr(p) => write!(
+                        sink,
+                        indoc! {"
+                        ; {:?}
+                            mov rax, {}
+                            push rax
+                        "},
+                        op, p
+                    )?,
+                    IConst::Str(_s) => unreachable!(),
+                },
                 Dup => write!(
                     sink,
                     indoc! {"
@@ -77,6 +123,9 @@ impl Compiler {
                     op
                 )?,
 
+                ReadU8 => todo!(),
+                WriteU8 => todo!(),
+
                 Print => write!(
                     sink,
                     indoc! {"
@@ -86,6 +135,7 @@ impl Compiler {
                     "},
                     op
                 )?,
+                PutC => todo!(),
 
                 Sub => write!(
                     sink,
@@ -277,7 +327,6 @@ impl Compiler {
                     ; {:?}
                         pop rax
                         test rax, rax
-                        syscall
                         jz {}
                     "},
                     op, l
@@ -293,6 +342,22 @@ impl Compiler {
                 Dump => {}
                 JumpT(_) => todo!(),
             }
+        }
+        write!(
+            sink,
+            indoc! {"
+            section .data
+        "}
+        )?;
+        for (i, str) in strings.iter().enumerate() {
+            write!(
+                sink,
+                indoc! {"
+                str_{}:
+                    db {:?}
+                "},
+                i, str
+            )?;
         }
         write!(
             sink,

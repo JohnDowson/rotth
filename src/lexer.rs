@@ -5,6 +5,7 @@ use somok::Somok;
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub enum Token {
     Word(String),
+    Str(String),
     KeyWord(KeyWord),
     Num(String),
     Ignore,
@@ -15,6 +16,7 @@ impl std::fmt::Debug for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Word(word) => write!(f, "{}", word),
+            Self::Str(str) => write!(f, "{:?}", str),
             Self::KeyWord(keyword) => keyword.fmt(f),
             Self::Num(num) => write!(f, "{}", num),
             Self::Ignore => write!(f, "_"),
@@ -54,6 +56,11 @@ pub fn word_parser<C: Character, E: Error<C>>(
 pub fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char, Span>>
 where
 {
+    let string = just('"')
+        .ignore_then(none_of(['"']).repeated().collect())
+        .then_ignore(just('"'))
+        .map(Token::Str);
+
     let num = text::int(10).map(Token::Num);
 
     let word = word_parser().map(Token::Word);
@@ -81,6 +88,7 @@ where
     let sig_sep = just(':').map(|_| Token::SigSep);
 
     let token = num
+        .or(string)
         .or(sig_sep)
         .or(ignore)
         .or(keyword)

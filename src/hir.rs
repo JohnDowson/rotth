@@ -8,65 +8,48 @@ use std::collections::HashMap;
 #[cfg(test)]
 mod test;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Debug)]
 pub enum IConst {
-    Bool(u64),
+    Bool(bool),
     U64(u64),
-    I64(u64),
-}
-
-impl std::fmt::Debug for IConst {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Bool(arg0) => f.debug_tuple("Bool").field(&(*arg0 != 0)).finish(),
-            Self::U64(arg0) => f.debug_tuple("U64").field(arg0).finish(),
-            Self::I64(arg0) => f.debug_tuple("I64").field(&(*arg0 as i64)).finish(),
-        }
-    }
+    I64(i64),
+    Str(String),
+    Ptr(u64),
 }
 
 impl IConst {
-    pub fn new<T: ToConst>(v: T) -> Self {
-        v.to_const()
-    }
-
-    pub fn from_ty_bytes(ty: Type, bytes: u64) -> Self {
-        match ty {
-            Type::Bool => Self::Bool(bytes),
-            Type::U64 => Self::U64(bytes),
-            Type::I64 => Self::I64(bytes),
+    pub fn as_bool(&self) -> Option<&bool> {
+        if let Self::Bool(v) = self {
+            Some(v)
+        } else {
+            None
         }
     }
 
-    pub fn bytes(&self) -> u64 {
-        match self {
-            IConst::Bool(c) => *c,
-            IConst::U64(c) => *c,
-            IConst::I64(c) => *c,
+    pub fn as_u64(&self) -> Option<&u64> {
+        if let Self::U64(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_i64(&self) -> Option<&i64> {
+        if let Self::I64(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_str(&self) -> Option<&String> {
+        if let Self::Str(v) = self {
+            Some(v)
+        } else {
+            None
         }
     }
 }
-
-pub trait ToConst {
-    fn to_const(self) -> IConst;
-}
-
-impl ToConst for bool {
-    fn to_const(self) -> IConst {
-        IConst::Bool(self as u64)
-    }
-}
-impl ToConst for u64 {
-    fn to_const(self) -> IConst {
-        IConst::U64(self)
-    }
-}
-impl ToConst for i64 {
-    fn to_const(self) -> IConst {
-        IConst::I64(self as u64)
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Signature {
     pub ins: Vec<Type>,
@@ -78,6 +61,7 @@ pub enum Type {
     Bool,
     U64,
     I64,
+    Ptr,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +75,7 @@ fn ty() -> impl Parser<Token, Type, Error = Simple<Token, Span>> {
             "int" => Type::I64.okay(),
             "uint" => Type::U64.okay(),
             "bool" => Type::Bool.okay(),
+            "ptr" => Type::Ptr.okay(),
             _ => Simple::expected_input_found(
                 s,
                 vec![
@@ -164,9 +149,15 @@ pub enum Intrinsic {
     Swap,
     Over,
 
+    PtrAdd,
+    PtrSub,
+    ReadU8,
+    WriteU8,
+
     CompStop,
     Dump,
     Print,
+    PutC,
 
     Add,
     Sub,
@@ -280,6 +271,27 @@ fn intrinsic() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
             }
             .okay(),
 
+            "@u8" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::ReadU8),
+                span,
+            }
+            .okay(),
+            "!u8" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::WriteU8),
+                span,
+            }
+            .okay(),
+            "ptr+" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::PtrAdd),
+                span,
+            }
+            .okay(),
+            "ptr-" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::PtrSub),
+                span,
+            }
+            .okay(),
+
             "&?&" => AstNode {
                 ast: AstKind::Intrinsic(Intrinsic::CompStop),
                 span,
@@ -292,6 +304,11 @@ fn intrinsic() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
             .okay(),
             "print" => AstNode {
                 ast: AstKind::Intrinsic(Intrinsic::Print),
+                span,
+            }
+            .okay(),
+            "putc" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::PutC),
                 span,
             }
             .okay(),
@@ -445,22 +462,33 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
 
         let num = filter(|t| matches!(t, Token::Num(_))).map_with_span(|token, span| AstNode {
             ast: AstKind::Literal(if let Token::Num(n) = token {
-                n.parse::<u64>().unwrap().to_const()
+                IConst::U64(n.parse().unwrap())
             } else {
                 unreachable!()
             }),
             span,
         });
 
+        let string =
+            filter(|token| matches!(token, Token::Str(_))).map_with_span(
+                |token, span| match token {
+                    Token::Str(s) => AstNode {
+                        span,
+                        ast: AstKind::Literal(IConst::Str(s)),
+                    },
+                    _ => unreachable!(),
+                },
+            );
+
         let bool = filter(|t| matches!(t, Token::Word(_))).try_map(|token, span| match &token {
             Token::Word(w) => match w.as_str() {
                 "true" => AstNode {
-                    ast: AstKind::Literal(true.to_const()),
+                    ast: AstKind::Literal(IConst::Bool(true)),
                     span,
                 }
                 .okay(),
                 "false" => AstNode {
-                    ast: AstKind::Literal(false.to_const()),
+                    ast: AstKind::Literal(IConst::Bool(false)),
                     span,
                 }
                 .okay(),
@@ -507,7 +535,7 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
                     span,
                 })
         };
-        choice((bool, word_or_intrinsic(), num, cond, while_, bind)).repeated()
+        choice((bool, word_or_intrinsic(), string, num, cond, while_, bind)).repeated()
     })
 }
 

@@ -2,20 +2,25 @@ use std::collections::HashMap;
 
 use crate::{
     eval::eval,
-    hir::{AstKind, AstNode, Const, IConst, If, Intrinsic, Proc, TopLevel, While},
+    hir::{AstKind, AstNode, Const, IConst, If, Intrinsic, Proc, TopLevel, Type, While},
     span::Span,
 };
 
 #[derive(Debug)]
 pub enum Op {
     Push(IConst),
+    PushStr(usize),
     Drop,
     Dup,
     Swap,
     Over,
 
+    ReadU8,
+    WriteU8,
+
     Dump,
     Print,
+    PutC,
 
     Add,
     Sub,
@@ -52,10 +57,14 @@ pub struct Compiler {
     current_name: String,
     result: Vec<Op>,
     consts: HashMap<String, ComConst>,
+    strings: Vec<String>,
 }
 
 impl Compiler {
-    pub fn compile(mut self, items: HashMap<String, (TopLevel, Span, bool)>) -> Vec<Op> {
+    pub fn compile(
+        mut self,
+        items: HashMap<String, (TopLevel, Span, bool)>,
+    ) -> (Vec<Op>, Vec<String>) {
         let (procs, consts) = items
             .into_iter()
             .partition::<Vec<_>, _>(|(_, (it, _, _))| matches!(it, TopLevel::Proc(_)));
@@ -94,7 +103,7 @@ impl Compiler {
             self.compile_proc(name, proc)
         }
 
-        self.result
+        (self.result, self.strings)
     }
 
     fn compile_proc(&mut self, name: String, proc: Proc) {
@@ -110,39 +119,60 @@ impl Compiler {
 
     fn compile_const(&mut self, name: String) -> IConst {
         let const_ = match self.consts.get(&name) {
-            Some(ComConst::Compiled(i)) => return *i,
+            Some(ComConst::Compiled(i)) => return i.clone(),
             Some(ComConst::NotCompiled(c)) => c.clone(),
             None => unreachable!(),
         };
         let Const { body, ty } = const_;
-        let mut com = Self::with_consts(self.consts.clone());
+        let mut com = Self::with_consts_and_strings(self.consts.clone(), self.strings.clone());
         com.compile_body(body.clone());
         com.emit(Exit);
+        self.consts = com.consts;
+        self.strings = com.strings;
         let ops = com.result;
-        let const_ = match eval(ops) {
-            Ok(bytes) => IConst::from_ty_bytes(ty, bytes),
+        let const_ = match eval(ops, &self.strings) {
+            Ok(bytes) => match ty {
+                Type::Bool => IConst::Bool(bytes != 0),
+                Type::U64 => IConst::U64(bytes),
+                Type::I64 => IConst::I64(bytes as i64),
+                Type::Ptr => todo!(),
+            },
             Err(req) => {
                 self.compile_const(req);
-                let mut com = Self::with_consts(com.consts);
+                let mut com =
+                    Self::with_consts_and_strings(self.consts.clone(), self.strings.clone());
                 com.compile_body(body);
                 com.emit(Exit);
                 let ops = com.result;
                 self.consts = com.consts;
-                match eval(ops) {
-                    Ok(bytes) => IConst::from_ty_bytes(ty, bytes),
+                self.strings = com.strings;
+                match eval(ops, &self.strings) {
+                    Ok(bytes) => match ty {
+                        Type::Bool => IConst::Bool(bytes != 0),
+                        Type::U64 => IConst::U64(bytes),
+                        Type::I64 => IConst::I64(bytes as i64),
+                        Type::Ptr => todo!(),
+                    },
                     Err(_) => unreachable!(),
                 }
             }
         };
 
-        self.consts.insert(name, ComConst::Compiled(const_));
+        self.consts.insert(name, ComConst::Compiled(const_.clone()));
         const_
     }
 
     fn compile_body(&mut self, body: Vec<AstNode>) {
         for node in body {
             match node.ast {
-                AstKind::Literal(c) => self.emit(Push(c)),
+                AstKind::Literal(c) => match c {
+                    IConst::Str(s) => {
+                        let i = self.strings.len();
+                        self.strings.push(s);
+                        self.emit(PushStr(i));
+                    }
+                    _ => self.emit(Push(c)),
+                },
                 AstKind::Word(w) if self.is_const(&w) => {
                     let c = self.compile_const(w);
                     self.emit(Push(c))
@@ -153,6 +183,11 @@ impl Compiler {
                     Intrinsic::Dup => self.emit(Dup),
                     Intrinsic::Swap => self.emit(Swap),
                     Intrinsic::Over => self.emit(Over),
+
+                    Intrinsic::ReadU8 => self.emit(ReadU8),
+                    Intrinsic::WriteU8 => self.emit(WriteU8),
+                    Intrinsic::PtrAdd => self.emit(Add),
+                    Intrinsic::PtrSub => self.emit(Sub),
 
                     Intrinsic::Add => self.emit(Add),
                     Intrinsic::Sub => self.emit(Sub),
@@ -168,6 +203,7 @@ impl Compiler {
 
                     Intrinsic::Dump => self.emit(Dump),
                     Intrinsic::Print => self.emit(Print),
+                    Intrinsic::PutC => self.emit(PutC),
                     Intrinsic::CompStop => return,
                 },
                 AstKind::If(cond) => self.compile_cond(cond),
@@ -223,14 +259,16 @@ impl Compiler {
             current_name: "".to_string(),
             result: Default::default(),
             consts: Default::default(),
+            strings: Default::default(),
         }
     }
-    fn with_consts(consts: HashMap<String, ComConst>) -> Self {
+    fn with_consts_and_strings(consts: HashMap<String, ComConst>, strings: Vec<String>) -> Self {
         Self {
             label: 0,
             current_name: "".to_string(),
             result: Default::default(),
             consts,
+            strings,
         }
     }
 

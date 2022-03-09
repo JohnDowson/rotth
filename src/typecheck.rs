@@ -211,18 +211,23 @@ fn typecheck_body(
                 IConst::Bool(_) => stack.push(heap, Type::Bool),
                 IConst::U64(_) => stack.push(heap, Type::U64),
                 IConst::I64(_) => stack.push(heap, Type::I64),
+                IConst::Ptr(_) => stack.push(heap, Type::Ptr),
+                IConst::Str(_) => {
+                    stack.push(heap, Type::U64);
+                    stack.push(heap, Type::Ptr);
+                }
             },
             AstKind::Word(w) => match w.as_str() {
                 rec if rec == name => {
                     let proc = &items[rec].0.as_proc().ok_or_else(|| {
                         Error::new(node.span, Unexpected, "Recursive const definition")
                     })?;
-                    for ty_expected in &proc.signature.ins {
+                    for ty_expected in proc.signature.ins.iter().rev() {
                         let ty_actual = stack.pop(heap).ok_or_else(|| {
                             Error::new(
                                 node.span,
                                 NotEnoughData,
-                                "Not enough data for proc invocation",
+                                format!("Not enough data for proc invocation {}", rec),
                             )
                         })?;
                         if *ty_expected != ty_actual {
@@ -232,7 +237,7 @@ fn typecheck_body(
                                     expected: vec![*ty_expected],
                                     actual: vec![ty_actual],
                                 },
-                                "Wrong types for proc invocation",
+                                format!("Wrong types for proc invocation {}", rec),
                             );
                         }
                     }
@@ -251,12 +256,12 @@ fn typecheck_body(
                     let proc = items[proc_name].0.as_proc().ok_or_else(|| {
                         Error::new(node.span, Unexpected, "Recursive const definition")
                     })?;
-                    for ty_expected in &proc.signature.ins {
+                    for ty_expected in proc.signature.ins.iter().rev() {
                         let ty_actual = stack.pop(heap).ok_or_else(|| {
                             Error::new(
                                 node.span,
                                 NotEnoughData,
-                                "Not enough data for proc invocation",
+                                format!("Not enough data for proc invocation {}", proc_name),
                             )
                         })?;
                         if *ty_expected != ty_actual {
@@ -266,7 +271,7 @@ fn typecheck_body(
                                     expected: vec![*ty_expected],
                                     actual: vec![ty_actual],
                                 },
-                                "Wrong types for proc invocation",
+                                format!("Wrong types for proc invocation {}", proc_name),
                             );
                         }
                     }
@@ -294,16 +299,75 @@ fn typecheck_body(
                 }
             },
             AstKind::Intrinsic(i) => match i {
+                Intrinsic::ReadU8 => {
+                    let ty = stack.pop(heap).ok_or_else(|| {
+                        Error::new(node.span, NotEnoughData, "Not enough data to pop")
+                    })?;
+                    if !matches!(ty, Type::Ptr) {
+                        return error(
+                            node.span,
+                            TypeMismatch {
+                                actual: vec![ty],
+                                expected: vec![Type::Ptr],
+                            },
+                            "Wrong types for @u8",
+                        );
+                    }
+                    stack.push(heap, Type::U64)
+                }
+                Intrinsic::WriteU8 => {
+                    todo!()
+                }
+                Intrinsic::PtrAdd => {
+                    let offset = stack.pop(heap).ok_or_else(|| {
+                        Error::new(node.span, NotEnoughData, "Not enough data to pop")
+                    })?;
+                    let pointer = stack.pop(heap).ok_or_else(|| {
+                        Error::new(node.span, NotEnoughData, "Not enough data to pop")
+                    })?;
+                    if !matches!((pointer, offset), (Type::Ptr, Type::U64)) {
+                        return error(
+                            node.span,
+                            TypeMismatch {
+                                actual: vec![pointer, offset],
+                                expected: vec![Type::Ptr, Type::U64],
+                            },
+                            "Wrong types for ptr+",
+                        );
+                    }
+                    stack.push(heap, Type::Ptr)
+                }
+                Intrinsic::PtrSub => {
+                    let offset = stack.pop(heap).ok_or_else(|| {
+                        Error::new(node.span, NotEnoughData, "Not enough data to pop")
+                    })?;
+                    let pointer = stack.pop(heap).ok_or_else(|| {
+                        Error::new(node.span, NotEnoughData, "Not enough data to pop")
+                    })?;
+                    if !matches!((pointer, offset), (Type::Ptr, Type::U64)) {
+                        return error(
+                            node.span,
+                            TypeMismatch {
+                                actual: vec![pointer, offset],
+                                expected: vec![Type::Ptr, Type::U64],
+                            },
+                            "Wrong types for ptr-",
+                        );
+                    }
+                    stack.push(heap, Type::Ptr)
+                }
+
                 Intrinsic::CompStop => {
                     let types: Vec<_> = stack.clone().into_deq(heap).into();
                     println!("{:?}", types);
                     return error(node.span, CompStop, "");
                 }
-                Intrinsic::Print | Intrinsic::Drop => {
+                Intrinsic::Print | Intrinsic::Drop | Intrinsic::PutC => {
                     stack.pop(heap).ok_or_else(|| {
                         Error::new(node.span, NotEnoughData, "Not enough data to pop")
                     })?;
                 }
+
                 Intrinsic::Dup => {
                     let ty = stack.pop(heap).ok_or_else(|| {
                         Error::new(node.span, NotEnoughData, "Not enough data to dup")
@@ -420,9 +484,9 @@ fn typecheck_binop(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) -> R
                 node.span,
                 TypeMismatch {
                     actual: vec![b, a],
-                    expected: vec![Type::U64, Type::U64],
+                    expected: vec![b, b],
                 },
-                "Wrong types for binary operation",
+                "Wrong types for binary operation, must be 2 operands of type uint|int",
             )
         }
     }

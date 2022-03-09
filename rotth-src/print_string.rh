@@ -1,0 +1,22 @@
+proc main : uint do
+    "abc\n" print-string
+    0
+end
+
+proc print-string uint ptr do
+    ; len ptr
+    swap
+    ; ptr len
+    while dup 0 > do
+        swap
+        ; len ptr
+        dup @u8
+        ; len ptr char
+        putc
+        ; len ptr
+        1 ptr+
+        swap
+        ; ptr len
+        1 -
+    end drop drop
+end

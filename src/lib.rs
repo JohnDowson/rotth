@@ -1,4 +1,5 @@
 #![feature(assert_matches)]
+#![feature(vec_into_raw_parts)]
 
 pub mod emit;
 pub mod eval;

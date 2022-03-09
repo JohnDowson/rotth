@@ -52,6 +52,7 @@ fn main() -> std::io::Result<()> {
     }
 
     if args.dump_tokens {
+        println!("Tokens:\n");
         println!("{tokens:?}");
     }
 
@@ -74,6 +75,7 @@ fn main() -> std::io::Result<()> {
     }
 
     if args.dump_hir {
+        println!("HIR:\n");
         println!("{ast:#?}");
     }
 
@@ -85,7 +87,7 @@ fn main() -> std::io::Result<()> {
     }
 
     let comp = lir::Compiler::default();
-    let lir = comp.compile(procs);
+    let (lir, strs) = comp.compile(procs);
 
     let transpiled = Instant::now();
     if args.time {
@@ -93,6 +95,7 @@ fn main() -> std::io::Result<()> {
     }
 
     if args.dump_lir {
+        println!("LIR:\n");
         for (i, op) in lir.iter().enumerate() {
             println!("{i}:\t{op:?}");
         }
@@ -101,6 +104,7 @@ fn main() -> std::io::Result<()> {
         let comp = emit::Compiler::default();
         comp.compile(
             lir,
+            &strs,
             BufWriter::new(
                 OpenOptions::new()
                     .create(true)
@@ -115,7 +119,7 @@ fn main() -> std::io::Result<()> {
             println!("Total:\t{:?}", compiled - start);
         }
     } else {
-        println!("exitcode: {}", eval(lir).unwrap());
+        println!("exitcode: {}", eval(lir, &strs).unwrap());
         let evaluated = Instant::now();
         if args.time {
             println!("Evaluated in:\t{:?}", evaluated - transpiled);
