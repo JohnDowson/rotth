@@ -362,7 +362,22 @@ fn typecheck_body(
                     println!("{:?}", types);
                     return error(node.span, CompStop, "");
                 }
-                Intrinsic::Print | Intrinsic::Drop | Intrinsic::PutC => {
+                Intrinsic::Syscall3 => {
+                    stack.pop(heap).ok_or_else(|| {
+                        Error::new(node.span, NotEnoughData, "Not enough data for syscall3")
+                    })?;
+                    stack.pop(heap).ok_or_else(|| {
+                        Error::new(node.span, NotEnoughData, "Not enough data for syscall3")
+                    })?;
+                    stack.pop(heap).ok_or_else(|| {
+                        Error::new(node.span, NotEnoughData, "Not enough data for syscall3")
+                    })?;
+                    let _syscall = stack.pop(heap).ok_or_else(|| {
+                        Error::new(node.span, NotEnoughData, "Not enough data for syscall3")
+                    })?;
+                    stack.push(heap, Type::U64);
+                }
+                Intrinsic::Print | Intrinsic::Drop => {
                     stack.pop(heap).ok_or_else(|| {
                         Error::new(node.span, NotEnoughData, "Not enough data to pop")
                     })?;

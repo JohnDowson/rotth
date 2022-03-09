@@ -157,7 +157,8 @@ pub enum Intrinsic {
     CompStop,
     Dump,
     Print,
-    PutC,
+
+    Syscall3,
 
     Add,
     Sub,
@@ -307,8 +308,8 @@ fn intrinsic() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
                 span,
             }
             .okay(),
-            "putc" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::PutC),
+            "syscall3" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Syscall3),
                 span,
             }
             .okay(),

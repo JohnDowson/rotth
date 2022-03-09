@@ -87,7 +87,7 @@ fn main() -> std::io::Result<()> {
     }
 
     let comp = lir::Compiler::default();
-    let (lir, strs) = comp.compile(procs);
+    let (lir, strs, mangle_table) = comp.compile(procs);
 
     let transpiled = Instant::now();
     if args.time {
@@ -105,6 +105,7 @@ fn main() -> std::io::Result<()> {
         comp.compile(
             lir,
             &strs,
+            mangle_table,
             BufWriter::new(
                 OpenOptions::new()
                     .create(true)

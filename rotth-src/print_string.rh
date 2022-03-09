@@ -1,22 +1,11 @@
 proc main : uint do
-    "abc\n" print-string
+    "Hello, world!\n" puts
     0
 end
 
-proc print-string uint ptr do
-    ; len ptr
-    swap
-    ; ptr len
-    while dup 0 > do
-        swap
-        ; len ptr
-        dup @u8
-        ; len ptr char
-        putc
-        ; len ptr
-        1 ptr+
-        swap
-        ; ptr len
-        1 -
-    end drop drop
+const SYS_write : uint do 1 end
+const STDOUT : uint do 1 end
+
+proc puts uint ptr do
+    STDOUT SYS_write syscall3 drop
 end

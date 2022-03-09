@@ -66,6 +66,7 @@ where
                 if escape {
                     match b {
                         b'n' => res.push(b'\n'),
+                        b'r' => res.push(b'\r'),
                         b't' => res.push(b'\t'),
                         b'\\' => res.push(b'\\'),
                         _ => panic!("Invalid escape sequence \\{}!", b as char),

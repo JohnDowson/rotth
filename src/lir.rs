@@ -20,7 +20,7 @@ pub enum Op {
 
     Dump,
     Print,
-    PutC,
+    Syscall3,
 
     Add,
     Sub,
@@ -54,6 +54,8 @@ enum ComConst {
 
 pub struct Compiler {
     label: usize,
+    mangle_table: HashMap<String, String>,
+    proc_id: usize,
     current_name: String,
     result: Vec<Op>,
     consts: HashMap<String, ComConst>,
@@ -64,7 +66,7 @@ impl Compiler {
     pub fn compile(
         mut self,
         items: HashMap<String, (TopLevel, Span, bool)>,
-    ) -> (Vec<Op>, Vec<String>) {
+    ) -> (Vec<Op>, Vec<String>, HashMap<String, String>) {
         let (procs, consts) = items
             .into_iter()
             .partition::<Vec<_>, _>(|(_, (it, _, _))| matches!(it, TopLevel::Proc(_)));
@@ -103,13 +105,24 @@ impl Compiler {
             self.compile_proc(name, proc)
         }
 
-        (self.result, self.strings)
+        (self.result, self.strings, self.mangle_table)
     }
 
     fn compile_proc(&mut self, name: String, proc: Proc) {
         self.label = 0;
-        self.current_name = name.clone();
-        let label = name;
+        let name_mangled = if name != "main" {
+            format!(
+                "proc{}_{}",
+                self.proc_id,
+                name.replace(|p: char| !p.is_ascii_alphabetic(), "")
+            )
+        } else {
+            name.clone()
+        };
+        self.mangle_table.insert(name, name_mangled.clone());
+        self.proc_id += 1;
+        self.current_name = name_mangled.clone();
+        let label = name_mangled;
         self.emit(Proc(label));
 
         self.compile_body(proc.body);
@@ -203,7 +216,7 @@ impl Compiler {
 
                     Intrinsic::Dump => self.emit(Dump),
                     Intrinsic::Print => self.emit(Print),
-                    Intrinsic::PutC => self.emit(PutC),
+                    Intrinsic::Syscall3 => self.emit(Syscall3),
                     Intrinsic::CompStop => return,
                 },
                 AstKind::If(cond) => self.compile_cond(cond),
@@ -248,7 +261,7 @@ impl Compiler {
     }
 
     fn gen_label(&mut self) -> String {
-        let res = format!(".{}{}", self.current_name, self.label);
+        let res = format!(".{}_{}", self.current_name, self.label);
         self.label += 1;
         res
     }
@@ -256,6 +269,8 @@ impl Compiler {
     pub fn new() -> Self {
         Self {
             label: 0,
+            mangle_table: Default::default(),
+            proc_id: 0,
             current_name: "".to_string(),
             result: Default::default(),
             consts: Default::default(),
@@ -265,6 +280,8 @@ impl Compiler {
     fn with_consts_and_strings(consts: HashMap<String, ComConst>, strings: Vec<String>) -> Self {
         Self {
             label: 0,
+            mangle_table: Default::default(),
+            proc_id: 0,
             current_name: "".to_string(),
             result: Default::default(),
             consts,

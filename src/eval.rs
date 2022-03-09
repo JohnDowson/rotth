@@ -71,7 +71,7 @@ pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<u64, String> {
 
             Op::Dump => println!("{:?}", stack),
             Op::Print => println!("{:?}", stack.pop().unwrap()),
-            Op::PutC => print!("{}", stack.pop().unwrap() as u8 as char),
+            Op::Syscall3 => todo!("Syscalls not supported in eval"),
 
             Op::Add => {
                 let (b, a) = (stack.pop().unwrap(), stack.pop().unwrap());

@@ -1,6 +1,9 @@
 use crate::{hir::IConst, lir::Op};
 use indoc::indoc;
-use std::io::{BufWriter, Write};
+use std::{
+    collections::HashMap,
+    io::{BufWriter, Write},
+};
 
 pub struct Compiler {}
 
@@ -13,6 +16,7 @@ impl Compiler {
         self,
         ops: Vec<Op>,
         strings: &[String],
+        mangle_table: HashMap<String, String>,
         mut sink: BufWriter<S>,
     ) -> std::io::Result<()> {
         use Op::*;
@@ -123,8 +127,27 @@ impl Compiler {
                     op
                 )?,
 
-                ReadU8 => todo!(),
-                WriteU8 => todo!(),
+                ReadU8 => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        pop rax
+                        xor rbx, rbx
+                        mov bl, [rax]
+                        push rbx
+                    "},
+                    op
+                )?,
+                WriteU8 => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        pop rax
+                        pop rbx
+                        mov [rax], bl
+                    "},
+                    op
+                )?,
 
                 Print => write!(
                     sink,
@@ -135,7 +158,19 @@ impl Compiler {
                     "},
                     op
                 )?,
-                PutC => todo!(),
+                Syscall3 => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        pop rax
+                        pop rdi
+                        pop rsi
+                        pop rdx
+                        syscall
+                        push rax
+                    "},
+                    op
+                )?,
 
                 Sub => write!(
                     sink,
@@ -289,7 +324,8 @@ impl Compiler {
                     ; {:?}
                         call {}
                     "},
-                    op, p
+                    op,
+                    mangle_table.get(p).unwrap()
                 )?,
                 Exit => write!(
                     sink,
@@ -354,9 +390,15 @@ impl Compiler {
                 sink,
                 indoc! {"
                 str_{}:
-                    db {:?}
+                    db {}
                 "},
-                i, str
+                i,
+                {
+                    str.bytes()
+                        .map(|b| b.to_string())
+                        .intersperse(",".to_string())
+                        .collect::<String>()
+                }
             )?;
         }
         write!(
