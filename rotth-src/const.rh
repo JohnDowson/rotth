@@ -1,4 +1,4 @@
 const foo : uint do 1 end
 const bar : uint do foo 1 + end
 
-proc main : uint do bar end
+proc main : uint do bar print 0 end

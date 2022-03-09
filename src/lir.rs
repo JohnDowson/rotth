@@ -30,7 +30,6 @@ pub enum Op {
     Ge,
 
     Proc(String),
-    ProcEnd,
     Label(String),
     Jump(String),
     JumpF(String),
@@ -106,7 +105,6 @@ impl Compiler {
 
         self.compile_body(proc.body);
 
-        self.emit(ProcEnd);
         self.emit(Return);
     }
 

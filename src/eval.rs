@@ -90,7 +90,6 @@ pub fn eval(ops: Vec<Op>) -> Result<u64, String> {
             }
 
             Op::Proc(_) => (),
-            Op::ProcEnd => (),
             Op::Label(_) => (),
             Op::Jump(l) => i = labels[l],
             Op::JumpF(l) => {

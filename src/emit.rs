@@ -222,6 +222,12 @@ impl Compiler {
                 Return => write!(
                     sink,
                     indoc! {"
+                    ; load return adderss
+                        mov QWORD rax, [ret_stack_rsp]
+                        mov QWORD rdi, [rax]
+                        mov rax, 8
+                        sub [ret_stack_rsp], rax
+                        push rdi
                     ; {:?}
                         ret
                     "},
@@ -258,17 +264,6 @@ impl Compiler {
                     "},
                     l
                 )?,
-                ProcEnd => write!(
-                    sink,
-                    indoc! {"
-                    ; load return adderss
-                        mov QWORD rax, [ret_stack_rsp]
-                        mov QWORD rdi, [rax]
-                        mov rax, 8
-                        sub [ret_stack_rsp], rax
-                        push rdi
-                    "},
-                )?,
                 Label(l) => write!(
                     sink,
                     indoc! {"
@@ -296,7 +291,7 @@ impl Compiler {
                     op, l
                 )?,
                 Dump => {}
-                JumpT(_) => todo!(), // op => todo!("{:?}", op),
+                JumpT(_) => todo!(),
             }
         }
         write!(
