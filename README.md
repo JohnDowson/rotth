@@ -3,16 +3,11 @@
 
 ## Syntax
 ```rotth
-proc main : uint do
+include "std.rh"
+
+proc main : u64 do
     "Hello, world!\n" puts
     0
-end
-
-const SYS_write : uint do 1 end
-const STDOUT : uint do 1 end
-
-proc puts uint ptr do
-    STDOUT SYS_write syscall3 drop
 end
 ```
 
@@ -41,9 +36,21 @@ Body of the procedure is terminated by `end` keyword.
 ### `bind`
 `bind` is similliar to destructuring in traditional functional languages, it iakes elements from the stack and allows using them as local constants. For example, this is how you can implement `Forth` `rot` word using it:
 ```rotth
-bind a b c do
+bind a : u64 b : ptr c : char do
     b c a
 end
 ```
 ### `cond`
 Despite it's name `cond` is more similliar to `Rust`'s `match` than to `Lisp`'s `cond`, taking only constants and literal values as patterns to compare against.
+```rotth
+some-char cond
+    'a' do
+        "hello\n"
+    else
+    'b' do
+        "bye\n"
+    else
+    'c' do
+        "get out\n"
+  end
+```
