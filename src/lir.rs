@@ -82,7 +82,8 @@ impl Compiler {
             .filter_map(|(name, (proc, _, needed))| {
                 if let TopLevel::Proc(proc) = proc {
                     if needed {
-                        (name, proc).some()
+                        let mangled = self.mangle_name(name);
+                        (mangled, proc).some()
                     } else {
                         None
                     }
@@ -91,6 +92,7 @@ impl Compiler {
                 }
             })
             .collect::<Vec<_>>();
+
         let consts = consts
             .into_iter()
             .filter_map(|(name, (const_, _, needed))| {
@@ -110,22 +112,7 @@ impl Compiler {
         self.emit(Call("main".to_string()));
 
         self.emit(Exit);
-        //dbg! {&procs};
-        println!(
-            indoc::indoc! {"
-            ++++++++++++++++++++++++++++++++++++++++++++++++
-            procs.len(): {}
-            ++++++++++++++++++++++++++++++++++++++++++++++++"},
-            procs.len()
-        );
         for (name, proc) in procs {
-            println!(
-                indoc::indoc! {"
-                ++++++++++++++++++++++++++++++++++++++++++++++++
-                compiling proc: {}
-                ++++++++++++++++++++++++++++++++++++++++++++++++"},
-                &name
-            );
             self.compile_proc(name, proc)
         }
 
@@ -134,19 +121,8 @@ impl Compiler {
 
     fn compile_proc(&mut self, name: String, proc: Proc) {
         self.label = 0;
-        let name_mangled = if name != "main" {
-            format!(
-                "proc{}_{}",
-                self.proc_id,
-                name.replace(|p: char| !p.is_ascii_alphabetic(), "")
-            )
-        } else {
-            name.clone()
-        };
-        self.mangle_table.insert(name, name_mangled.clone());
-        self.proc_id += 1;
-        self.current_name = name_mangled.clone();
-        let label = name_mangled;
+        self.current_name = name.clone();
+        let label = name;
         self.emit(Proc(label));
 
         self.compile_body(proc.body);
@@ -361,6 +337,21 @@ impl Compiler {
             strings,
             bindings: Default::default(),
         }
+    }
+
+    fn mangle_name(&mut self, name: String) -> String {
+        let name_mangled = if name != "main" {
+            format!(
+                "proc{}_{}",
+                self.proc_id,
+                name.replace(|p: char| !p.is_ascii_alphabetic(), "")
+            )
+        } else {
+            name.clone()
+        };
+        self.mangle_table.insert(name, name_mangled.clone());
+        self.proc_id += 1;
+        name_mangled
     }
 
     fn is_const(&self, w: &str) -> bool {
