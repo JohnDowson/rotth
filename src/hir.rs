@@ -16,6 +16,7 @@ pub enum IConst {
     Bool(bool),
     U64(u64),
     I64(i64),
+    Char(char),
     Str(String),
     Ptr(u64),
 }
@@ -65,6 +66,7 @@ pub enum Type {
     U64,
     I64,
     Ptr,
+    Char,
 }
 
 #[derive(Debug, Clone)]
@@ -75,17 +77,14 @@ pub struct Proc {
 fn ty() -> impl Parser<Token, Type, Error = Simple<Token, Span>> {
     filter_map(|s, t| match &t {
         Token::Word(ty) => match &**ty {
-            "int" => Type::I64.okay(),
-            "uint" => Type::U64.okay(),
+            "i64" => Type::I64.okay(),
+            "u64" => Type::U64.okay(),
             "bool" => Type::Bool.okay(),
             "ptr" => Type::Ptr.okay(),
+            "char" => Type::Char.okay(),
             _ => Simple::expected_input_found(
                 s,
-                vec![
-                    Some(Token::Word("int".to_string())),
-                    Some(Token::Word("uint".to_string())),
-                    Some(Token::Word("bool".to_string())),
-                ],
+                vec![Some(Token::Word("type".to_string()))],
                 Some(t),
             )
             .error(),
@@ -161,7 +160,13 @@ pub enum Intrinsic {
     Dump,
     Print,
 
+    Syscall0,
+    Syscall1,
+    Syscall2,
     Syscall3,
+    Syscall4,
+    Syscall5,
+    Syscall6,
 
     Add,
     Sub,
@@ -311,8 +316,38 @@ fn intrinsic() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
                 span,
             }
             .okay(),
+            "syscall0" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Syscall0),
+                span,
+            }
+            .okay(),
+            "syscall1" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Syscall1),
+                span,
+            }
+            .okay(),
+            "syscall2" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Syscall2),
+                span,
+            }
+            .okay(),
             "syscall3" => AstNode {
                 ast: AstKind::Intrinsic(Intrinsic::Syscall3),
+                span,
+            }
+            .okay(),
+            "syscall4" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Syscall4),
+                span,
+            }
+            .okay(),
+            "syscall5" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Syscall5),
+                span,
+            }
+            .okay(),
+            "syscall6" => AstNode {
+                ast: AstKind::Intrinsic(Intrinsic::Syscall6),
                 span,
             }
             .okay(),
@@ -438,6 +473,17 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
             span,
         });
 
+        let char =
+            filter(|token| matches!(token, Token::Char(_))).map_with_span(
+                |token, span| match token {
+                    Token::Char(c) => AstNode {
+                        span,
+                        ast: AstKind::Literal(IConst::Char(c)),
+                    },
+                    _ => unreachable!(),
+                },
+            );
+
         let string =
             filter(|token| matches!(token, Token::Str(_))).map_with_span(
                 |token, span| match token {
@@ -504,7 +550,17 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
                     span,
                 })
         };
-        choice((bool, word_or_intrinsic(), string, num, cond, while_, bind)).repeated()
+        choice((
+            bool,
+            word_or_intrinsic(),
+            char,
+            string,
+            num,
+            cond,
+            while_,
+            bind,
+        ))
+        .repeated()
     })
 }
 

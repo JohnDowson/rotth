@@ -26,7 +26,14 @@ pub enum Op {
 
     Dump,
     Print,
+
+    Syscall0,
+    Syscall1,
+    Syscall2,
     Syscall3,
+    Syscall4,
+    Syscall5,
+    Syscall6,
 
     Add,
     Sub,
@@ -150,6 +157,7 @@ impl Compiler {
                         Type::Bool => const_.push(IConst::Bool(bytes == 1)),
                         Type::U64 => const_.push(IConst::U64(bytes)),
                         Type::I64 => const_.push(IConst::I64(bytes as i64)),
+                        Type::Char => const_.push(IConst::Char(bytes as u8 as char)),
                         Type::Ptr => todo!("Figure out a way to support const string literals"),
                     }
                 }
@@ -170,6 +178,7 @@ impl Compiler {
                                 Type::Bool => const_.push(IConst::Bool(bytes == 1)),
                                 Type::U64 => const_.push(IConst::U64(bytes)),
                                 Type::I64 => const_.push(IConst::I64(bytes as i64)),
+                                Type::Char => const_.push(IConst::Char(bytes as u8 as char)),
                                 Type::Ptr => {
                                     todo!("Figure out a way to support const string literals")
                                 }
@@ -242,7 +251,15 @@ impl Compiler {
 
                     Intrinsic::Dump => self.emit(Dump),
                     Intrinsic::Print => self.emit(Print),
+
+                    Intrinsic::Syscall0 => self.emit(Syscall0),
+                    Intrinsic::Syscall1 => self.emit(Syscall1),
+                    Intrinsic::Syscall2 => self.emit(Syscall2),
                     Intrinsic::Syscall3 => self.emit(Syscall3),
+                    Intrinsic::Syscall4 => self.emit(Syscall4),
+                    Intrinsic::Syscall5 => self.emit(Syscall5),
+                    Intrinsic::Syscall6 => self.emit(Syscall6),
+
                     Intrinsic::CompStop => return,
                 },
                 AstKind::If(cond) => self.compile_cond(cond),

@@ -1,0 +1,6 @@
+include "./rotth-src/std.rh"
+
+proc main : uint do
+    "Unimplemented\n" eputs 1 exit
+    0
+end

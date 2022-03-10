@@ -8,6 +8,7 @@ use somok::Somok;
 pub enum Token {
     Word(String),
     Str(String),
+    Char(char),
     KeyWord(KeyWord),
     Num(String),
     Ignore,
@@ -19,6 +20,7 @@ impl std::fmt::Debug for Token {
         match self {
             Self::Word(word) => write!(f, "{}", word),
             Self::Str(str) => write!(f, "{:?}", str),
+            Self::Char(c) => write!(f, "{:?}", c),
             Self::KeyWord(keyword) => keyword.fmt(f),
             Self::Num(num) => write!(f, "{}", num),
             Self::Ignore => write!(f, "i_"),
@@ -59,6 +61,18 @@ pub fn word_parser<C: Character, E: CError<C>>(
 fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char, Span>>
 where
 {
+    let escaped = just('\\').ignore_then(any()).map(|c| match c {
+        'n' => '\n',
+        'r' => '\r',
+        't' => '\t',
+        '\\' => '\\',
+        _ => panic!("Invalid escape sequence"),
+    });
+    let char = just('\'')
+        .ignore_then(choice((escaped, any())))
+        .then_ignore(just('\''))
+        .map(Token::Char);
+
     let string = just('"')
         .ignore_then(none_of(['"']).repeated().collect())
         .then_ignore(just('"'))
@@ -114,6 +128,7 @@ where
     let sig_sep = just(':').map(|_| Token::SigSep);
 
     let token = num
+        .or(char)
         .or(string)
         .or(sig_sep)
         .or(ignore)

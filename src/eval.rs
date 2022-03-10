@@ -33,6 +33,7 @@ pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<Either<u64, Vec<u64>>, S
                 IConst::U64(u) => stack.push(*u),
                 IConst::I64(i) => stack.push(*i as u64),
                 IConst::Ptr(p) => stack.push(*p),
+                IConst::Char(c) => stack.push(*c as u64),
                 IConst::Str(_s) => unreachable!(),
             },
             Op::Drop => {
@@ -71,7 +72,13 @@ pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<Either<u64, Vec<u64>>, S
 
             Op::Dump => println!("{:?}", stack),
             Op::Print => println!("{:?}", stack.pop().unwrap()),
-            Op::Syscall3 => todo!("Syscalls not supported in eval"),
+            Op::Syscall0
+            | Op::Syscall1
+            | Op::Syscall2
+            | Op::Syscall3
+            | Op::Syscall4
+            | Op::Syscall5
+            | Op::Syscall6 => todo!("Syscalls not supported in eval"),
 
             Op::Add => {
                 let (b, a) = (stack.pop().unwrap(), stack.pop().unwrap());

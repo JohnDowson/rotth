@@ -204,6 +204,7 @@ fn typecheck_body(
                 IConst::U64(_) => stack.push(heap, Type::U64),
                 IConst::I64(_) => stack.push(heap, Type::I64),
                 IConst::Ptr(_) => stack.push(heap, Type::Ptr),
+                IConst::Char(_) => stack.push(heap, Type::Char),
                 IConst::Str(_) => {
                     stack.push(heap, Type::U64);
                     stack.push(heap, Type::Ptr);
@@ -346,7 +347,30 @@ fn typecheck_body(
                     stack.push(heap, Type::U64)
                 }
                 Intrinsic::WriteU8 => {
-                    todo!("Write u8")
+                    let ty = stack.pop(heap).ok_or_else(|| {
+                        TypecheckError::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data to pop",
+                        )
+                    })?;
+                    let ty_store = stack.pop(heap).ok_or_else(|| {
+                        TypecheckError::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data to pop",
+                        )
+                    })?;
+                    if !matches!((ty, ty_store), (Type::Ptr, _)) {
+                        return error(
+                            node.span.clone(),
+                            TypeMismatch {
+                                actual: vec![ty],
+                                expected: vec![Type::Ptr],
+                            },
+                            "Wrong types for !u8",
+                        );
+                    }
                 }
                 Intrinsic::PtrAdd => {
                     let offset = stack.pop(heap).ok_or_else(|| {
@@ -408,37 +432,78 @@ fn typecheck_body(
                     println!("{:?}", types);
                     return error(node.span.clone(), CompStop, "");
                 }
-                Intrinsic::Syscall3 => {
-                    stack.pop(heap).ok_or_else(|| {
-                        TypecheckError::new(
+
+                Intrinsic::Syscall0 => {
+                    if !expect_arity(1, stack, heap) {
+                        return error(
                             node.span.clone(),
                             NotEnoughData,
                             "Not enough data for syscall3",
-                        )
-                    })?;
-                    stack.pop(heap).ok_or_else(|| {
-                        TypecheckError::new(
-                            node.span.clone(),
-                            NotEnoughData,
-                            "Not enough data for syscall3",
-                        )
-                    })?;
-                    stack.pop(heap).ok_or_else(|| {
-                        TypecheckError::new(
-                            node.span.clone(),
-                            NotEnoughData,
-                            "Not enough data for syscall3",
-                        )
-                    })?;
-                    let _syscall = stack.pop(heap).ok_or_else(|| {
-                        TypecheckError::new(
-                            node.span.clone(),
-                            NotEnoughData,
-                            "Not enough data for syscall3",
-                        )
-                    })?;
+                        );
+                    }
                     stack.push(heap, Type::U64);
                 }
+                Intrinsic::Syscall1 => {
+                    if !expect_arity(2, stack, heap) {
+                        return error(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data for syscall3",
+                        );
+                    }
+                    stack.push(heap, Type::U64);
+                }
+                Intrinsic::Syscall2 => {
+                    if !expect_arity(3, stack, heap) {
+                        return error(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data for syscall3",
+                        );
+                    }
+                    stack.push(heap, Type::U64);
+                }
+                Intrinsic::Syscall3 => {
+                    if !expect_arity(4, stack, heap) {
+                        return error(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data for syscall3",
+                        );
+                    }
+                    stack.push(heap, Type::U64);
+                }
+                Intrinsic::Syscall4 => {
+                    if !expect_arity(5, stack, heap) {
+                        return error(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data for syscall3",
+                        );
+                    }
+                    stack.push(heap, Type::U64);
+                }
+                Intrinsic::Syscall5 => {
+                    if !expect_arity(6, stack, heap) {
+                        return error(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data for syscall3",
+                        );
+                    }
+                    stack.push(heap, Type::U64);
+                }
+                Intrinsic::Syscall6 => {
+                    if !expect_arity(7, stack, heap) {
+                        return error(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data for syscall3",
+                        );
+                    }
+                    stack.push(heap, Type::U64);
+                }
+
                 Intrinsic::Print | Intrinsic::Drop => {
                     stack.pop(heap).ok_or_else(|| {
                         TypecheckError::new(
@@ -606,6 +671,15 @@ fn typecheck_body(
     ().okay()
 }
 
+fn expect_arity(arity: usize, stack: &mut TypeStack, heap: &mut THeap) -> bool {
+    for _ in 0..arity {
+        if stack.pop(heap).is_none() {
+            return false;
+        }
+    }
+    true
+}
+
 fn typecheck_divmod(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) -> Result<()> {
     typecheck_binop(stack, heap, node)?;
     stack.push(heap, Type::U64);
@@ -660,14 +734,13 @@ fn typecheck_boolean(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) ->
         )
     })?;
     match (a, b) {
-        (Type::U64, Type::U64) => stack.push(heap, Type::Bool),
-        (Type::I64, Type::I64) => stack.push(heap, Type::Bool),
+        (a, b) if a == b => stack.push(heap, Type::Bool),
         (a, b) => {
             return error(
                 node.span.clone(),
                 TypeMismatch {
                     actual: vec![b, a],
-                    expected: vec![Type::U64, Type::U64],
+                    expected: vec![a, a],
                 },
                 "Wrong types for boolean operation",
             )

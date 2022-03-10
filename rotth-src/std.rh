@@ -1,7 +1,26 @@
-
 const SYS_write : uint do 1 end
+const SYS_exit : uint do 60 end
+
+const STDIN : uint do 0 end
 const STDOUT : uint do 1 end
+const STDERR : uint do 2 end
 
 proc puts uint ptr do
     STDOUT SYS_write syscall3 drop
+end
+
+proc eputs uint ptr do
+    STDERR SYS_write syscall3 drop
+end
+
+proc exit uint do
+    SYS_exit syscall1 drop
+end
+
+proc div u64 u64 : u64 do
+    divmod drop
+end
+
+proc mod u64 u64 : u64 do
+    divmod swap drop
 end

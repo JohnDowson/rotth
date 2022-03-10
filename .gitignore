@@ -3,10 +3,11 @@
 !/**/
 !/rotth-src/examples/*.*
 !/rotth-src/*.rh
-/rotth-lsp/**
+# !/rotth-lsp/**
 /rotth-src/examples/*.o
 !/src/**
 /target
 /rotth
 /simplearena
 *.asm
+/rotth-lsp

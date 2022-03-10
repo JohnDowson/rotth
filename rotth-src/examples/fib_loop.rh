@@ -1,4 +1,4 @@
-proc main : uint do
+proc main : u64 do
     1 while dup 10 < do
         dup fib print
         1 +
@@ -6,7 +6,7 @@ proc main : uint do
     0
 end
 
-proc fib uint : uint do
+proc fib u64 : u64 do
     dup 3 <= if
         drop 1
     else

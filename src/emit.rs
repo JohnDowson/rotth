@@ -52,6 +52,15 @@ impl Compiler {
                         "},
                         op, *b as u64
                     )?,
+                    IConst::Char(c) => write!(
+                        sink,
+                        indoc! {"
+                        ; {:?}
+                            mov rax, {}
+                            push rax
+                        "},
+                        op, *c as u64
+                    )?,
                     IConst::U64(u) => write!(
                         sink,
                         indoc! {"
@@ -188,6 +197,40 @@ impl Compiler {
                     "},
                     op
                 )?,
+
+                Syscall0 => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        pop rax
+                        syscall
+                        push rax
+                    "},
+                    op
+                )?,
+                Syscall1 => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        pop rax
+                        pop rdi
+                        syscall
+                        push rax
+                    "},
+                    op
+                )?,
+                Syscall2 => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        pop rax
+                        pop rdi
+                        pop rsi
+                        syscall
+                        push rax
+                    "},
+                    op
+                )?,
                 Syscall3 => write!(
                     sink,
                     indoc! {"
@@ -196,6 +239,51 @@ impl Compiler {
                         pop rdi
                         pop rsi
                         pop rdx
+                        syscall
+                        push rax
+                    "},
+                    op
+                )?,
+                Syscall4 => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        pop rax
+                        pop rdi
+                        pop rsi
+                        pop rdx
+                        pop r10
+                        syscall
+                        push rax
+                    "},
+                    op
+                )?,
+                Syscall5 => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        pop rax
+                        pop rdi
+                        pop rsi
+                        pop rdx
+                        pop r10
+                        pop r8
+                        syscall
+                        push rax
+                    "},
+                    op
+                )?,
+                Syscall6 => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        pop rax
+                        pop rdi
+                        pop rsi
+                        pop rdx
+                        pop r10
+                        pop r8
+                        pop r9
                         syscall
                         push rax
                     "},

@@ -1,8 +1,8 @@
-proc main : uint do
+proc main : u64 do
     10 count
 end
 
-proc count uint : uint do
+proc count u64 : u64 do
     dup 0 = if
     else
         dup print
