@@ -52,6 +52,12 @@ pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<Either<u64, Vec<u64>>, S
                 stack.push(v);
             }
 
+            Op::Bind => call_stack.push(stack.pop().unwrap()),
+            Op::UseBinding(offset) => stack.push(call_stack[(call_stack.len() - 1) - offset]),
+            Op::Unbind => {
+                call_stack.pop();
+            }
+
             Op::ReadU8 => {
                 let ptr = stack.pop().unwrap();
                 let read = unsafe { (ptr as *const u8).read() as u64 };
@@ -124,10 +130,10 @@ pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<Either<u64, Vec<u64>>, S
                 }
             }
             Op::Call(l) => {
-                call_stack.push(i);
+                call_stack.push(i as u64);
                 i = labels.get(l).copied().ok_or_else(|| l.clone())?
             }
-            Op::Return => i = call_stack.pop().unwrap(),
+            Op::Return => i = call_stack.pop().unwrap() as usize,
             Op::Exit => return stack.pop().unwrap().left().okay(),
         }
         i += 1;

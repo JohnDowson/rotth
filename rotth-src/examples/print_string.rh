@@ -1,8 +1,6 @@
 include "./rotth-src/std.rh"
 
-const HELLO : uint ptr do "Hello, World!\n" end
-
 proc main : uint do
-    HELLO puts
+    "Hello, World!\n" puts
     0
 end

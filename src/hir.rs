@@ -370,50 +370,14 @@ fn intrinsic() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
             .okay(),
             _ => Simple::expected_input_found(
                 span,
-                vec![
-                    Some(Token::Word("drop".to_string())),
-                    Some(Token::Word("dup".to_string())),
-                    Some(Token::Word("swap".to_string())),
-                    Some(Token::Word("over".to_string())),
-                    Some(Token::Word("&?&".to_string())),
-                    Some(Token::Word("&?".to_string())),
-                    Some(Token::Word("print".to_string())),
-                    Some(Token::Word("+".to_string())),
-                    Some(Token::Word("-".to_string())),
-                    Some(Token::Word("*".to_string())),
-                    Some(Token::Word("divmod".to_string())),
-                    Some(Token::Word("=".to_string())),
-                    Some(Token::Word("!=".to_string())),
-                    Some(Token::Word("<".to_string())),
-                    Some(Token::Word("<=".to_string())),
-                    Some(Token::Word(">".to_string())),
-                    Some(Token::Word(">=".to_string())),
-                ],
+                vec![Some(Token::Word("some-intrinsic".to_string()))],
                 Some(token),
             )
             .error(),
         },
         _ => Simple::expected_input_found(
             span,
-            vec![
-                Some(Token::Word("drop".to_string())),
-                Some(Token::Word("dup".to_string())),
-                Some(Token::Word("swap".to_string())),
-                Some(Token::Word("over".to_string())),
-                Some(Token::Word("&?&".to_string())),
-                Some(Token::Word("&?".to_string())),
-                Some(Token::Word("print".to_string())),
-                Some(Token::Word("+".to_string())),
-                Some(Token::Word("-".to_string())),
-                Some(Token::Word("*".to_string())),
-                Some(Token::Word("divmod".to_string())),
-                Some(Token::Word("=".to_string())),
-                Some(Token::Word("!=".to_string())),
-                Some(Token::Word("<".to_string())),
-                Some(Token::Word("<=".to_string())),
-                Some(Token::Word(">".to_string())),
-                Some(Token::Word(">=".to_string())),
-            ],
+            vec![Some(Token::Word("some-intrinsic".to_string()))],
             Some(token),
         )
         .error(),
@@ -437,6 +401,7 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
             .then_ignore(just(Token::SigSep))
             .then(ty())
             .map(|(name, ty)| Binding::Bind { name, ty });
+
         let ignore = filter_map(|span, token| {
             if matches!(token, Token::Ignore) {
                 Binding::Ignore.okay()
@@ -455,7 +420,7 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
         });
 
         let bind = just(Token::KeyWord(KeyWord::Bind))
-            .ignore_then(choice((name_type, ignore)).repeated().at_least(1))
+            .ignore_then(choice((ignore, name_type)).repeated().at_least(1))
             .then_ignore(just(Token::KeyWord(KeyWord::Do)))
             .then(body.clone())
             .then_ignore(just(Token::KeyWord(KeyWord::End)))

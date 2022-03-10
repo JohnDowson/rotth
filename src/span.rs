@@ -25,7 +25,11 @@ impl Span {
 
 impl std::fmt::Debug for Span {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}[{}..{}]", &self.file, &self.start, &self.end)
+        if f.alternate() {
+            write!(f, "{}[{}..{}]", &self.file, &self.start, &self.end)
+        } else {
+            write!(f, "[{}..{}]", &self.start, &self.end)
+        }
     }
 }
 

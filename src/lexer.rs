@@ -21,7 +21,7 @@ impl std::fmt::Debug for Token {
             Self::Str(str) => write!(f, "{:?}", str),
             Self::KeyWord(keyword) => keyword.fmt(f),
             Self::Num(num) => write!(f, "{}", num),
-            Self::Ignore => write!(f, "_"),
+            Self::Ignore => write!(f, "i_"),
             Self::SigSep => write!(f, ":"),
         }
     }

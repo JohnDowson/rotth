@@ -1,7 +1,5 @@
 #![feature(assert_matches)]
-#![feature(vec_into_raw_parts)]
 #![feature(iter_intersperse)]
-#![feature(entry_insert)]
 
 pub mod emit;
 pub mod eval;
@@ -16,17 +14,26 @@ use chumsky::prelude::Simple;
 use lexer::Token;
 use span::Span;
 use thiserror::Error;
+use typecheck::TypecheckError;
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("IO error {0}")]
     IO(#[from] std::io::Error),
-    #[error("Lexer error")]
+    #[error("Lexer error {0:?}")]
     Lexer(Vec<Simple<char, Span>>),
-    #[error("Parser error")]
+    #[error("Parser error {0:?}")]
     Parser(Vec<Simple<Token, Span>>),
-    #[error("Redefinition error")]
+    #[error("Redefinition error {0:?}")]
     Redefinition(Vec<RedefinitionError>),
+    #[error("Typecheck error {0:?}")]
+    Typecheck(TypecheckError),
+}
+
+impl From<TypecheckError> for Error {
+    fn from(e: TypecheckError) -> Self {
+        Self::Typecheck(e)
+    }
 }
 
 #[derive(Debug)]

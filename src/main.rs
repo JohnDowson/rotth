@@ -47,7 +47,7 @@ fn main() -> Result<()> {
         println!("{ast:#?}");
     }
 
-    let procs = typecheck_program(ast).unwrap();
+    let procs = typecheck_program(ast)?;
 
     let typechecked = Instant::now();
     if args.time {

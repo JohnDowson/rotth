@@ -127,6 +127,40 @@ impl Compiler {
                     op
                 )?,
 
+                Bind => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        pop rbx
+                        mov rax, 8
+                        add [ret_stack_rsp], rax
+                        mov QWORD rax, [ret_stack_rsp]
+                        mov QWORD [rax], rbx
+                    "},
+                    op
+                )?,
+                UseBinding(offset) => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        mov rax, 8 * {}
+                        mov QWORD rbx, [ret_stack_rsp]
+                        sub rbx, rax
+                        mov QWORD rax, [rbx]
+                        push rax
+                    "},
+                    op, offset
+                )?,
+                Unbind => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        mov rax, 8
+                        sub [ret_stack_rsp], rax
+                    "},
+                    op
+                )?,
+
                 ReadU8 => write!(
                     sink,
                     indoc! {"

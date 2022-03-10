@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use crate::{
     eval::eval,
-    hir::{AstKind, AstNode, Const, IConst, If, Intrinsic, Proc, TopLevel, Type, While},
+    hir::{
+        AstKind, AstNode, Bind, Binding, Const, IConst, If, Intrinsic, Proc, TopLevel, Type, While,
+    },
     span::Span,
 };
 
@@ -14,6 +16,10 @@ pub enum Op {
     Dup,
     Swap,
     Over,
+
+    Bind,
+    UseBinding(usize),
+    Unbind,
 
     ReadU8,
     WriteU8,
@@ -60,6 +66,7 @@ pub struct Compiler {
     result: Vec<Op>,
     consts: HashMap<String, ComConst>,
     strings: Vec<String>,
+    bindings: Vec<Vec<String>>,
 }
 
 impl Compiler {
@@ -70,17 +77,20 @@ impl Compiler {
         let (procs, consts) = items
             .into_iter()
             .partition::<Vec<_>, _>(|(_, (it, _, _))| matches!(it, TopLevel::Proc(_)));
-        let procs = procs.into_iter().filter_map(|(name, (proc, _, needed))| {
-            if let TopLevel::Proc(proc) = proc {
-                if needed {
-                    (name, proc).some()
+        let procs = procs
+            .into_iter()
+            .filter_map(|(name, (proc, _, needed))| {
+                if let TopLevel::Proc(proc) = proc {
+                    if needed {
+                        (name, proc).some()
+                    } else {
+                        None
+                    }
                 } else {
-                    None
+                    unreachable!()
                 }
-            } else {
-                unreachable!()
-            }
-        });
+            })
+            .collect::<Vec<_>>();
         let consts = consts
             .into_iter()
             .filter_map(|(name, (const_, _, needed))| {
@@ -100,8 +110,22 @@ impl Compiler {
         self.emit(Call("main".to_string()));
 
         self.emit(Exit);
-
+        //dbg! {&procs};
+        println!(
+            indoc::indoc! {"
+            ++++++++++++++++++++++++++++++++++++++++++++++++
+            procs.len(): {}
+            ++++++++++++++++++++++++++++++++++++++++++++++++"},
+            procs.len()
+        );
         for (name, proc) in procs {
+            println!(
+                indoc::indoc! {"
+                ++++++++++++++++++++++++++++++++++++++++++++++++
+                compiling proc: {}
+                ++++++++++++++++++++++++++++++++++++++++++++++++"},
+                &name
+            );
             self.compile_proc(name, proc)
         }
 
@@ -150,7 +174,7 @@ impl Compiler {
                         Type::Bool => const_.push(IConst::Bool(bytes == 1)),
                         Type::U64 => const_.push(IConst::U64(bytes)),
                         Type::I64 => const_.push(IConst::I64(bytes as i64)),
-                        Type::Ptr => const_.push(IConst::Ptr(bytes)),
+                        Type::Ptr => todo!("Figure out a way to support const string literals"),
                     }
                 }
             }
@@ -170,7 +194,9 @@ impl Compiler {
                                 Type::Bool => const_.push(IConst::Bool(bytes == 1)),
                                 Type::U64 => const_.push(IConst::U64(bytes)),
                                 Type::I64 => const_.push(IConst::I64(bytes as i64)),
-                                Type::Ptr => const_.push(IConst::Ptr(bytes)),
+                                Type::Ptr => {
+                                    todo!("Figure out a way to support const string literals")
+                                }
                             }
                         }
                     }
@@ -201,7 +227,20 @@ impl Compiler {
                         self.emit(Push(c))
                     }
                 }
-                AstKind::Word(w) => self.emit(Call(w)),
+                AstKind::Word(w) if self.is_binding(&w) => {
+                    let offset = self
+                        .bindings
+                        .iter()
+                        .flatten()
+                        .rev()
+                        .position(|s| s == &w)
+                        .unwrap();
+                    self.emit(UseBinding(offset))
+                }
+                AstKind::Word(w) => {
+                    let mangled = self.mangle_table.get(&w).unwrap().clone();
+                    self.emit(Call(mangled))
+                }
                 AstKind::Intrinsic(i) => match i {
                     Intrinsic::Drop => self.emit(Drop),
                     Intrinsic::Dup => self.emit(Dup),
@@ -232,9 +271,31 @@ impl Compiler {
                 },
                 AstKind::If(cond) => self.compile_cond(cond),
                 AstKind::While(while_) => self.compile_while(while_),
-                AstKind::Bind(_) => todo!("Bind"),
+                AstKind::Bind(bind) => self.compile_bind(bind),
             }
         }
+    }
+
+    fn compile_bind(&mut self, bind: Bind) {
+        let mut new_bindings = Vec::new();
+        for binding in bind.bindings.iter().rev() {
+            match binding {
+                Binding::Ignore => self.emit(Drop),
+                Binding::Bind { name, ty: _ } => {
+                    new_bindings.push(name.clone());
+                    self.emit(Bind)
+                }
+            }
+        }
+        self.bindings.push(new_bindings);
+        self.compile_body(bind.body);
+        for binding in bind.bindings.into_iter().rev() {
+            match binding {
+                Binding::Ignore => (),
+                Binding::Bind { name: _, ty: _ } => self.emit(Unbind),
+            }
+        }
+        self.bindings.pop();
     }
 
     fn compile_while(&mut self, while_: While) {
@@ -286,6 +347,7 @@ impl Compiler {
             result: Default::default(),
             consts: Default::default(),
             strings: Default::default(),
+            bindings: Default::default(),
         }
     }
     fn with_consts_and_strings(consts: HashMap<String, ComConst>, strings: Vec<String>) -> Self {
@@ -297,11 +359,15 @@ impl Compiler {
             result: Default::default(),
             consts,
             strings,
+            bindings: Default::default(),
         }
     }
 
     fn is_const(&self, w: &str) -> bool {
         self.consts.contains_key(w)
+    }
+    fn is_binding(&self, w: &str) -> bool {
+        self.bindings.iter().flatten().any(|n| n == w)
     }
 }
 

@@ -4,19 +4,20 @@ use simplearena::{Heap, Ref};
 use somok::Somok;
 
 use crate::{
-    hir::{AstKind, AstNode, IConst, If, Intrinsic, Signature, TopLevel, Type},
+    hir::{AstKind, AstNode, Binding, IConst, If, Intrinsic, Signature, TopLevel, Type},
     span::Span,
+    Error,
 };
 
 #[derive(Debug)]
-pub struct Error {
+pub struct TypecheckError {
     pub span: Span,
     pub kind: ErrorKind,
     pub message: String,
 }
-impl Error {
-    fn new(span: Span, kind: ErrorKind, message: impl ToString) -> Error {
-        Error {
+impl TypecheckError {
+    fn new(span: Span, kind: ErrorKind, message: impl ToString) -> TypecheckError {
+        TypecheckError {
             span,
             kind,
             message: message.to_string(),
@@ -40,7 +41,7 @@ pub enum ErrorKind {
 }
 use ErrorKind::*;
 fn error<T>(span: Span, kind: ErrorKind, message: impl ToString) -> Result<T> {
-    Error::new(span, kind, message).error()
+    Error::Typecheck(TypecheckError::new(span, kind, message)).error()
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -64,7 +65,7 @@ fn typecheck_const(
     let (const_, span, typechecked) = items
         .get(const_name)
         .ok_or_else(|| {
-            Error::new(
+            TypecheckError::new(
                 Span::point("".to_string(), 0),
                 Undefined(const_name.to_string()),
                 format!("Proc `{}` does not exist", const_name),
@@ -85,7 +86,7 @@ fn typecheck_const(
     for ty in &const_.types {
         expected.push(&mut heap, *ty);
     }
-
+    let mut bindings = Vec::new();
     typecheck_body(
         const_name,
         &const_.body,
@@ -93,6 +94,7 @@ fn typecheck_const(
         &mut heap,
         items,
         true,
+        &mut bindings,
     )?;
 
     if actual.eq(&expected, &heap) {
@@ -115,7 +117,7 @@ fn typecheck_proc(name: &str, items: &mut HashMap<String, (TopLevel, Span, bool)
     let (proc, span, typechecked) = items
         .get(name)
         .ok_or_else(|| {
-            Error::new(
+            TypecheckError::new(
                 Span::point("".to_string(), 0),
                 Undefined(name.to_string()),
                 format!("Proc `{}` does not exist", name),
@@ -149,8 +151,16 @@ fn typecheck_proc(name: &str, items: &mut HashMap<String, (TopLevel, Span, bool)
     for ty in outs {
         expected.push(&mut heap, *ty)
     }
-
-    typecheck_body(name, &proc.body, &mut actual, &mut heap, items, false)?;
+    let mut bindings = Vec::new();
+    typecheck_body(
+        name,
+        &proc.body,
+        &mut actual,
+        &mut heap,
+        items,
+        false,
+        &mut bindings,
+    )?;
 
     if !actual.eq(&expected, &heap) {
         error(
@@ -171,6 +181,9 @@ fn typecheck_proc(name: &str, items: &mut HashMap<String, (TopLevel, Span, bool)
 fn is_proc(name: &str, items: &HashMap<String, (TopLevel, Span, bool)>) -> bool {
     matches!(items.get(name), Some((TopLevel::Proc(_), _, _)))
 }
+fn is_binding(name: &str, bindings: &[Vec<(String, Type)>]) -> bool {
+    bindings.iter().flatten().any(|b| b.0 == name)
+}
 fn is_const(name: &str, items: &HashMap<String, (TopLevel, Span, bool)>) -> bool {
     matches!(items.get(name), Some((TopLevel::Const(_), _, _)))
 }
@@ -182,6 +195,7 @@ fn typecheck_body(
     heap: &mut THeap,
     items: &mut HashMap<String, (TopLevel, Span, bool)>,
     in_const: bool,
+    bindings: &mut Vec<Vec<(String, Type)>>,
 ) -> Result<()> {
     for node in body {
         match &node.ast {
@@ -198,11 +212,15 @@ fn typecheck_body(
             AstKind::Word(w) => match w.as_str() {
                 rec if rec == name => {
                     let proc = &items[rec].0.as_proc().ok_or_else(|| {
-                        Error::new(node.span.clone(), Unexpected, "Recursive const definition")
+                        TypecheckError::new(
+                            node.span.clone(),
+                            Unexpected,
+                            "Recursive const definition",
+                        )
                     })?;
                     for ty_expected in proc.signature.ins.iter().rev() {
                         let ty_actual = stack.pop(heap).ok_or_else(|| {
-                            Error::new(
+                            TypecheckError::new(
                                 node.span.clone(),
                                 NotEnoughData,
                                 format!("Not enough data for proc invocation {}", rec),
@@ -232,11 +250,15 @@ fn typecheck_body(
                         );
                     }
                     let proc = items[proc_name].0.as_proc().ok_or_else(|| {
-                        Error::new(node.span.clone(), Unexpected, "Recursive const definition")
+                        TypecheckError::new(
+                            node.span.clone(),
+                            Unexpected,
+                            "Recursive const definition",
+                        )
                     })?;
                     for ty_expected in proc.signature.ins.iter().rev() {
                         let ty_actual = stack.pop(heap).ok_or_else(|| {
-                            Error::new(
+                            TypecheckError::new(
                                 node.span.clone(),
                                 NotEnoughData,
                                 format!("Not enough data for proc invocation {}", proc_name),
@@ -255,7 +277,11 @@ fn typecheck_body(
                     }
                     typecheck_proc(proc_name, items)?;
                     let proc = items[proc_name].0.as_proc().ok_or_else(|| {
-                        Error::new(node.span.clone(), Unexpected, "Recursive const definition")
+                        TypecheckError::new(
+                            node.span.clone(),
+                            Unexpected,
+                            "Recursive const definition",
+                        )
                     })?;
                     for ty in &proc.signature.outs {
                         stack.push(heap, *ty)
@@ -264,11 +290,31 @@ fn typecheck_body(
                 const_name if is_const(const_name, items) => {
                     typecheck_const(const_name, items)?;
                     let const_ = items[const_name].0.as_const().ok_or_else(|| {
-                        Error::new(node.span.clone(), Unexpected, "Recursive const definition")
+                        TypecheckError::new(
+                            node.span.clone(),
+                            Unexpected,
+                            "Recursive const definition",
+                        )
                     })?;
                     for ty in &const_.types {
                         stack.push(heap, *ty);
                     }
+                }
+                binding_name if is_binding(binding_name, bindings) => {
+                    let ty = bindings
+                        .iter()
+                        .rev()
+                        .find_map(|bs| {
+                            bs.iter().find_map(|b| {
+                                if b.0 == binding_name {
+                                    b.1.some()
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                        .unwrap();
+                    stack.push(heap, ty);
                 }
                 word => {
                     return error(
@@ -281,7 +327,11 @@ fn typecheck_body(
             AstKind::Intrinsic(i) => match i {
                 Intrinsic::ReadU8 => {
                     let ty = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to pop")
+                        TypecheckError::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data to pop",
+                        )
                     })?;
                     if !matches!(ty, Type::Ptr) {
                         return error(
@@ -300,10 +350,18 @@ fn typecheck_body(
                 }
                 Intrinsic::PtrAdd => {
                     let offset = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to pop")
+                        TypecheckError::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data to pop",
+                        )
                     })?;
                     let pointer = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to pop")
+                        TypecheckError::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data to pop",
+                        )
                     })?;
                     if !matches!((pointer, offset), (Type::Ptr, Type::U64)) {
                         return error(
@@ -319,10 +377,18 @@ fn typecheck_body(
                 }
                 Intrinsic::PtrSub => {
                     let offset = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to pop")
+                        TypecheckError::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data to pop",
+                        )
                     })?;
                     let pointer = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to pop")
+                        TypecheckError::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data to pop",
+                        )
                     })?;
                     if !matches!((pointer, offset), (Type::Ptr, Type::U64)) {
                         return error(
@@ -344,28 +410,28 @@ fn typecheck_body(
                 }
                 Intrinsic::Syscall3 => {
                     stack.pop(heap).ok_or_else(|| {
-                        Error::new(
+                        TypecheckError::new(
                             node.span.clone(),
                             NotEnoughData,
                             "Not enough data for syscall3",
                         )
                     })?;
                     stack.pop(heap).ok_or_else(|| {
-                        Error::new(
+                        TypecheckError::new(
                             node.span.clone(),
                             NotEnoughData,
                             "Not enough data for syscall3",
                         )
                     })?;
                     stack.pop(heap).ok_or_else(|| {
-                        Error::new(
+                        TypecheckError::new(
                             node.span.clone(),
                             NotEnoughData,
                             "Not enough data for syscall3",
                         )
                     })?;
                     let _syscall = stack.pop(heap).ok_or_else(|| {
-                        Error::new(
+                        TypecheckError::new(
                             node.span.clone(),
                             NotEnoughData,
                             "Not enough data for syscall3",
@@ -375,33 +441,57 @@ fn typecheck_body(
                 }
                 Intrinsic::Print | Intrinsic::Drop => {
                     stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to pop")
+                        TypecheckError::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data to pop",
+                        )
                     })?;
                 }
 
                 Intrinsic::Dup => {
                     let ty = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to dup")
+                        TypecheckError::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data to dup",
+                        )
                     })?;
                     stack.push(heap, ty);
                     stack.push(heap, ty);
                 }
                 Intrinsic::Swap => {
                     let a = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to swap")
+                        TypecheckError::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data to swap",
+                        )
                     })?;
                     let b = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to swap")
+                        TypecheckError::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data to swap",
+                        )
                     })?;
                     stack.push(heap, a);
                     stack.push(heap, b);
                 }
                 Intrinsic::Over => {
                     let a = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to over")
+                        TypecheckError::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data to over",
+                        )
                     })?;
                     let b = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to over")
+                        TypecheckError::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data to over",
+                        )
                     })?;
                     stack.push(heap, b);
                     stack.push(heap, a);
@@ -421,7 +511,7 @@ fn typecheck_body(
             },
             AstKind::If(cond) => {
                 let ty = stack.pop(heap).ok_or_else(|| {
-                    Error::new(node.span.clone(), NotEnoughData, "Not enough data for if")
+                    TypecheckError::new(node.span.clone(), NotEnoughData, "Not enough data for if")
                 })?;
                 if ty != Type::Bool {
                     return error(
@@ -433,13 +523,22 @@ fn typecheck_body(
                         "If expects a bool",
                     );
                 }
-                typecheck_if(name, cond, &node.span.clone(), heap, stack, items, in_const)?;
+                typecheck_if(
+                    name,
+                    cond,
+                    &node.span.clone(),
+                    heap,
+                    stack,
+                    items,
+                    in_const,
+                    bindings,
+                )?;
             }
             AstKind::While(while_) => {
                 let stack_before = stack.clone().into_deq(heap);
-                typecheck_body(name, &while_.cond, stack, heap, items, in_const)?;
+                typecheck_body(name, &while_.cond, stack, heap, items, in_const, bindings)?;
                 let ty = stack.pop(heap).ok_or_else(|| {
-                    Error::new(
+                    TypecheckError::new(
                         node.span.clone(),
                         NotEnoughData,
                         "Not enough data for while",
@@ -455,7 +554,7 @@ fn typecheck_body(
                         "While expects to consume a bool",
                     );
                 }
-                typecheck_body(name, &while_.body, stack, heap, items, in_const)?;
+                typecheck_body(name, &while_.body, stack, heap, items, in_const, bindings)?;
                 if stack.clone().into_deq(heap) != stack_before {
                     return error(
                         node.span.clone(),
@@ -464,7 +563,44 @@ fn typecheck_body(
                     );
                 }
             }
-            AstKind::Bind(_bind) => todo!("Bind"),
+            AstKind::Bind(bind) => {
+                let mut new_bindings = Vec::new();
+                for binding in bind.bindings.iter().rev() {
+                    match binding {
+                        Binding::Ignore => {
+                            stack.pop(heap).ok_or_else(|| {
+                                TypecheckError::new(
+                                    node.span.clone(),
+                                    NotEnoughData,
+                                    "Not enough data for binding",
+                                )
+                            })?;
+                        }
+                        Binding::Bind { name, ty } => {
+                            let actual = stack.pop(heap).ok_or_else(|| {
+                                TypecheckError::new(
+                                    node.span.clone(),
+                                    NotEnoughData,
+                                    "Not enough data for binding",
+                                )
+                            })?;
+                            if actual != *ty {
+                                return error(
+                                    node.span.clone(),
+                                    TypeMismatch {
+                                        expected: vec![*ty],
+                                        actual: vec![actual],
+                                    },
+                                    "Mismatched types for binding",
+                                );
+                            }
+                            new_bindings.push((name.clone(), *ty));
+                        }
+                    }
+                }
+                bindings.push(new_bindings);
+                typecheck_body(name, &bind.body, stack, heap, items, in_const, bindings)?;
+            }
         }
     }
     ().okay()
@@ -478,14 +614,14 @@ fn typecheck_divmod(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) -> 
 
 fn typecheck_binop(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) -> Result<()> {
     let b = stack.pop(heap).ok_or_else(|| {
-        Error::new(
+        TypecheckError::new(
             node.span.clone(),
             NotEnoughData,
             "Not enough data for binary operation",
         )
     })?;
     let a = stack.pop(heap).ok_or_else(|| {
-        Error::new(
+        TypecheckError::new(
             node.span.clone(),
             NotEnoughData,
             "Not enough data for binary operation",
@@ -510,14 +646,14 @@ fn typecheck_binop(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) -> R
 
 fn typecheck_boolean(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) -> Result<()> {
     let b = stack.pop(heap).ok_or_else(|| {
-        Error::new(
+        TypecheckError::new(
             node.span.clone(),
             NotEnoughData,
             "Not enough data for binary operation",
         )
     })?;
     let a = stack.pop(heap).ok_or_else(|| {
-        Error::new(
+        TypecheckError::new(
             node.span.clone(),
             NotEnoughData,
             "Not enough data for binary operation",
@@ -540,6 +676,7 @@ fn typecheck_boolean(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) ->
     ().okay()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn typecheck_if(
     name: &str,
     cond: &If,
@@ -548,11 +685,20 @@ fn typecheck_if(
     stack: &mut TypeStack,
     procs: &mut HashMap<String, (TopLevel, Span, bool)>,
     in_const: bool,
+    bindings: &mut Vec<Vec<(String, Type)>>,
 ) -> Result<()> {
     let (mut truth, mut lie) = (stack.clone(), stack.clone());
-    typecheck_body(name, &cond.truth, &mut truth, heap, procs, in_const)?;
+    typecheck_body(
+        name,
+        &cond.truth,
+        &mut truth,
+        heap,
+        procs,
+        in_const,
+        bindings,
+    )?;
     if let Some(lie_body) = &cond.lie {
-        typecheck_body(name, &*lie_body, &mut lie, heap, procs, in_const)?;
+        typecheck_body(name, &*lie_body, &mut lie, heap, procs, in_const, bindings)?;
     } else {
         return ().okay();
     }
