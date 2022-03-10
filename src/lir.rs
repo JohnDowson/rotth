@@ -198,6 +198,7 @@ impl Compiler {
     fn compile_body(&mut self, body: Vec<AstNode>) {
         for node in body {
             match node.ast {
+                AstKind::Return => self.emit(Return),
                 AstKind::Literal(c) => match c {
                     IConst::Str(s) => {
                         let i = self.strings.len();

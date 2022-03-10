@@ -210,6 +210,32 @@ fn typecheck_body(
                     stack.push(heap, Type::Ptr);
                 }
             },
+            AstKind::Return => match items.get(name) {
+                Some((TopLevel::Proc(p), _, _)) => {
+                    let mut expected = TypeStack::default();
+                    for &ty in &p.signature.outs {
+                        expected.push(heap, ty)
+                    }
+                    if !expected.eq(stack, heap) {
+                        return error(
+                            node.span.clone(),
+                            TypeMismatch {
+                                expected: p.signature.outs.clone(),
+                                actual: stack.clone().into_deq(heap).into(),
+                            },
+                            "Type mismatched types for early return",
+                        );
+                    }
+                }
+                Some(_) => {
+                    return error(
+                        node.span.clone(),
+                        Unexpected,
+                        "Return is not allowed in const",
+                    )
+                }
+                None => unreachable!(),
+            },
             AstKind::Word(w) => match w.as_str() {
                 rec if rec == name => {
                     let proc = &items[rec].0.as_proc().ok_or_else(|| {

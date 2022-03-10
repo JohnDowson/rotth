@@ -1,0 +1,11 @@
+proc main : u64 do
+    0 while dup 10 < do
+        dup print
+        dup 5 = if
+            drop
+            0 return
+        end
+        1 +
+    end drop
+    0
+end

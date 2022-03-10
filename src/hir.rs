@@ -140,6 +140,7 @@ pub enum AstKind {
     Word(String),
     Intrinsic(Intrinsic),
     If(If),
+    Return,
     While(While),
     Bind(Bind),
 }
@@ -550,12 +551,19 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
                     span,
                 })
         };
+
+        let ret = just(Token::KeyWord(KeyWord::Return)).map_with_span(|_, span| AstNode {
+            span,
+            ast: AstKind::Return,
+        });
+
         choice((
             bool,
             word_or_intrinsic(),
             char,
             string,
             num,
+            ret,
             cond,
             while_,
             bind,
