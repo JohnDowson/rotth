@@ -20,7 +20,7 @@
   ],
   "wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
   "indentationRules": {
-    "increaseIndentPattern": "^.*(while|do|if|else)$",
+    "increaseIndentPattern": "^.*(while|do|if|else|cond)$",
     "decreaseIndentPattern": "^\\s*(else|end)$"
   }
 }

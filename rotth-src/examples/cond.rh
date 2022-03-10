@@ -1,0 +1,15 @@
+include "./rotth-src/std.rh"
+
+proc main : u64 do
+    'b' cond
+        'a' do
+            "hello\n"
+        else
+        'b' do
+            "bye\n"
+        else
+        'c' do
+            "get out\n"
+    end puts
+    0
+end

@@ -26,6 +26,8 @@ Rotth has following keywords:
 - `bind`
 - `const`
 - `end`
+- `return`
+- `cond`
 
 ### `proc`
 Keyword `proc` declares a procedure. It is followed by procedure name, then it's inputs and outputs separated by the `:` signature separator.
@@ -37,9 +39,11 @@ Body of the procedure is terminated by `end` keyword.
 ### `const`
 `const` followed by name and type, separated by `:`, declares a compile-time constant. It supports limited compile-time evaluation, syscalls and user-defined proc calls are not allowed.
 ### `bind`
-`bind` is similliar to destructuring in traditional functional languages, it iakes elements from the stack and allows using them as local constants. For example this is how you can implement `Forth` `rot` word using it:
+`bind` is similliar to destructuring in traditional functional languages, it iakes elements from the stack and allows using them as local constants. For example, this is how you can implement `Forth` `rot` word using it:
 ```rotth
 bind a b c do
     b c a
 end
 ```
+### `cond`
+Despite it's name `cond` is more similliar to `Rust`'s `match` than to `Lisp`'s `cond`, taking only constants and literal values as patterns to compare against.

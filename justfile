@@ -1,4 +1,5 @@
 root := justfile_directory()
+vscdir := (root + "/rotth-vscode")
 rotthdir := (root + "/rotth-src/examples")
 compiler := (root + "/rotth-src/rotth")
 
@@ -24,3 +25,6 @@ clean-run FILE: clean (run FILE)
 
 clean:
     find {{rotthdir}} -type f  ! -name "*.rh"  -delete
+
+build-extension:
+    cd {{vscdir}} && yes | vsce package

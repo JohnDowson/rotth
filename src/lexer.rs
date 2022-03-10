@@ -33,6 +33,7 @@ impl std::fmt::Debug for Token {
 pub enum KeyWord {
     Include,
     Return,
+    Cond,
     If,
     Else,
     Proc,
@@ -109,6 +110,7 @@ where
         Token::KeyWord(match i.as_str() {
             "include" => KeyWord::Include,
             "return" => KeyWord::Return,
+            "cond" => KeyWord::Cond,
             "if" => KeyWord::If,
             "else" => KeyWord::Else,
             "proc" => KeyWord::Proc,

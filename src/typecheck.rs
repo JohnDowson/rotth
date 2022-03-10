@@ -4,7 +4,9 @@ use simplearena::{Heap, Ref};
 use somok::Somok;
 
 use crate::{
-    hir::{AstKind, AstNode, Binding, IConst, If, Intrinsic, Signature, TopLevel, Type},
+    hir::{
+        AstKind, AstNode, Binding, CondBranch, IConst, If, Intrinsic, Signature, TopLevel, Type,
+    },
     span::Span,
     Error,
 };
@@ -106,7 +108,7 @@ fn typecheck_const(
             span,
             TypeMismatch {
                 expected: const_.types,
-                actual: actual.into_deq(&heap).into(),
+                actual: actual.into_vec(&heap),
             },
             "Const body does not equal const type",
         )
@@ -166,8 +168,8 @@ fn typecheck_proc(name: &str, items: &mut HashMap<String, (TopLevel, Span, bool)
         error(
             span,
             TypeMismatch {
-                actual: actual.into_deq(&heap).into(),
-                expected: expected.into_deq(&heap).into(),
+                actual: actual.into_vec(&heap),
+                expected: expected.into_vec(&heap),
             },
             "Type mismatch: proc body does not equal proc outputs",
         )
@@ -210,6 +212,7 @@ fn typecheck_body(
                     stack.push(heap, Type::Ptr);
                 }
             },
+            AstKind::Cond(_) => typecheck_cond(name, node, stack, heap, items, in_const, bindings)?,
             AstKind::Return => match items.get(name) {
                 Some((TopLevel::Proc(p), _, _)) => {
                     let mut expected = TypeStack::default();
@@ -221,7 +224,7 @@ fn typecheck_body(
                             node.span.clone(),
                             TypeMismatch {
                                 expected: p.signature.outs.clone(),
-                                actual: stack.clone().into_deq(heap).into(),
+                                actual: stack.clone().into_vec(heap),
                             },
                             "Type mismatched types for early return",
                         );
@@ -454,7 +457,7 @@ fn typecheck_body(
                 }
 
                 Intrinsic::CompStop => {
-                    let types: Vec<_> = stack.clone().into_deq(heap).into();
+                    let types: Vec<_> = stack.clone().into_vec(heap);
                     println!("{:?}", types);
                     return error(node.span.clone(), CompStop, "");
                 }
@@ -626,7 +629,7 @@ fn typecheck_body(
                 )?;
             }
             AstKind::While(while_) => {
-                let stack_before = stack.clone().into_deq(heap);
+                let stack_before = stack.clone().into_vec(heap);
                 typecheck_body(name, &while_.cond, stack, heap, items, in_const, bindings)?;
                 let ty = stack.pop(heap).ok_or_else(|| {
                     TypecheckError::new(
@@ -646,7 +649,7 @@ fn typecheck_body(
                     );
                 }
                 typecheck_body(name, &while_.body, stack, heap, items, in_const, bindings)?;
-                if stack.clone().into_deq(heap) != stack_before {
+                if stack.clone().into_vec(heap) != stack_before {
                     return error(
                         node.span.clone(),
                         InvalidWhile,
@@ -694,6 +697,89 @@ fn typecheck_body(
             }
         }
     }
+    ().okay()
+}
+
+fn typecheck_cond(
+    name: &str,
+    node: &AstNode,
+    stack: &mut TypeStack,
+    heap: &mut THeap,
+    items: &mut HashMap<String, (TopLevel, Span, bool)>,
+    in_const: bool,
+    bindings: &mut Vec<Vec<(String, Type)>>,
+) -> Result<()> {
+    let ty = stack.pop(heap).ok_or_else(|| {
+        TypecheckError::new(node.span.clone(), NotEnoughData, "Not enough data for cond")
+    })?;
+    let cond = match &node.ast {
+        AstKind::Cond(c) => c,
+        _ => unreachable!(),
+    };
+    let mut first_branch_stack = TypeStack::default();
+    let mut first_branch = true;
+    for CondBranch { pattern, body } in &cond.branches {
+        let pat_ty = match &pattern.ast {
+            AstKind::Literal(pat) => match pat {
+                IConst::Bool(_) => Type::Bool,
+                IConst::U64(_) => Type::U64,
+                IConst::I64(_) => Type::I64,
+                IConst::Char(_) => Type::Char,
+                IConst::Str(_) => todo!(),
+                IConst::Ptr(_) => Type::Ptr,
+            },
+            _ => unreachable!(),
+        };
+        if pat_ty != ty {
+            return error(
+                pattern.span.clone(),
+                TypeMismatch {
+                    expected: vec![ty],
+                    actual: vec![pat_ty],
+                },
+                "Wrong type for cond pattern",
+            );
+        }
+        if first_branch {
+            typecheck_body(
+                name,
+                body,
+                &mut first_branch_stack,
+                heap,
+                items,
+                in_const,
+                bindings,
+            )?;
+        } else {
+            let mut branch_stack = TypeStack::default();
+            typecheck_body(
+                name,
+                body,
+                &mut branch_stack,
+                heap,
+                items,
+                in_const,
+                bindings,
+            )?;
+            if !first_branch_stack.eq(&branch_stack, heap) {
+                return error(
+                    node.span.clone(),
+                    TypeMismatch {
+                        expected: first_branch_stack.into_vec(heap),
+                        actual: branch_stack.into_vec(heap),
+                    },
+                    "Type mismatch between cond branches",
+                );
+            }
+        }
+        first_branch = false;
+    }
+
+    let first_branch_stack = first_branch_stack.into_vec(heap);
+    for ty in first_branch_stack.into_iter() {
+        stack.push(heap, ty)
+    }
+
     ().okay()
 }
 
@@ -778,7 +864,7 @@ fn typecheck_boolean(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) ->
 #[allow(clippy::too_many_arguments)]
 fn typecheck_if(
     name: &str,
-    cond: &If,
+    if_: &If,
     span: &Span,
     heap: &mut THeap,
     stack: &mut TypeStack,
@@ -788,15 +874,9 @@ fn typecheck_if(
 ) -> Result<()> {
     let (mut truth, mut lie) = (stack.clone(), stack.clone());
     typecheck_body(
-        name,
-        &cond.truth,
-        &mut truth,
-        heap,
-        procs,
-        in_const,
-        bindings,
+        name, &if_.truth, &mut truth, heap, procs, in_const, bindings,
     )?;
-    if let Some(lie_body) = &cond.lie {
+    if let Some(lie_body) = &if_.lie {
         typecheck_body(name, &*lie_body, &mut lie, heap, procs, in_const, bindings)?;
     } else {
         return ().okay();
@@ -805,7 +885,7 @@ fn typecheck_if(
         *stack = truth;
         ().okay()
     } else {
-        let (actual, expected) = (truth.into_deq(heap).into(), lie.into_deq(heap).into());
+        let (actual, expected) = (truth.into_vec(heap), lie.into_vec(heap));
         error(
             span.clone(),
             TypeMismatch { actual, expected },
@@ -859,7 +939,7 @@ impl TypeStack {
         }
     }
 
-    pub fn into_deq(self, heap: &THeap) -> VecDeque<Type> {
+    pub fn into_vec(self, heap: &THeap) -> Vec<Type> {
         let mut res = VecDeque::new();
         let mut next = self.top;
         while let Some(top) = next {
@@ -867,7 +947,7 @@ impl TypeStack {
             res.push_front(top.ty);
             next = top.prev.clone()
         }
-        res
+        res.into()
     }
 }
 

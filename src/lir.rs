@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use crate::{
     eval::eval,
     hir::{
-        AstKind, AstNode, Bind, Binding, Const, IConst, If, Intrinsic, Proc, TopLevel, Type, While,
+        AstKind, AstNode, Bind, Binding, Cond, CondBranch, Const, IConst, If, Intrinsic, Proc,
+        TopLevel, Type, While,
     },
     span::Span,
 };
@@ -198,6 +199,7 @@ impl Compiler {
     fn compile_body(&mut self, body: Vec<AstNode>) {
         for node in body {
             match node.ast {
+                AstKind::Cond(cond) => self.compile_cond(cond),
                 AstKind::Return => self.emit(Return),
                 AstKind::Literal(c) => match c {
                     IConst::Str(s) => {
@@ -263,7 +265,7 @@ impl Compiler {
 
                     Intrinsic::CompStop => return,
                 },
-                AstKind::If(cond) => self.compile_cond(cond),
+                AstKind::If(cond) => self.compile_if(cond),
                 AstKind::While(while_) => self.compile_while(while_),
                 AstKind::Bind(bind) => self.compile_bind(bind),
             }
@@ -303,23 +305,51 @@ impl Compiler {
         self.emit(Label(end_label))
     }
 
-    fn compile_cond(&mut self, cond: If) {
+    fn compile_if(&mut self, if_: If) {
         let lie_label = self.gen_label();
         let mut end_label = None;
         self.emit(JumpF(lie_label.clone()));
 
-        self.compile_body(cond.truth);
-        if cond.lie.is_some() {
+        self.compile_body(if_.truth);
+        if if_.lie.is_some() {
             end_label = self.gen_label().some();
             self.emit(Jump(end_label.clone().unwrap()))
         }
 
         self.emit(Label(lie_label));
 
-        if let Some(lie) = cond.lie {
+        if let Some(lie) = if_.lie {
             self.compile_body(lie);
             self.emit(Label(end_label.unwrap()))
         }
+    }
+
+    fn compile_cond(&mut self, cond: Cond) {
+        let phi_label = self.gen_label();
+        let num_branches = cond.branches.len() - 1;
+        let mut this_branch_label = self.gen_label();
+        let mut next_branch_label = self.gen_label();
+        for (i, CondBranch { pattern, body }) in cond.branches.into_iter().enumerate() {
+            if i != 0 {
+                self.emit(Label(this_branch_label));
+            }
+
+            self.emit(Dup);
+            let pat = match pattern.ast {
+                AstKind::Literal(c) => c,
+                _ => unreachable!(),
+            };
+            self.emit(Push(pat));
+            self.emit(Eq);
+            if i < num_branches {
+                self.emit(JumpF(next_branch_label.clone()));
+            }
+            this_branch_label = next_branch_label;
+            next_branch_label = self.gen_label();
+            self.compile_body(body);
+            self.emit(Jump(phi_label.clone()));
+        }
+        self.emit(Label(phi_label))
     }
 
     fn emit(&mut self, op: Op) {

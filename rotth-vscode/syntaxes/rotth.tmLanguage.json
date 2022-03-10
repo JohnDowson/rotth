@@ -26,7 +26,7 @@
 			"patterns": [
 				{
 					"name": "keyword.control.rotth",
-					"match": "\\b(if|else|proc|while|do|end|const|bind|include|return)\\b"
+					"match": "\\b(if|else|proc|while|do|end|const|bind|include|return|cond)\\b"
 				}
 			]
 		},

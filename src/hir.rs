@@ -140,9 +140,21 @@ pub enum AstKind {
     Word(String),
     Intrinsic(Intrinsic),
     If(If),
+    Cond(Cond),
     Return,
     While(While),
     Bind(Bind),
+}
+
+#[derive(Debug, Clone)]
+pub struct Cond {
+    pub branches: Vec<CondBranch>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CondBranch {
+    pub pattern: AstNode,
+    pub body: Vec<AstNode>,
 }
 
 #[derive(Debug, Clone)]
@@ -533,7 +545,7 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
                 })
         };
 
-        let cond = {
+        let if_ = {
             let truth = body
                 .clone()
                 .then(
@@ -557,6 +569,27 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
             ast: AstKind::Return,
         });
 
+        let pattern = choice((num, char));
+        let cond_branch = pattern
+            .then_ignore(just(Token::KeyWord(KeyWord::Do)))
+            .then(body.clone());
+        let cond = just(Token::KeyWord(KeyWord::Cond))
+            .ignore_then(
+                cond_branch
+                    .separated_by(just(Token::KeyWord(KeyWord::Else)))
+                    .at_least(1),
+            )
+            .then_ignore(just(Token::KeyWord(KeyWord::End)))
+            .map_with_span(|branches, span| AstNode {
+                span,
+                ast: AstKind::Cond(Cond {
+                    branches: branches
+                        .into_iter()
+                        .map(|(pattern, body)| CondBranch { pattern, body })
+                        .collect(),
+                }),
+            });
+
         choice((
             bool,
             word_or_intrinsic(),
@@ -564,6 +597,7 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
             string,
             num,
             ret,
+            if_,
             cond,
             while_,
             bind,
