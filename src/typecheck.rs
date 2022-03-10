@@ -728,6 +728,31 @@ fn typecheck_cond(
                 IConst::Str(_) => todo!(),
                 IConst::Ptr(_) => Type::Ptr,
             },
+            AstKind::Word(const_name) if is_const(const_name, items) => {
+                typecheck_const(const_name, items)?;
+                let const_ = items[const_name].0.as_const().ok_or_else(|| {
+                    TypecheckError::new(
+                        pattern.span.clone(),
+                        Unexpected,
+                        "Recursive const definition",
+                    )
+                })?;
+                if const_.types.len() != 1 {
+                    return error(
+                        pattern.span.clone(),
+                        Unexpected,
+                        "Cond only supports single-value consts",
+                    );
+                }
+                const_.types[0]
+            }
+            AstKind::Word(_) => {
+                return error(
+                    pattern.span.clone(),
+                    Unexpected,
+                    "Cond only supports constant patterns",
+                )
+            }
             _ => unreachable!(),
         };
         if pat_ty != ty {

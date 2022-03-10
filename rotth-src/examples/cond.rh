@@ -1,11 +1,13 @@
 include "./rotth-src/std.rh"
 
+const QUIT : char do 'q' end
+
 proc main : u64 do
-    'b' cond
+    'q' cond
         'a' do
             "hello\n"
         else
-        'b' do
+        QUIT do
             "bye\n"
         else
         'c' do

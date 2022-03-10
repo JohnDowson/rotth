@@ -337,6 +337,8 @@ impl Compiler {
             self.emit(Dup);
             let pat = match pattern.ast {
                 AstKind::Literal(c) => c,
+                AstKind::Word(w) if self.is_const(&w) => self.compile_const(w)[0].clone(),
+                AstKind::Word(w) => unreachable!("Impossible non-constant: {}", w),
                 _ => unreachable!(),
             };
             self.emit(Push(pat));

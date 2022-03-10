@@ -569,7 +569,7 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
             ast: AstKind::Return,
         });
 
-        let pattern = choice((num, char));
+        let pattern = choice((num, char, word()));
         let cond_branch = pattern
             .then_ignore(just(Token::KeyWord(KeyWord::Do)))
             .then(body.clone());
