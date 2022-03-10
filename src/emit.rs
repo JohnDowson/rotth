@@ -1,9 +1,6 @@
 use crate::{hir::IConst, lir::Op};
 use indoc::indoc;
-use std::{
-    collections::HashMap,
-    io::{BufWriter, Write},
-};
+use std::io::{BufWriter, Write};
 
 pub struct Compiler {}
 
@@ -16,7 +13,6 @@ impl Compiler {
         self,
         ops: Vec<Op>,
         strings: &[String],
-        mangle_table: HashMap<String, String>,
         mut sink: BufWriter<S>,
     ) -> std::io::Result<()> {
         use Op::*;
@@ -358,8 +354,7 @@ impl Compiler {
                     ; {:?}
                         call {}
                     "},
-                    op,
-                    mangle_table.get(p).unwrap()
+                    op, p
                 )?,
                 Exit => write!(
                     sink,

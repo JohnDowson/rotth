@@ -73,7 +73,7 @@ impl Compiler {
     pub fn compile(
         mut self,
         items: HashMap<String, (TopLevel, Span, bool)>,
-    ) -> (Vec<Op>, Vec<String>, HashMap<String, String>) {
+    ) -> (Vec<Op>, Vec<String>) {
         let (procs, consts) = items
             .into_iter()
             .partition::<Vec<_>, _>(|(_, (it, _, _))| matches!(it, TopLevel::Proc(_)));
@@ -116,7 +116,7 @@ impl Compiler {
             self.compile_proc(name, proc)
         }
 
-        (self.result, self.strings, self.mangle_table)
+        (self.result, self.strings)
     }
 
     fn compile_proc(&mut self, name: String, proc: Proc) {

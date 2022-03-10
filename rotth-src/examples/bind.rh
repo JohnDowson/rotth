@@ -1,14 +1,10 @@
-;include "./rotth-src/std.rh"
-
-proc pseudo uint ptr do
-    drop drop
-end
+include "./rotth-src/std.rh"
 
 proc main : uint do
-    1 "hello"
-    bind repeat : uint len : uint str : ptr  do
-        0 while dup repeat < do
-            len str pseudo; puts
+    "hello"
+    bind len : uint str : ptr  do
+        1 while dup len <= do
+            dup str puts "\n" puts
             1 +
         end drop
     end
