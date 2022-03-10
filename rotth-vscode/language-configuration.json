@@ -1,0 +1,26 @@
+{
+  "comments": {
+    "lineComment": ";"
+  },
+  "autoClosingPairs": [
+    {
+      "open": "\"",
+      "close": "\"",
+      "notIn": ["string"]
+    },
+    {
+      "open": "'",
+      "close": "'",
+      "notIn": ["string"]
+    }
+  ],
+  "surroundingPairs": [
+    ["\"", "\""],
+    ["'", "'"]
+  ],
+  "wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
+  "indentationRules": {
+    "increaseIndentPattern": "^.*(while|do|if|else)$",
+    "decreaseIndentPattern": "^\\s*(else|end)$"
+  }
+}

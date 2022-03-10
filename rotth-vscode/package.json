@@ -1,0 +1,34 @@
+{
+    "name": "rotth",
+    "displayName": "Rotth",
+    "description": "Language support for Rotth",
+    "version": "0.0.1",
+    "engines": {
+        "vscode": "^1.62.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "rotth",
+                "aliases": [
+                    "Rotth",
+                    "rotth"
+                ],
+                "extensions": [
+                    "rh"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "rotth",
+                "scopeName": "source.rotth",
+                "path": "./syntaxes/rotth.tmLanguage.json"
+            }
+        ]
+    }
+}

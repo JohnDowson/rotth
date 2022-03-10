@@ -1,0 +1,77 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "rotth",
+	"patterns": [
+		{
+			"include": "#comments"
+		},
+		{
+			"include": "#keywords"
+		},
+		{
+			"include": "#strings"
+		},
+		{
+			"include": "#chars"
+		},
+		{
+			"include": "#words"
+		},
+		{
+			"include": "#numbers"
+		}
+	],
+	"repository": {
+		"keywords": {
+			"patterns": [
+				{
+					"name": "keyword.control.rotth",
+					"match": "\\b(if|else|proc|while|do|end|const|bind|include|return)\\b"
+				}
+			]
+		},
+		"comments": {
+			"match": ";.*$",
+			"name": "comment.rotth"
+		},
+		"strings": {
+			"name": "string.quoted.double.rotth",
+			"begin": "\"",
+			"end": "\"",
+			"patterns": [
+				{
+					"name": "constant.character.escape.rotth",
+					"match": "\\\\."
+				}
+			]
+		},
+		"chars": {
+			"name": "string.quoted.single.char.rotth",
+			"begin": "'",
+			"end": "'",
+			"patterns": [
+				{
+					"name": "constant.character.escape.rotth",
+					"match": "\\\\."
+				}
+			]
+		},
+		"words": {
+			"name": "entity.name.rotth",
+			"begin": "[a-zA-Z+=-_!@#$%^&*()?/\\\\\\[\\]{}<>]",
+			"end": "\\b",
+			"patterns": [
+				{
+					"name": "entity.name.rotth",
+					"match": "\\\\."
+				}
+			]
+		},
+		"numbers": {
+			"name": "constant.numeric.rotth",
+			"begin": "\\d",
+			"end": "\\b"
+		}
+	},
+	"scopeName": "source.rotth"
+}
