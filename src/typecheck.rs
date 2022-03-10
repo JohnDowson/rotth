@@ -65,7 +65,7 @@ fn typecheck_const(
         .get(const_name)
         .ok_or_else(|| {
             Error::new(
-                Span::point(0),
+                Span::point("".to_string(), 0),
                 Undefined(const_name.to_string()),
                 format!("Proc `{}` does not exist", const_name),
             )
@@ -82,7 +82,9 @@ fn typecheck_const(
     let mut heap = THeap::default();
     let mut actual = TypeStack::default();
     let mut expected = TypeStack::default();
-    expected.push(&mut heap, const_.ty);
+    for ty in &const_.types {
+        expected.push(&mut heap, *ty);
+    }
 
     typecheck_body(
         const_name,
@@ -101,7 +103,7 @@ fn typecheck_const(
         error(
             span,
             TypeMismatch {
-                expected: vec![const_.ty],
+                expected: const_.types,
                 actual: actual.into_deq(&heap).into(),
             },
             "Const body does not equal const type",
@@ -114,7 +116,7 @@ fn typecheck_proc(name: &str, items: &mut HashMap<String, (TopLevel, Span, bool)
         .get(name)
         .ok_or_else(|| {
             Error::new(
-                Span::point(0),
+                Span::point("".to_string(), 0),
                 Undefined(name.to_string()),
                 format!("Proc `{}` does not exist", name),
             )
@@ -196,19 +198,19 @@ fn typecheck_body(
             AstKind::Word(w) => match w.as_str() {
                 rec if rec == name => {
                     let proc = &items[rec].0.as_proc().ok_or_else(|| {
-                        Error::new(node.span, Unexpected, "Recursive const definition")
+                        Error::new(node.span.clone(), Unexpected, "Recursive const definition")
                     })?;
                     for ty_expected in proc.signature.ins.iter().rev() {
                         let ty_actual = stack.pop(heap).ok_or_else(|| {
                             Error::new(
-                                node.span,
+                                node.span.clone(),
                                 NotEnoughData,
                                 format!("Not enough data for proc invocation {}", rec),
                             )
                         })?;
                         if *ty_expected != ty_actual {
                             return error(
-                                node.span,
+                                node.span.clone(),
                                 TypeMismatch {
                                     expected: vec![*ty_expected],
                                     actual: vec![ty_actual],
@@ -224,25 +226,25 @@ fn typecheck_body(
                 proc_name if is_proc(proc_name, items) => {
                     if in_const {
                         return error(
-                            node.span,
+                            node.span.clone(),
                             CallInConst,
                             "Proc calls not allowed in const context",
                         );
                     }
                     let proc = items[proc_name].0.as_proc().ok_or_else(|| {
-                        Error::new(node.span, Unexpected, "Recursive const definition")
+                        Error::new(node.span.clone(), Unexpected, "Recursive const definition")
                     })?;
                     for ty_expected in proc.signature.ins.iter().rev() {
                         let ty_actual = stack.pop(heap).ok_or_else(|| {
                             Error::new(
-                                node.span,
+                                node.span.clone(),
                                 NotEnoughData,
                                 format!("Not enough data for proc invocation {}", proc_name),
                             )
                         })?;
                         if *ty_expected != ty_actual {
                             return error(
-                                node.span,
+                                node.span.clone(),
                                 TypeMismatch {
                                     expected: vec![*ty_expected],
                                     actual: vec![ty_actual],
@@ -253,7 +255,7 @@ fn typecheck_body(
                     }
                     typecheck_proc(proc_name, items)?;
                     let proc = items[proc_name].0.as_proc().ok_or_else(|| {
-                        Error::new(node.span, Unexpected, "Recursive const definition")
+                        Error::new(node.span.clone(), Unexpected, "Recursive const definition")
                     })?;
                     for ty in &proc.signature.outs {
                         stack.push(heap, *ty)
@@ -262,13 +264,15 @@ fn typecheck_body(
                 const_name if is_const(const_name, items) => {
                     typecheck_const(const_name, items)?;
                     let const_ = items[const_name].0.as_const().ok_or_else(|| {
-                        Error::new(node.span, Unexpected, "Recursive const definition")
+                        Error::new(node.span.clone(), Unexpected, "Recursive const definition")
                     })?;
-                    stack.push(heap, const_.ty)
+                    for ty in &const_.types {
+                        stack.push(heap, *ty);
+                    }
                 }
                 word => {
                     return error(
-                        node.span,
+                        node.span.clone(),
                         Undefined(word.to_string()),
                         "Encountered undefined word".to_string(),
                     )
@@ -277,11 +281,11 @@ fn typecheck_body(
             AstKind::Intrinsic(i) => match i {
                 Intrinsic::ReadU8 => {
                     let ty = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span, NotEnoughData, "Not enough data to pop")
+                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to pop")
                     })?;
                     if !matches!(ty, Type::Ptr) {
                         return error(
-                            node.span,
+                            node.span.clone(),
                             TypeMismatch {
                                 actual: vec![ty],
                                 expected: vec![Type::Ptr],
@@ -296,14 +300,14 @@ fn typecheck_body(
                 }
                 Intrinsic::PtrAdd => {
                     let offset = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span, NotEnoughData, "Not enough data to pop")
+                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to pop")
                     })?;
                     let pointer = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span, NotEnoughData, "Not enough data to pop")
+                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to pop")
                     })?;
                     if !matches!((pointer, offset), (Type::Ptr, Type::U64)) {
                         return error(
-                            node.span,
+                            node.span.clone(),
                             TypeMismatch {
                                 actual: vec![pointer, offset],
                                 expected: vec![Type::Ptr, Type::U64],
@@ -315,14 +319,14 @@ fn typecheck_body(
                 }
                 Intrinsic::PtrSub => {
                     let offset = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span, NotEnoughData, "Not enough data to pop")
+                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to pop")
                     })?;
                     let pointer = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span, NotEnoughData, "Not enough data to pop")
+                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to pop")
                     })?;
                     if !matches!((pointer, offset), (Type::Ptr, Type::U64)) {
                         return error(
-                            node.span,
+                            node.span.clone(),
                             TypeMismatch {
                                 actual: vec![pointer, offset],
                                 expected: vec![Type::Ptr, Type::U64],
@@ -336,52 +340,68 @@ fn typecheck_body(
                 Intrinsic::CompStop => {
                     let types: Vec<_> = stack.clone().into_deq(heap).into();
                     println!("{:?}", types);
-                    return error(node.span, CompStop, "");
+                    return error(node.span.clone(), CompStop, "");
                 }
                 Intrinsic::Syscall3 => {
                     stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span, NotEnoughData, "Not enough data for syscall3")
+                        Error::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data for syscall3",
+                        )
                     })?;
                     stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span, NotEnoughData, "Not enough data for syscall3")
+                        Error::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data for syscall3",
+                        )
                     })?;
                     stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span, NotEnoughData, "Not enough data for syscall3")
+                        Error::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data for syscall3",
+                        )
                     })?;
                     let _syscall = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span, NotEnoughData, "Not enough data for syscall3")
+                        Error::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data for syscall3",
+                        )
                     })?;
                     stack.push(heap, Type::U64);
                 }
                 Intrinsic::Print | Intrinsic::Drop => {
                     stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span, NotEnoughData, "Not enough data to pop")
+                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to pop")
                     })?;
                 }
 
                 Intrinsic::Dup => {
                     let ty = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span, NotEnoughData, "Not enough data to dup")
+                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to dup")
                     })?;
                     stack.push(heap, ty);
                     stack.push(heap, ty);
                 }
                 Intrinsic::Swap => {
                     let a = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span, NotEnoughData, "Not enough data to swap")
+                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to swap")
                     })?;
                     let b = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span, NotEnoughData, "Not enough data to swap")
+                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to swap")
                     })?;
                     stack.push(heap, a);
                     stack.push(heap, b);
                 }
                 Intrinsic::Over => {
                     let a = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span, NotEnoughData, "Not enough data to over")
+                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to over")
                     })?;
                     let b = stack.pop(heap).ok_or_else(|| {
-                        Error::new(node.span, NotEnoughData, "Not enough data to over")
+                        Error::new(node.span.clone(), NotEnoughData, "Not enough data to over")
                     })?;
                     stack.push(heap, b);
                     stack.push(heap, a);
@@ -401,11 +421,11 @@ fn typecheck_body(
             },
             AstKind::If(cond) => {
                 let ty = stack.pop(heap).ok_or_else(|| {
-                    Error::new(node.span, NotEnoughData, "Not enough data for if")
+                    Error::new(node.span.clone(), NotEnoughData, "Not enough data for if")
                 })?;
                 if ty != Type::Bool {
                     return error(
-                        node.span,
+                        node.span.clone(),
                         TypeMismatch {
                             actual: vec![ty],
                             expected: vec![Type::Bool],
@@ -413,17 +433,21 @@ fn typecheck_body(
                         "If expects a bool",
                     );
                 }
-                typecheck_if(name, cond, &node.span, heap, stack, items, in_const)?;
+                typecheck_if(name, cond, &node.span.clone(), heap, stack, items, in_const)?;
             }
             AstKind::While(while_) => {
                 let stack_before = stack.clone().into_deq(heap);
                 typecheck_body(name, &while_.cond, stack, heap, items, in_const)?;
                 let ty = stack.pop(heap).ok_or_else(|| {
-                    Error::new(node.span, NotEnoughData, "Not enough data for while")
+                    Error::new(
+                        node.span.clone(),
+                        NotEnoughData,
+                        "Not enough data for while",
+                    )
                 })?;
                 if ty != Type::Bool {
                     return error(
-                        node.span,
+                        node.span.clone(),
                         TypeMismatch {
                             actual: vec![ty],
                             expected: vec![Type::Bool],
@@ -434,7 +458,7 @@ fn typecheck_body(
                 typecheck_body(name, &while_.body, stack, heap, items, in_const)?;
                 if stack.clone().into_deq(heap) != stack_before {
                     return error(
-                        node.span,
+                        node.span.clone(),
                         InvalidWhile,
                         "While must leave stack in the same state as it is before",
                     );
@@ -455,14 +479,14 @@ fn typecheck_divmod(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) -> 
 fn typecheck_binop(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) -> Result<()> {
     let b = stack.pop(heap).ok_or_else(|| {
         Error::new(
-            node.span,
+            node.span.clone(),
             NotEnoughData,
             "Not enough data for binary operation",
         )
     })?;
     let a = stack.pop(heap).ok_or_else(|| {
         Error::new(
-            node.span,
+            node.span.clone(),
             NotEnoughData,
             "Not enough data for binary operation",
         )
@@ -472,7 +496,7 @@ fn typecheck_binop(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) -> R
         (Type::I64, Type::I64) => stack.push(heap, Type::I64),
         (a, b) => {
             return error(
-                node.span,
+                node.span.clone(),
                 TypeMismatch {
                     actual: vec![b, a],
                     expected: vec![b, b],
@@ -487,14 +511,14 @@ fn typecheck_binop(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) -> R
 fn typecheck_boolean(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) -> Result<()> {
     let b = stack.pop(heap).ok_or_else(|| {
         Error::new(
-            node.span,
+            node.span.clone(),
             NotEnoughData,
             "Not enough data for binary operation",
         )
     })?;
     let a = stack.pop(heap).ok_or_else(|| {
         Error::new(
-            node.span,
+            node.span.clone(),
             NotEnoughData,
             "Not enough data for binary operation",
         )
@@ -504,7 +528,7 @@ fn typecheck_boolean(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) ->
         (Type::I64, Type::I64) => stack.push(heap, Type::Bool),
         (a, b) => {
             return error(
-                node.span,
+                node.span.clone(),
                 TypeMismatch {
                     actual: vec![b, a],
                     expected: vec![Type::U64, Type::U64],
@@ -538,7 +562,7 @@ fn typecheck_if(
     } else {
         let (actual, expected) = (truth.into_deq(heap).into(), lie.into_deq(heap).into());
         error(
-            *span,
+            span.clone(),
             TypeMismatch { actual, expected },
             "If branches must leave stack in the same state",
         )
@@ -644,11 +668,11 @@ fn test_typecheck() {
                     outs: vec![Type::U64],
                 },
                 body: vec![AstNode {
-                    span: Span::point(0),
+                    span: Span::point("".to_string(), 0),
                     ast: AstKind::Literal(IConst::U64(1)),
                 }],
             }),
-            Span::point(0),
+            Span::point("".to_string(), 0),
             false,
         ),
     )]

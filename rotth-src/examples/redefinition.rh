@@ -1,0 +1,7 @@
+include "./std.rh"
+
+proc main : uint do
+end
+
+proc puts do
+end

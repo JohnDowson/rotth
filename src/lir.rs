@@ -43,12 +43,12 @@ pub enum Op {
     Return,
     Exit,
 }
-use somok::Somok;
+use somok::{Either, Somok};
 use Op::*;
 
 #[derive(Clone)]
 enum ComConst {
-    Compiled(IConst),
+    Compiled(Vec<IConst>),
     NotCompiled(Const),
 }
 
@@ -130,26 +130,30 @@ impl Compiler {
         self.emit(Return);
     }
 
-    fn compile_const(&mut self, name: String) -> IConst {
+    fn compile_const(&mut self, name: String) -> Vec<IConst> {
         let const_ = match self.consts.get(&name) {
             Some(ComConst::Compiled(i)) => return i.clone(),
             Some(ComConst::NotCompiled(c)) => c.clone(),
             None => unreachable!(),
         };
-        let Const { body, ty } = const_;
+        let Const { body, types } = const_;
         let mut com = Self::with_consts_and_strings(self.consts.clone(), self.strings.clone());
         com.compile_body(body.clone());
-        com.emit(Exit);
         self.consts = com.consts;
         self.strings = com.strings;
         let ops = com.result;
-        let const_ = match eval(ops, &self.strings) {
-            Ok(bytes) => match ty {
-                Type::Bool => IConst::Bool(bytes != 0),
-                Type::U64 => IConst::U64(bytes),
-                Type::I64 => IConst::I64(bytes as i64),
-                Type::Ptr => IConst::Ptr(bytes),
-            },
+        let mut const_ = Vec::new();
+        match eval(ops, &self.strings) {
+            Ok(Either::Right(bytes)) => {
+                for (ty, bytes) in types.iter().zip(bytes) {
+                    match ty {
+                        Type::Bool => const_.push(IConst::Bool(bytes == 1)),
+                        Type::U64 => const_.push(IConst::U64(bytes)),
+                        Type::I64 => const_.push(IConst::I64(bytes as i64)),
+                        Type::Ptr => const_.push(IConst::Ptr(bytes)),
+                    }
+                }
+            }
             Err(req) => {
                 self.compile_const(req);
                 let mut com =
@@ -160,15 +164,20 @@ impl Compiler {
                 self.consts = com.consts;
                 self.strings = com.strings;
                 match eval(ops, &self.strings) {
-                    Ok(bytes) => match ty {
-                        Type::Bool => IConst::Bool(bytes != 0),
-                        Type::U64 => IConst::U64(bytes),
-                        Type::I64 => IConst::I64(bytes as i64),
-                        Type::Ptr => IConst::Ptr(bytes),
-                    },
-                    Err(_) => unreachable!(),
+                    Ok(Either::Right(bytes)) => {
+                        for (ty, bytes) in types.iter().zip(bytes) {
+                            match ty {
+                                Type::Bool => const_.push(IConst::Bool(bytes == 1)),
+                                Type::U64 => const_.push(IConst::U64(bytes)),
+                                Type::I64 => const_.push(IConst::I64(bytes as i64)),
+                                Type::Ptr => const_.push(IConst::Ptr(bytes)),
+                            }
+                        }
+                    }
+                    _ => unreachable!(),
                 }
             }
+            Ok(Either::Left(_)) => unreachable!(),
         };
 
         self.consts.insert(name, ComConst::Compiled(const_.clone()));
@@ -188,7 +197,9 @@ impl Compiler {
                 },
                 AstKind::Word(w) if self.is_const(&w) => {
                     let c = self.compile_const(w);
-                    self.emit(Push(c))
+                    for c in c {
+                        self.emit(Push(c))
+                    }
                 }
                 AstKind::Word(w) => self.emit(Call(w)),
                 AstKind::Intrinsic(i) => match i {

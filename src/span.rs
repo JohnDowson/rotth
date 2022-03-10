@@ -1,47 +1,39 @@
 use std::ops::Range;
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub struct Span {
+    pub file: String,
     pub start: usize,
     pub end: usize,
 }
 
 impl Span {
-    pub fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
+    pub fn new(file: String, start: usize, end: usize) -> Self {
+        Self { file, start, end }
     }
-    pub fn point(point: usize) -> Self {
+    pub fn point(file: String, point: usize) -> Self {
         Self {
+            file,
             start: point,
             end: point + 1,
         }
-    }
-    pub fn merge(mut first: Self, second: Self) -> Self {
-        first.end = second.end;
-        first
     }
     pub fn length(&self) -> usize {
         self.end - self.start
     }
 }
 
-impl std::convert::From<Range<usize>> for Span {
-    fn from(r: Range<usize>) -> Self {
-        Self::new(r.start, r.end)
-    }
-}
-
 impl std::fmt::Debug for Span {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}..{}]", &self.start, &self.end)
+        write!(f, "{}[{}..{}]", &self.file, &self.start, &self.end)
     }
 }
 
 impl ariadne::Span for Span {
-    type SourceId = ();
+    type SourceId = String;
 
     fn source(&self) -> &Self::SourceId {
-        &()
+        &self.file
     }
 
     fn start(&self) -> usize {
@@ -54,15 +46,17 @@ impl ariadne::Span for Span {
 }
 
 impl chumsky::Span for Span {
-    type Context = ();
+    type Context = String;
 
     type Offset = usize;
 
-    fn new(_context: Self::Context, range: Range<Self::Offset>) -> Self {
-        range.into()
+    fn new(file: Self::Context, range: Range<Self::Offset>) -> Self {
+        Self::new(file, range.start, range.end)
     }
 
-    fn context(&self) -> Self::Context {}
+    fn context(&self) -> Self::Context {
+        self.file.clone()
+    }
 
     fn start(&self) -> Self::Offset {
         self.start

@@ -1,5 +1,5 @@
 root := justfile_directory()
-rotthdir := (root + "/rotth-src")
+rotthdir := (root + "/rotth-src/examples")
 
 default:
   @just --list

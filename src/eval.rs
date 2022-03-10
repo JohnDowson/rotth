@@ -1,10 +1,8 @@
+use crate::{hir::IConst, lir::Op};
+use somok::{Either, Somok};
 use std::collections::HashMap;
 
-use somok::Somok;
-
-use crate::{hir::IConst, lir::Op};
-
-pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<u64, String> {
+pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<Either<u64, Vec<u64>>, String> {
     let labels = ops
         .iter()
         .enumerate()
@@ -16,14 +14,6 @@ pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<u64, String> {
             }
         })
         .collect::<HashMap<String, usize>>();
-    let rawstrs: Vec<(usize, *mut u8)> = strings
-        .iter()
-        .map(|s| {
-            let (ptr, _, _) = s.clone().into_raw_parts();
-            let len = s.len();
-            (len, ptr)
-        })
-        .collect();
 
     let mut call_stack = Vec::new();
     let mut stack = Vec::new();
@@ -34,9 +24,9 @@ pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<u64, String> {
         println!("{}:\t{:?}", i, op);
         match op {
             Op::PushStr(i) => {
-                let len = rawstrs[*i].0 as u64;
+                let len = strings[*i].len() as u64;
                 stack.push(len);
-                stack.push(rawstrs[*i].1 as u64);
+                stack.push(strings[*i].as_ptr() as u64);
             }
             Op::Push(c) => match c {
                 IConst::Bool(b) => stack.push(*b as u64),
@@ -67,7 +57,11 @@ pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<u64, String> {
                 let read = unsafe { (ptr as *const u8).read() as u64 };
                 stack.push(read);
             }
-            Op::WriteU8 => todo!("Write u8"),
+            Op::WriteU8 => {
+                let byte = stack.pop().unwrap() as u8;
+                let ptr = stack.pop().unwrap();
+                unsafe { (ptr as *mut u8).write(byte) };
+            }
 
             Op::Dump => println!("{:?}", stack),
             Op::Print => println!("{:?}", stack.pop().unwrap()),
@@ -134,9 +128,9 @@ pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<u64, String> {
                 i = labels.get(l).copied().ok_or_else(|| l.clone())?
             }
             Op::Return => i = call_stack.pop().unwrap(),
-            Op::Exit => return stack.pop().unwrap().okay(),
+            Op::Exit => return stack.pop().unwrap().left().okay(),
         }
         i += 1;
     }
-    666.okay()
+    stack.right().okay()
 }

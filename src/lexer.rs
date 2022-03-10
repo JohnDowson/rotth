@@ -1,5 +1,7 @@
-use crate::span::Span;
-use chumsky::{prelude::*, text::Character, Error};
+use std::{io::Read, path::PathBuf};
+
+use crate::{span::Span, Error, Result};
+use chumsky::{prelude::*, text::Character, Error as CError, Stream};
 use somok::Somok;
 
 #[derive(Clone, Hash, PartialEq, Eq)]
@@ -38,7 +40,7 @@ pub enum KeyWord {
     End,
 }
 
-pub fn word_parser<C: Character, E: Error<C>>(
+pub fn word_parser<C: Character, E: CError<C>>(
 ) -> impl Parser<C, C::Collection, Error = E> + Copy + Clone {
     const ALLOWED_NON_ALPHA: &[u8; 24] = b"(){}[]<>|\\/!@#$%^&*-=+_?";
     filter(|c: &C| {
@@ -54,7 +56,7 @@ pub fn word_parser<C: Character, E: Error<C>>(
     .collect()
 }
 
-pub fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char, Span>>
+fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char, Span>>
 where
 {
     let string = just('"')
@@ -126,4 +128,19 @@ where
         .padded_by(comment.repeated())
         .padded()
         .repeated()
+}
+
+pub fn lex(source: PathBuf) -> Result<Vec<(Token, Span)>> {
+    let mut src = String::new();
+    std::fs::File::open(&source)?.read_to_string(&mut src)?;
+
+    match lexer().parse(Stream::from_iter(
+        Span::new(source.to_string_lossy().into_owned(), src.len(), src.len()),
+        src.chars()
+            .enumerate()
+            .map(|(i, c)| (c, Span::point(source.to_string_lossy().into_owned(), i))),
+    )) {
+        Ok(tokens) => tokens.okay(),
+        Err(es) => Error::Lexer(es).error(),
+    }
 }

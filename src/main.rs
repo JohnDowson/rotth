@@ -1,15 +1,7 @@
-use chumsky::{Parser, Stream};
 use clap::Parser as ClapParser;
-use rotth::{
-    emit, eval::eval, hir::procs, lexer::lexer, lir, span::Span, typecheck::typecheck_program,
-};
+use rotth::{emit, eval::eval, hir::parse, lexer::lex, lir, typecheck::typecheck_program, Result};
 use somok::Somok;
-use std::{
-    fs::OpenOptions,
-    io::{BufWriter, Read},
-    path::PathBuf,
-    time::Instant,
-};
+use std::{fs::OpenOptions, io::BufWriter, path::PathBuf, time::Instant};
 
 #[derive(ClapParser)]
 struct Args {
@@ -26,25 +18,12 @@ struct Args {
     source: PathBuf,
 }
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<()> {
     let args = Args::parse();
-    let mut src = String::new();
-    std::fs::File::open(&args.source)?.read_to_string(&mut src)?;
 
     let start = Instant::now();
 
-    let tokens = match lexer().parse(Stream::from_iter(
-        Span::new(src.len(), src.len()),
-        src.chars().enumerate().map(|(i, c)| (c, Span::point(i))),
-    )) {
-        Ok(ts) => ts,
-        Err(es) => {
-            for e in es {
-                dbg!(e);
-            }
-            return ().okay();
-        }
-    };
+    let tokens = lex(args.source.clone())?;
 
     let tokenized = Instant::now();
     if args.time {
@@ -56,18 +35,7 @@ fn main() -> std::io::Result<()> {
         println!("{tokens:?}");
     }
 
-    let ast = match procs().parse(Stream::from_iter(
-        tokens.last().unwrap().1,
-        tokens.into_iter(),
-    )) {
-        Ok(ast) => ast,
-        Err(es) => {
-            for e in es {
-                dbg!(e);
-            }
-            return ().okay();
-        }
-    };
+    let ast = parse(tokens)?;
 
     let parsed = Instant::now();
     if args.time {
@@ -110,6 +78,7 @@ fn main() -> std::io::Result<()> {
                 OpenOptions::new()
                     .create(true)
                     .write(true)
+                    .truncate(true)
                     .open(args.source.with_extension("asm"))?,
             ),
         )?;
@@ -120,7 +89,7 @@ fn main() -> std::io::Result<()> {
             println!("Total:\t{:?}", compiled - start);
         }
     } else {
-        println!("exitcode: {}", eval(lir, &strs).unwrap());
+        println!("exitcode: {:?}", eval(lir, &strs).unwrap());
         let evaluated = Instant::now();
         if args.time {
             println!("Evaluated in:\t{:?}", evaluated - transpiled);

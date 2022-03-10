@@ -1,12 +1,15 @@
 use crate::{
     lexer::{KeyWord, Token},
+    resolver::resolve_include,
     span::Span,
+    Error, RedefinitionError,
 };
-use chumsky::prelude::*;
+use chumsky::{prelude::*, Stream};
 use somok::Somok;
-use std::collections::HashMap;
-#[cfg(test)]
-mod test;
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    path::PathBuf,
+};
 
 #[derive(Clone, Debug)]
 pub enum IConst {
@@ -176,7 +179,7 @@ pub enum Intrinsic {
 #[derive(Debug, Clone)]
 pub struct Const {
     pub body: Vec<AstNode>,
-    pub ty: Type,
+    pub types: Vec<Type>,
 }
 
 #[derive(Debug, Clone)]
@@ -544,12 +547,12 @@ fn constant() -> impl Parser<Token, (String, (TopLevel, Span)), Error = Simple<T
     just(Token::KeyWord(KeyWord::Const))
         .ignore_then(identifier())
         .then_ignore(just(Token::SigSep))
-        .then(ty())
+        .then(ty().repeated().at_least(1))
         .then_ignore(just(Token::KeyWord(KeyWord::Do)))
         .then(body())
         .then_ignore(just(Token::KeyWord(KeyWord::End)))
-        .map_with_span(|((name, ty), body), span| {
-            (name, (TopLevel::Const(Const { body, ty }), span))
+        .map_with_span(|((name, types), body), span| {
+            (name, (TopLevel::Const(Const { body, types }), span))
         })
 }
 
@@ -557,7 +560,7 @@ fn include() -> impl Parser<Token, (String, (TopLevel, Span)), Error = Simple<To
     just(Token::KeyWord(KeyWord::Include))
         .ignore_then(
             filter(|token| matches!(token, Token::Str(_))).map(|token| match token {
-                Token::Str(s) => s,
+                Token::Str(s) => s.into(),
                 _ => unreachable!(),
             }),
         )
@@ -568,7 +571,7 @@ fn include() -> impl Parser<Token, (String, (TopLevel, Span)), Error = Simple<To
 pub enum TopLevel {
     Proc(Proc),
     Const(Const),
-    Include(String),
+    Include(PathBuf),
 }
 impl TopLevel {
     pub fn as_proc(&self) -> Option<&Proc> {
@@ -586,20 +589,57 @@ impl TopLevel {
             None
         }
     }
-
-    pub fn as_include(&self) -> Option<&String> {
-        if let Self::Include(v) = self {
-            Some(v)
-        } else {
-            None
-        }
-    }
 }
 
-pub fn procs() -> impl Parser<Token, HashMap<String, (TopLevel, Span)>, Error = Simple<Token, Span>>
-{
+fn procs() -> impl Parser<Token, Vec<(String, (TopLevel, Span))>, Error = Simple<Token, Span>> {
     choice((proc(), constant(), include()))
         .repeated()
         .then_ignore(end())
         .collect()
+}
+
+pub fn parse(tokens: Vec<(Token, Span)>) -> Result<HashMap<String, (TopLevel, Span)>, Error> {
+    let items = match procs().parse(Stream::from_iter(
+        tokens.last().unwrap().1.clone(),
+        tokens.into_iter(),
+    )) {
+        Ok(items) => items,
+        Err(es) => return Error::Parser(es).error(),
+    };
+
+    let (includes, mut items) = items
+        .into_iter()
+        .partition::<Vec<_>, _>(|(_, (item, _))| matches!(item, TopLevel::Include(_)));
+
+    for (_, (include, _)) in includes {
+        if let TopLevel::Include(path) = include {
+            resolve_include(path, &mut items)?;
+        } else {
+            unreachable!();
+        }
+    }
+
+    let mut res = HashMap::new();
+    let mut errors = Vec::new();
+
+    for (name, (item, span)) in items {
+        match res.entry(name) {
+            Entry::Occupied(it) => {
+                let redefined: &(TopLevel, Span) = it.get();
+                errors.push(RedefinitionError {
+                    redefining_item: span,
+                    redefined_item: redefined.1.clone(),
+                });
+            }
+            Entry::Vacant(v) => {
+                v.insert((item, span));
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        res.okay()
+    } else {
+        Error::Redefinition(errors).error()
+    }
 }

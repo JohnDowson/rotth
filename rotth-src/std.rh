@@ -1,7 +1,3 @@
-proc main : uint do
-    "Hello, world!\n" puts
-    0
-end
 
 const SYS_write : uint do 1 end
 const STDOUT : uint do 1 end

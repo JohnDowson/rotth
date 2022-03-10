@@ -1,8 +1,9 @@
 *
 !*/
 !/**/
-!/rotth-src/*.*
-/rotth-src/*.o
+!/rotth-src/examples/*.*
+!/rotth-src/*.rh
+/rotth-src/examples/*.o
 !/src/**
 /target
 /rotth-lsp
