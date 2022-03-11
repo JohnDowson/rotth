@@ -1,0 +1,3 @@
+proc ptr+ &>() u64 : &>() do
+    swap cast u64 + cast &>()
+end

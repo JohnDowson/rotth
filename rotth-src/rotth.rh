@@ -1,4 +1,4 @@
-include "./rotth-src/std.rh"
+include "../std.rh"
 
 proc main : uint do
     "Unimplemented\n" eputs 1 exit

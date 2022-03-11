@@ -60,10 +60,20 @@ pub struct Signature {
     pub outs: Vec<Type>,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, Eq)]
 pub struct Type {
     ptr_depth: u8,
     value_type: ValueType,
+}
+
+impl PartialEq for Type {
+    fn eq(&self, other: &Self) -> bool {
+        if self.value_type == ValueType::Any && self.ptr_depth > 0 && other.ptr_depth > 0 {
+            true
+        } else {
+            self.value_type == other.value_type && self.ptr_depth == other.ptr_depth
+        }
+    }
 }
 
 impl std::fmt::Debug for Type {
@@ -198,9 +208,10 @@ fn ty() -> impl Parser<Token, Type, Error = Simple<Token, Span>> {
         )
         .error(),
     });
+    let any = just(Token::Word("()".to_string())).to(Type::ANY);
     let ptr_type = recursive(|p_ty| {
         just(Token::Ptr)
-            .ignore_then(choice((p_ty, value_type)))
+            .ignore_then(choice((p_ty, choice((value_type, any)))))
             .map(Type::ptr_to)
     });
     choice((value_type, ptr_type))
@@ -269,11 +280,11 @@ pub enum Intrinsic {
     Swap,
     Over,
 
-    PtrAdd,
-    PtrSub,
     Cast(Type),
 
+    ReadU64,
     ReadU8,
+    WriteU64,
     WriteU8,
 
     CompStop,
@@ -287,6 +298,9 @@ pub enum Intrinsic {
     Syscall4,
     Syscall5,
     Syscall6,
+
+    Argc,
+    Argv,
 
     Add,
     Sub,
@@ -378,158 +392,56 @@ fn word() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
 
 fn intrinsic() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
     filter_map(|span, token| match &token {
-        Token::Word(w) => match w.as_str() {
-            "drop" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Drop),
-                span,
-            }
-            .okay(),
-            "dup" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Dup),
-                span,
-            }
-            .okay(),
-            "swap" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Swap),
-                span,
-            }
-            .okay(),
-            "over" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Over),
-                span,
-            }
-            .okay(),
+        Token::Word(w) => AstNode {
+            ast: match w.as_str() {
+                "drop" => AstKind::Intrinsic(Intrinsic::Drop),
+                "dup" => AstKind::Intrinsic(Intrinsic::Dup),
+                "swap" => AstKind::Intrinsic(Intrinsic::Swap),
+                "over" => AstKind::Intrinsic(Intrinsic::Over),
 
-            "@u8" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::ReadU8),
-                span,
-            }
-            .okay(),
-            "!u8" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::WriteU8),
-                span,
-            }
-            .okay(),
-            "ptr+" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::PtrAdd),
-                span,
-            }
-            .okay(),
-            "ptr-" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::PtrSub),
-                span,
-            }
-            .okay(),
+                "@u64" => AstKind::Intrinsic(Intrinsic::ReadU64),
+                "@u8" => AstKind::Intrinsic(Intrinsic::ReadU8),
+                "!u64" => AstKind::Intrinsic(Intrinsic::WriteU64),
+                "!u8" => AstKind::Intrinsic(Intrinsic::WriteU8),
 
-            "&?&" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::CompStop),
-                span,
-            }
-            .okay(),
-            "&?" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Dump),
-                span,
-            }
-            .okay(),
-            "print" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Print),
-                span,
-            }
-            .okay(),
-            "syscall0" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Syscall0),
-                span,
-            }
-            .okay(),
-            "syscall1" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Syscall1),
-                span,
-            }
-            .okay(),
-            "syscall2" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Syscall2),
-                span,
-            }
-            .okay(),
-            "syscall3" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Syscall3),
-                span,
-            }
-            .okay(),
-            "syscall4" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Syscall4),
-                span,
-            }
-            .okay(),
-            "syscall5" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Syscall5),
-                span,
-            }
-            .okay(),
-            "syscall6" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Syscall6),
-                span,
-            }
-            .okay(),
+                "&?&" => AstKind::Intrinsic(Intrinsic::CompStop),
+                "&?" => AstKind::Intrinsic(Intrinsic::Dump),
+                "print" => AstKind::Intrinsic(Intrinsic::Print),
 
-            "+" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Add),
-                span,
-            }
-            .okay(),
-            "-" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Sub),
-                span,
-            }
-            .okay(),
-            "*" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Mul),
-                span,
-            }
-            .okay(),
-            "divmod" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Divmod),
-                span,
-            }
-            .okay(),
+                "syscall0" => AstKind::Intrinsic(Intrinsic::Syscall0),
+                "syscall1" => AstKind::Intrinsic(Intrinsic::Syscall1),
+                "syscall2" => AstKind::Intrinsic(Intrinsic::Syscall2),
+                "syscall3" => AstKind::Intrinsic(Intrinsic::Syscall3),
+                "syscall4" => AstKind::Intrinsic(Intrinsic::Syscall4),
+                "syscall5" => AstKind::Intrinsic(Intrinsic::Syscall5),
+                "syscall6" => AstKind::Intrinsic(Intrinsic::Syscall6),
 
-            "=" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Eq),
-                span,
-            }
-            .okay(),
-            "!=" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Ne),
-                span,
-            }
-            .okay(),
-            "<" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Lt),
-                span,
-            }
-            .okay(),
-            "<=" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Le),
-                span,
-            }
-            .okay(),
-            ">" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Gt),
-                span,
-            }
-            .okay(),
-            ">=" => AstNode {
-                ast: AstKind::Intrinsic(Intrinsic::Ge),
-                span,
-            }
-            .okay(),
-            _ => Simple::expected_input_found(
-                span,
-                vec![Some(Token::Word("some-intrinsic".to_string()))],
-                Some(token),
-            )
-            .error(),
-        },
+                "argc" => AstKind::Intrinsic(Intrinsic::Argc),
+                "argv" => AstKind::Intrinsic(Intrinsic::Argv),
+
+                "+" => AstKind::Intrinsic(Intrinsic::Add),
+                "-" => AstKind::Intrinsic(Intrinsic::Sub),
+                "*" => AstKind::Intrinsic(Intrinsic::Mul),
+                "divmod" => AstKind::Intrinsic(Intrinsic::Divmod),
+
+                "=" => AstKind::Intrinsic(Intrinsic::Eq),
+                "!=" => AstKind::Intrinsic(Intrinsic::Ne),
+                "<" => AstKind::Intrinsic(Intrinsic::Lt),
+                "<=" => AstKind::Intrinsic(Intrinsic::Le),
+                ">" => AstKind::Intrinsic(Intrinsic::Gt),
+                ">=" => AstKind::Intrinsic(Intrinsic::Ge),
+                _ => {
+                    return Simple::expected_input_found(
+                        span,
+                        vec![Some(Token::Word("some-intrinsic".to_string()))],
+                        Some(token),
+                    )
+                    .error()
+                }
+            },
+            span,
+        }
+        .okay(),
         _ => Simple::expected_input_found(
             span,
             vec![Some(Token::Word("some-intrinsic".to_string()))],
@@ -537,10 +449,6 @@ fn intrinsic() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
         )
         .error(),
     })
-}
-
-fn word_or_intrinsic() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    choice((intrinsic(), word()))
 }
 
 fn identifier() -> impl Parser<Token, String, Error = Simple<Token, Span>> {
@@ -557,22 +465,7 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
             .then(ty())
             .map(|(name, ty)| Binding::Bind { name, ty });
 
-        let ignore = filter_map(|span, token| {
-            if matches!(token, Token::Ignore) {
-                Binding::Ignore.okay()
-            } else {
-                Simple::expected_input_found(
-                    span,
-                    vec![
-                        Some(Token::Word("int".to_string())),
-                        Some(Token::Word("uint".to_string())),
-                        Some(Token::Word("bool".to_string())),
-                    ],
-                    Some(token),
-                )
-                .error()
-            }
-        });
+        let ignore = just(Token::Ignore).to(Binding::Ignore);
 
         let bind = just(Token::KeyWord(KeyWord::Bind))
             .ignore_then(choice((ignore, name_type)).repeated().at_least(1))
@@ -705,8 +598,9 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
             });
 
         choice((
+            intrinsic(),
+            word(),
             bool,
-            word_or_intrinsic(),
             char,
             string,
             num,

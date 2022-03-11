@@ -1,0 +1,7 @@
+include "../std.rh"
+proc main: u64 do
+    argv cast &>u64
+    @u64 cast &>char
+    dup cstrlen swap puts
+    0
+end

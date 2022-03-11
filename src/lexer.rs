@@ -31,6 +31,21 @@ impl std::fmt::Debug for Token {
     }
 }
 
+impl std::fmt::Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Word(word) => write!(f, "{}", word),
+            Self::Str(str) => write!(f, "{:?}", str),
+            Self::Char(c) => write!(f, "{:?}", c),
+            Self::KeyWord(keyword) => keyword.fmt(f),
+            Self::Num(num) => write!(f, "{}", num),
+            Self::Ignore => write!(f, "_"),
+            Self::SigSep => write!(f, ":"),
+            Self::Ptr => write!(f, "&>"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum KeyWord {
     Include,
@@ -47,6 +62,27 @@ pub enum KeyWord {
     Mem,
     Cast,
     End,
+}
+
+impl std::fmt::Display for KeyWord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Include => write!(f, "Include"),
+            Self::Return => write!(f, "Return"),
+            Self::Cond => write!(f, "Cond"),
+            Self::Otherwise => write!(f, "Otherwise"),
+            Self::If => write!(f, "If"),
+            Self::Else => write!(f, "Else"),
+            Self::Proc => write!(f, "Proc"),
+            Self::While => write!(f, "While"),
+            Self::Do => write!(f, "Do"),
+            Self::Bind => write!(f, "Bind"),
+            Self::Const => write!(f, "Const"),
+            Self::Mem => write!(f, "Mem"),
+            Self::Cast => write!(f, "Cast"),
+            Self::End => write!(f, "End"),
+        }
+    }
 }
 
 pub fn word_parser<C: Character, E: CError<C>>(
@@ -169,6 +205,19 @@ pub fn lex(source: PathBuf) -> Result<Vec<(Token, Span)>> {
         src.chars()
             .enumerate()
             .map(|(i, c)| (c, Span::point(source.to_string_lossy().into_owned(), i))),
+    )) {
+        Ok(tokens) => tokens.okay(),
+        Err(es) => Error::Lexer(es).error(),
+    }
+}
+
+pub fn lex_string(source: String, file: String) -> Result<Vec<(Token, Span)>> {
+    match lexer().parse(Stream::from_iter(
+        Span::new(file.clone(), source.len(), source.len()),
+        source
+            .chars()
+            .enumerate()
+            .map(|(i, c)| (c, Span::point(file.clone(), i))),
     )) {
         Ok(tokens) => tokens.okay(),
         Err(es) => Error::Lexer(es).error(),

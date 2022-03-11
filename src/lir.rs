@@ -23,7 +23,9 @@ pub enum Op {
     UseBinding(usize),
     Unbind,
 
+    ReadU64,
     ReadU8,
+    WriteU64,
     WriteU8,
 
     Dump,
@@ -36,6 +38,9 @@ pub enum Op {
     Syscall4,
     Syscall5,
     Syscall6,
+
+    Argc,
+    Argv,
 
     Add,
     Sub,
@@ -193,13 +198,17 @@ impl Compiler {
         let mut const_ = Vec::new();
         match eval(ops, &self.strings) {
             Ok(Either::Right(bytes)) => {
-                for (ty, bytes) in types.iter().zip(bytes) {
-                    match *ty {
-                        Type::BOOL => const_.push(IConst::Bool(bytes == 1)),
-                        Type::U64 => const_.push(IConst::U64(bytes)),
-                        Type::I64 => const_.push(IConst::I64(bytes as i64)),
-                        Type::CHAR => const_.push(IConst::Char(bytes as u8 as char)),
-                        _ => todo!("Handle pointer types?"),
+                for (&ty, bytes) in types.iter().zip(bytes) {
+                    if ty == Type::BOOL {
+                        const_.push(IConst::Bool(bytes == 1))
+                    } else if ty == Type::U64 {
+                        const_.push(IConst::U64(bytes))
+                    } else if ty == Type::I64 {
+                        const_.push(IConst::I64(bytes as i64))
+                    } else if ty == Type::CHAR {
+                        const_.push(IConst::Char(bytes as u8 as char))
+                    } else {
+                        todo!("Handle pointer types?")
                     }
                 }
             }
@@ -214,13 +223,17 @@ impl Compiler {
                 self.strings = com.strings;
                 match eval(ops, &self.strings) {
                     Ok(Either::Right(bytes)) => {
-                        for (ty, bytes) in types.iter().zip(bytes) {
-                            match *ty {
-                                Type::BOOL => const_.push(IConst::Bool(bytes == 1)),
-                                Type::U64 => const_.push(IConst::U64(bytes)),
-                                Type::I64 => const_.push(IConst::I64(bytes as i64)),
-                                Type::CHAR => const_.push(IConst::Char(bytes as u8 as char)),
-                                _ => todo!("Handle pointer types?"),
+                        for (&ty, bytes) in types.iter().zip(bytes) {
+                            if ty == Type::BOOL {
+                                const_.push(IConst::Bool(bytes == 1))
+                            } else if ty == Type::U64 {
+                                const_.push(IConst::U64(bytes))
+                            } else if ty == Type::I64 {
+                                const_.push(IConst::I64(bytes as i64))
+                            } else if ty == Type::CHAR {
+                                const_.push(IConst::Char(bytes as u8 as char))
+                            } else {
+                                todo!("Handle pointer types?")
                             }
                         }
                     }
@@ -311,11 +324,12 @@ impl Compiler {
                     Intrinsic::Swap => self.emit(Swap),
                     Intrinsic::Over => self.emit(Over),
 
-                    Intrinsic::ReadU8 => self.emit(ReadU8),
-                    Intrinsic::WriteU8 => self.emit(WriteU8),
-                    Intrinsic::PtrAdd => self.emit(Add),
-                    Intrinsic::PtrSub => self.emit(Sub),
                     Intrinsic::Cast(_) => (), // this is a noop
+
+                    Intrinsic::ReadU64 => self.emit(ReadU64),
+                    Intrinsic::ReadU8 => self.emit(ReadU8),
+                    Intrinsic::WriteU64 => self.emit(WriteU64),
+                    Intrinsic::WriteU8 => self.emit(WriteU8),
 
                     Intrinsic::Add => self.emit(Add),
                     Intrinsic::Sub => self.emit(Sub),
@@ -339,6 +353,9 @@ impl Compiler {
                     Intrinsic::Syscall4 => self.emit(Syscall4),
                     Intrinsic::Syscall5 => self.emit(Syscall5),
                     Intrinsic::Syscall6 => self.emit(Syscall6),
+
+                    Intrinsic::Argc => self.emit(Argc),
+                    Intrinsic::Argv => self.emit(Argv),
 
                     Intrinsic::CompStop => return,
                 },

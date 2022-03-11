@@ -1,19 +1,26 @@
-use std::ops::Range;
+use std::{
+    ops::Range,
+    path::{Path, PathBuf},
+};
 
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub struct Span {
-    pub file: String,
+    pub file: PathBuf,
     pub start: usize,
     pub end: usize,
 }
 
 impl Span {
-    pub fn new(file: String, start: usize, end: usize) -> Self {
-        Self { file, start, end }
-    }
-    pub fn point(file: String, point: usize) -> Self {
+    pub fn new(file: impl Into<PathBuf>, start: usize, end: usize) -> Self {
         Self {
-            file,
+            file: file.into(),
+            start,
+            end,
+        }
+    }
+    pub fn point(file: impl Into<PathBuf>, point: usize) -> Self {
+        Self {
+            file: file.into(),
             start: point,
             end: point + 1,
         }
@@ -26,7 +33,7 @@ impl Span {
 impl std::fmt::Debug for Span {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if f.alternate() {
-            write!(f, "{}[{}..{}]", &self.file, &self.start, &self.end)
+            write!(f, "{:?}[{}..{}]", &self.file, &self.start, &self.end)
         } else {
             write!(f, "[{}..{}]", &self.start, &self.end)
         }
@@ -34,7 +41,7 @@ impl std::fmt::Debug for Span {
 }
 
 impl ariadne::Span for Span {
-    type SourceId = String;
+    type SourceId = Path;
 
     fn source(&self) -> &Self::SourceId {
         &self.file
@@ -50,7 +57,7 @@ impl ariadne::Span for Span {
 }
 
 impl chumsky::Span for Span {
-    type Context = String;
+    type Context = PathBuf;
 
     type Offset = usize;
 

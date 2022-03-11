@@ -1,9 +1,9 @@
-include "./rotth-src/std.rh"
+include "../std.rh"
 
 const QUIT: char do 'q' end
 
 proc main: u64 do
-    'w' cond
+    getch cond
         'a' do
             "hello\n"
         else

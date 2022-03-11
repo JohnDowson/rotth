@@ -1,4 +1,4 @@
-include "./rotth-src/std.rh"
+include "../std.rh"
 
 const ALPHABET: u64 do
     'z' cast u64 'a' cast u64 - 1 +

@@ -70,7 +70,7 @@ fn typecheck_const(
             TypecheckError::new(
                 Span::point("".to_string(), 0),
                 Undefined(const_name.to_string()),
-                format!("Proc `{}` does not exist", const_name),
+                format!("Const `{}` does not exist", const_name),
             )
         })?
         .clone();
@@ -125,7 +125,7 @@ fn typecheck_mem(
             TypecheckError::new(
                 Span::point("".to_string(), 0),
                 Undefined(mem_name.to_string()),
-                format!("Proc `{}` does not exist", mem_name),
+                format!("Mem `{}` does not exist", mem_name),
             )
         })?
         .clone();
@@ -189,7 +189,7 @@ fn typecheck_proc(name: &str, items: &mut HashMap<String, (TopLevel, Span, bool)
         return ().okay();
     }
     if name == "main"
-        && (!proc.signature.ins.is_empty() || !matches!(&proc.signature.outs[..], [Type::U64]))
+        && (!proc.signature.ins.is_empty() || !(proc.signature.outs[..] == [Type::U64]))
     {
         return error(
             span,
@@ -418,25 +418,71 @@ fn typecheck_body(
                 }
             },
             AstKind::Intrinsic(i) => match i {
+                Intrinsic::ReadU64 => {
+                    let ty = stack.pop(heap).ok_or_else(|| {
+                        TypecheckError::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data for @u64",
+                        )
+                    })?;
+                    if !ty.is_ptr_to(Type::U64) {
+                        return error(
+                            node.span.clone(),
+                            TypeMismatch {
+                                actual: vec![ty],
+                                expected: vec![Type::ptr_to(Type::U64)],
+                            },
+                            "Wrong types for @u64",
+                        );
+                    }
+                    stack.push(heap, Type::U64)
+                }
                 Intrinsic::ReadU8 => {
                     let ty = stack.pop(heap).ok_or_else(|| {
                         TypecheckError::new(
                             node.span.clone(),
                             NotEnoughData,
-                            "Not enough data to pop",
+                            "Not enough data for @u8",
                         )
                     })?;
-                    if !ty.is_ptr() {
+                    if !ty.is_ptr_to(Type::U8) {
                         return error(
                             node.span.clone(),
                             TypeMismatch {
                                 actual: vec![ty],
-                                expected: vec![Type::ptr_to(Type::ANY)],
+                                expected: vec![Type::ptr_to(Type::U8)],
                             },
                             "Wrong types for @u8",
                         );
                     }
-                    stack.push(heap, Type::U64)
+                    stack.push(heap, Type::U8)
+                }
+                Intrinsic::WriteU64 => {
+                    let ty = stack.pop(heap).ok_or_else(|| {
+                        TypecheckError::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data for !u64",
+                        )
+                    })?;
+                    let ty_store = stack.pop(heap).ok_or_else(|| {
+                        TypecheckError::new(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data for !u64",
+                        )
+                    })?;
+                    if !(ty.is_ptr_to(Type::U64) && ty_store == Type::U64) {
+                        return error(
+                            node.span.clone(),
+                            TypeMismatch {
+                                actual: vec![ty, ty_store],
+                                expected: vec![Type::ptr_to(Type::U64), Type::U64],
+                            },
+                            "Wrong types for !u8",
+                        );
+                    }
                 }
                 Intrinsic::WriteU8 => {
                     let ty = stack.pop(heap).ok_or_else(|| {
@@ -453,70 +499,16 @@ fn typecheck_body(
                             "Not enough data for !u8",
                         )
                     })?;
-                    if !(ty.is_ptr_to(Type::U8) && matches!(ty_store, Type::U8)) {
+                    if !(ty.is_ptr_to(Type::U8) && ty_store == Type::U8) {
                         return error(
                             node.span.clone(),
                             TypeMismatch {
                                 actual: vec![ty, ty_store],
-                                expected: vec![Type::ptr_to(Type::ANY), Type::U8],
+                                expected: vec![Type::ptr_to(Type::U8), Type::U8],
                             },
                             "Wrong types for !u8",
                         );
                     }
-                }
-                Intrinsic::PtrAdd => {
-                    let offset = stack.pop(heap).ok_or_else(|| {
-                        TypecheckError::new(
-                            node.span.clone(),
-                            NotEnoughData,
-                            "Not enough data for ptr+",
-                        )
-                    })?;
-                    let pointer = stack.pop(heap).ok_or_else(|| {
-                        TypecheckError::new(
-                            node.span.clone(),
-                            NotEnoughData,
-                            "Not enough data for ptr+",
-                        )
-                    })?;
-                    if !pointer.is_ptr() || !matches!(offset, Type::U64) {
-                        return error(
-                            node.span.clone(),
-                            TypeMismatch {
-                                actual: vec![pointer, offset],
-                                expected: vec![Type::ptr_to(Type::ANY), Type::U64],
-                            },
-                            "Wrong types for ptr+",
-                        );
-                    }
-                    stack.push(heap, pointer)
-                }
-                Intrinsic::PtrSub => {
-                    let offset = stack.pop(heap).ok_or_else(|| {
-                        TypecheckError::new(
-                            node.span.clone(),
-                            NotEnoughData,
-                            "Not enough data to pop",
-                        )
-                    })?;
-                    let pointer = stack.pop(heap).ok_or_else(|| {
-                        TypecheckError::new(
-                            node.span.clone(),
-                            NotEnoughData,
-                            "Not enough data to pop",
-                        )
-                    })?;
-                    if !pointer.is_ptr() || !matches!(offset, Type::U64) {
-                        return error(
-                            node.span.clone(),
-                            TypeMismatch {
-                                actual: vec![pointer, offset],
-                                expected: vec![Type::ptr_to(Type::ANY), Type::U64],
-                            },
-                            "Wrong types for ptr-",
-                        );
-                    }
-                    stack.push(heap, pointer)
                 }
                 &Intrinsic::Cast(ty) => {
                     if !expect_arity(1, stack, heap) {
@@ -604,6 +596,13 @@ fn typecheck_body(
                         );
                     }
                     stack.push(heap, Type::U64);
+                }
+
+                Intrinsic::Argc => {
+                    stack.push(heap, Type::U64);
+                }
+                Intrinsic::Argv => {
+                    stack.push(heap, Type::ptr_to(Type::ptr_to(Type::CHAR)));
                 }
 
                 Intrinsic::Print | Intrinsic::Drop => {
@@ -723,11 +722,7 @@ fn typecheck_body(
                 }
                 typecheck_body(name, &while_.body, stack, heap, items, in_const, bindings)?;
                 if stack.clone().into_vec(heap) != stack_before {
-                    return error(
-                        node.span.clone(),
-                        InvalidWhile,
-                        "While must leave stack in the same state as it is before",
-                    );
+                    return error(node.span.clone(), InvalidWhile, "Invalid while");
                 }
             }
             AstKind::Bind(bind) => {
@@ -932,20 +927,22 @@ fn typecheck_binop(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) -> R
             "Not enough data for binary operation",
         )
     })?;
-    match (a, b) {
-        (Type::U64, Type::U64) => stack.push(heap, Type::U64),
-        (Type::I64, Type::I64) => stack.push(heap, Type::I64),
-        (a, b) => {
-            return error(
-                node.span.clone(),
-                TypeMismatch {
-                    actual: vec![b, a],
-                    expected: vec![b, b],
-                },
-                "Wrong types for binary operation, must be 2 operands of type uint|int",
-            )
-        }
+
+    if a == Type::U64 && b == Type::U64 {
+        stack.push(heap, Type::U64)
+    } else if a == Type::I64 && b == Type::I64 {
+        stack.push(heap, Type::I64)
+    } else {
+        return error(
+            node.span.clone(),
+            TypeMismatch {
+                actual: vec![b, a],
+                expected: vec![b, b],
+            },
+            "Wrong types for binary operation, must be 2 operands of type uint|int",
+        );
     }
+
     ().okay()
 }
 

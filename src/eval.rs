@@ -62,15 +62,8 @@ pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<Either<u64, Vec<u64>>, S
                 call_stack.pop();
             }
 
-            Op::ReadU8 => {
-                let ptr = stack.pop().unwrap();
-                let read = unsafe { (ptr as *const u8).read() as u64 };
-                stack.push(read);
-            }
-            Op::WriteU8 => {
-                let byte = stack.pop().unwrap() as u8;
-                let ptr = stack.pop().unwrap();
-                unsafe { (ptr as *mut u8).write(byte) };
+            Op::ReadU64 | Op::ReadU8 | Op::WriteU64 | Op::WriteU8 => {
+                panic!("Pointer operations are not supported in const eval")
             }
 
             Op::Dump => println!("{:?}", stack),
@@ -81,7 +74,9 @@ pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<Either<u64, Vec<u64>>, S
             | Op::Syscall3
             | Op::Syscall4
             | Op::Syscall5
-            | Op::Syscall6 => todo!("Syscalls not supported in eval"),
+            | Op::Syscall6
+            | Op::Argc
+            | Op::Argv => todo!("Syscalls not supported in eval"),
 
             Op::Add => {
                 let (b, a) = (stack.pop().unwrap(), stack.pop().unwrap());

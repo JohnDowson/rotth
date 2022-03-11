@@ -1,11 +1,9 @@
-const SYS_write: u64 do 1 end
-const SYS_exit: u64 do 60 end
+include "./syscalls.rh"
+include "./core.rh"
 
 const STDIN: u64 do 0 end
 const STDOUT: u64 do 1 end
 const STDERR: u64 do 2 end
-
-mem PUTU_BUF do 32 end
 
 proc utoa &>u8 u64 : u64 &>char do
     0
@@ -50,8 +48,14 @@ proc rev-slice u64 &>u8 do
     end
 end
 
+mem PUTU_BUF do 32 end
+
 proc putu u64 do
     PUTU_BUF swap utoa puts
+end
+
+proc eputu u64 do
+    PUTU_BUF swap utoa eputs
 end
 
 proc puts u64 &>char do
@@ -60,6 +64,29 @@ end
 
 proc eputs u64 &>char do
     STDERR SYS_write syscall3 drop
+end
+
+proc cstrlen &>char : u64 do
+    cast &>u8
+    dup ; p p
+    while dup @u8 0 cast u8 != do
+        ; p p+1
+        1 ptr+
+    end cast u64 swap cast u64 absdiff
+end
+
+proc absdiff u64 u64 : u64 do
+    over over > if -
+    else
+        swap -
+    end
+end
+
+mem GETCH_BUF do 1 end
+
+proc getch: char do
+   1 GETCH_BUF STDIN SYS_read syscall3 drop
+   GETCH_BUF @u8 cast char
 end
 
 proc exit u64 do

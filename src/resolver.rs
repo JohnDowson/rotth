@@ -11,7 +11,10 @@ pub fn resolve_include(
     path: PathBuf,
     existing: &mut Vec<(String, (TopLevel, Span))>,
 ) -> Result<()> {
-    let tokens = lex(path)?;
+    let source = path.canonicalize()?;
+    std::env::set_current_dir(&source.parent().unwrap())?;
+
+    let tokens = lex(source)?;
 
     let ast = parse(tokens)?;
 

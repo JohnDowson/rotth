@@ -15,6 +15,9 @@ build FILE:
 run FILE: (build FILE)
     {{rotthdir}}/{{FILE}}
 
+gdb FILE: (build FILE)
+    gdb --tui {{rotthdir}}/{{FILE}}
+
 compiler:
     cargo run -- --compile -- {{compiler}}.rh
     nasm -g -F dwarf -f elf64 {{root}}/print.asm -o {{root}}/print.o

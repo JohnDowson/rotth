@@ -1,4 +1,4 @@
-include "./rotth-src/std.rh"
+include "../std.rh"
 
 proc main: u64 do
     "hello\n"

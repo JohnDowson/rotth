@@ -31,6 +31,11 @@ impl Compiler {
 
             _start:
                 mov QWORD [ret_stack_rsp], ret_stack
+                ; set up args
+                pop rax
+                mov [argc], rax
+                mov [argv], rsp
+
         "},
         )?;
         for op in ops {
@@ -179,6 +184,16 @@ impl Compiler {
                     op
                 )?,
 
+                ReadU64 => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        pop rax
+                        mov rbx, [rax]
+                        push rbx
+                    "},
+                    op
+                )?,
                 ReadU8 => write!(
                     sink,
                     indoc! {"
@@ -187,6 +202,16 @@ impl Compiler {
                         xor rbx, rbx
                         mov bl, [rax]
                         push rbx
+                    "},
+                    op
+                )?,
+                WriteU64 => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        pop rax
+                        pop rbx
+                        mov [rax], rbx
                     "},
                     op
                 )?,
@@ -299,6 +324,25 @@ impl Compiler {
                         pop r9
                         syscall
                         push rax
+                    "},
+                    op
+                )?,
+
+                Argc => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        mov rax, [argc]
+                        push rax
+                    "},
+                    op
+                )?,
+                Argv => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                    mov rax, [argv]
+                    push rax
                     "},
                     op
                 )?,
@@ -538,6 +582,8 @@ impl Compiler {
                 ret_stack_rsp: resq 1
                 ret_stack: resb 65536
                 ret_stack_end:
+                argc: resq 1
+                argv: resq 1
         "},
         )?;
         for (name, size) in mems {
