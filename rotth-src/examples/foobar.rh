@@ -1,0 +1,16 @@
+include "./rotth-src/std.rh"
+
+proc main: u64 do
+    0 while dup 15 <= do
+        bind i: u64 do
+            i 3 mod
+            0 = dup if "Foo" puts end
+            i 5 mod
+            0 = dup if "Bar" puts end
+            or not if i print end
+            "\n" puts
+            i 1 +
+        end
+    end drop
+    0
+end

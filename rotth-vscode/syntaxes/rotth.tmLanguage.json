@@ -26,7 +26,7 @@
 			"patterns": [
 				{
 					"name": "keyword.control.rotth",
-					"match": "\\b(if|else|proc|while|do|end|const|bind|include|return|cond)\\b"
+					"match": "\\b(if|else|proc|while|do|end|const|bind|include|return|cond|mem|cast|otherwise)\\b"
 				}
 			]
 		},
@@ -58,8 +58,8 @@
 		},
 		"words": {
 			"name": "entity.name.rotth",
-			"begin": "[a-zA-Z+=-_!@#$%^&*()?/\\\\\\[\\]{}<>]",
-			"end": "\\b",
+			"begin": "[a-zA-Z+=-_!@#$%^&*()?\\\\/\\[\\]{}<>]",
+			"end": "[\\s:]",
 			"patterns": [
 				{
 					"name": "entity.name.rotth",

@@ -1,0 +1,7 @@
+include "./rotth-src/std.rh"
+
+proc main: u64 do
+    69 putu "\n" puts
+    420 putu "\n" puts
+    0
+end

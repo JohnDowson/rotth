@@ -115,6 +115,61 @@ fn typecheck_const(
     }
 }
 
+fn typecheck_mem(
+    mem_name: &str,
+    items: &mut HashMap<String, (TopLevel, Span, bool)>,
+) -> Result<()> {
+    let (mem, span, typechecked) = items
+        .get(mem_name)
+        .ok_or_else(|| {
+            TypecheckError::new(
+                Span::point("".to_string(), 0),
+                Undefined(mem_name.to_string()),
+                format!("Proc `{}` does not exist", mem_name),
+            )
+        })?
+        .clone();
+    let mem = match mem {
+        TopLevel::Mem(m) => m,
+        _ => unreachable!("This can't not be const"),
+    };
+    if typechecked {
+        return ().okay();
+    }
+
+    let mut heap = THeap::default();
+    let mut actual = TypeStack::default();
+    let mut expected = TypeStack::default();
+
+    expected.push(&mut heap, Type::U64);
+
+    let mut bindings = Vec::new();
+    typecheck_body(
+        mem_name,
+        &mem.body,
+        &mut actual,
+        &mut heap,
+        items,
+        true,
+        &mut bindings,
+    )?;
+
+    if actual.eq(&expected, &heap) {
+        let (_, _, typechecked) = items.get_mut(mem_name).unwrap();
+        *typechecked = true;
+        ().okay()
+    } else {
+        error(
+            span,
+            TypeMismatch {
+                expected: vec![Type::U64],
+                actual: actual.into_vec(&heap),
+            },
+            "Mem body must evaluate to U64",
+        )
+    }
+}
+
 fn typecheck_proc(name: &str, items: &mut HashMap<String, (TopLevel, Span, bool)>) -> Result<()> {
     let (proc, span, typechecked) = items
         .get(name)
@@ -182,6 +237,9 @@ fn typecheck_proc(name: &str, items: &mut HashMap<String, (TopLevel, Span, bool)
 
 fn is_proc(name: &str, items: &HashMap<String, (TopLevel, Span, bool)>) -> bool {
     matches!(items.get(name), Some((TopLevel::Proc(_), _, _)))
+}
+fn is_mem(name: &str, items: &HashMap<String, (TopLevel, Span, bool)>) -> bool {
+    matches!(items.get(name), Some((TopLevel::Mem(_), _, _)))
 }
 fn is_binding(name: &str, bindings: &[Vec<(String, Type)>]) -> bool {
     bindings.iter().flatten().any(|b| b.0 == name)
@@ -330,6 +388,11 @@ fn typecheck_body(
                         stack.push(heap, *ty);
                     }
                 }
+                mem_name if is_mem(mem_name, items) => {
+                    typecheck_mem(mem_name, items)?;
+
+                    stack.push(heap, Type::ptr_to(Type::U8));
+                }
                 binding_name if is_binding(binding_name, bindings) => {
                     let ty = bindings
                         .iter()
@@ -380,22 +443,22 @@ fn typecheck_body(
                         TypecheckError::new(
                             node.span.clone(),
                             NotEnoughData,
-                            "Not enough data to pop",
+                            "Not enough data for !u8",
                         )
                     })?;
                     let ty_store = stack.pop(heap).ok_or_else(|| {
                         TypecheckError::new(
                             node.span.clone(),
                             NotEnoughData,
-                            "Not enough data to pop",
+                            "Not enough data for !u8",
                         )
                     })?;
-                    if !ty.is_ptr_to(Type::U8) && matches!(ty_store, Type::U8) {
+                    if !(ty.is_ptr_to(Type::U8) && matches!(ty_store, Type::U8)) {
                         return error(
                             node.span.clone(),
                             TypeMismatch {
                                 actual: vec![ty, ty_store],
-                                expected: vec![Type::ptr_to(Type::ANY)],
+                                expected: vec![Type::ptr_to(Type::ANY), Type::U8],
                             },
                             "Wrong types for !u8",
                         );
@@ -406,14 +469,14 @@ fn typecheck_body(
                         TypecheckError::new(
                             node.span.clone(),
                             NotEnoughData,
-                            "Not enough data to pop",
+                            "Not enough data for ptr+",
                         )
                     })?;
                     let pointer = stack.pop(heap).ok_or_else(|| {
                         TypecheckError::new(
                             node.span.clone(),
                             NotEnoughData,
-                            "Not enough data to pop",
+                            "Not enough data for ptr+",
                         )
                     })?;
                     if !pointer.is_ptr() || !matches!(offset, Type::U64) {
@@ -450,10 +513,20 @@ fn typecheck_body(
                                 actual: vec![pointer, offset],
                                 expected: vec![Type::ptr_to(Type::ANY), Type::U64],
                             },
-                            "Wrong types for ptr+",
+                            "Wrong types for ptr-",
                         );
                     }
                     stack.push(heap, pointer)
+                }
+                &Intrinsic::Cast(ty) => {
+                    if !expect_arity(1, stack, heap) {
+                        return error(
+                            node.span.clone(),
+                            NotEnoughData,
+                            "Not enough data on the stck for cast operation",
+                        );
+                    }
+                    stack.push(heap, ty)
                 }
 
                 Intrinsic::CompStop => {
@@ -798,6 +871,27 @@ fn typecheck_cond(
             }
         }
         first_branch = false;
+    }
+
+    let mut default_branch_stack = TypeStack::default();
+    typecheck_body(
+        name,
+        &cond.other,
+        &mut default_branch_stack,
+        heap,
+        items,
+        in_const,
+        bindings,
+    )?;
+    if !first_branch_stack.eq(&default_branch_stack, heap) {
+        return error(
+            node.span.clone(),
+            TypeMismatch {
+                expected: first_branch_stack.into_vec(heap),
+                actual: default_branch_stack.into_vec(heap),
+            },
+            "Type mismatch between cond branches",
+        );
     }
 
     let first_branch_stack = first_branch_stack.into_vec(heap);

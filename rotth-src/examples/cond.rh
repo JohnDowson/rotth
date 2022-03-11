@@ -3,7 +3,7 @@ include "./rotth-src/std.rh"
 const QUIT: char do 'q' end
 
 proc main: u64 do
-    'q' cond
+    'w' cond
         'a' do
             "hello\n"
         else
@@ -12,6 +12,8 @@ proc main: u64 do
         else
         'c' do
             "get out\n"
+        otherwise
+            "default case\n"
     end puts
     0
 end

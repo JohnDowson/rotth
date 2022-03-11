@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     eval::eval,
     hir::{
-        AstKind, AstNode, Bind, Binding, Cond, CondBranch, Const, IConst, If, Intrinsic, Proc,
+        AstKind, AstNode, Bind, Binding, Cond, CondBranch, Const, IConst, If, Intrinsic, Mem, Proc,
         TopLevel, Type, While,
     },
     span::Span,
@@ -13,6 +13,7 @@ use crate::{
 pub enum Op {
     Push(IConst),
     PushStr(usize),
+    PushMem(String),
     Drop,
     Dup,
     Swap,
@@ -66,6 +67,12 @@ enum ComConst {
     NotCompiled(Const),
 }
 
+#[derive(Clone)]
+enum ComMem {
+    Compiled(usize),
+    NotCompiled(Mem),
+}
+
 pub struct Compiler {
     label: usize,
     mangle_table: HashMap<String, String>,
@@ -75,14 +82,15 @@ pub struct Compiler {
     consts: HashMap<String, ComConst>,
     strings: Vec<String>,
     bindings: Vec<Vec<String>>,
+    mems: HashMap<String, ComMem>,
 }
 
 impl Compiler {
     pub fn compile(
         mut self,
         items: HashMap<String, (TopLevel, Span, bool)>,
-    ) -> (Vec<Op>, Vec<String>) {
-        let (procs, consts) = items
+    ) -> (Vec<Op>, Vec<String>, HashMap<String, usize>) {
+        let (procs, consts_and_mems) = items
             .into_iter()
             .partition::<Vec<_>, _>(|(_, (it, _, _))| matches!(it, TopLevel::Proc(_)));
         let procs = procs
@@ -101,7 +109,26 @@ impl Compiler {
             })
             .collect::<Vec<_>>();
 
-        let consts = consts
+        let (consts, mems) = consts_and_mems
+            .into_iter()
+            .partition::<Vec<_>, _>(|(_, (it, _, _))| matches!(it, TopLevel::Const(_)));
+
+        self.mems = mems
+            .into_iter()
+            .filter_map(|(name, (mem, _, needed))| {
+                if let TopLevel::Mem(mem) = mem {
+                    if needed {
+                        (name, ComMem::NotCompiled(mem)).some()
+                    } else {
+                        None
+                    }
+                } else {
+                    unreachable!()
+                }
+            })
+            .collect::<HashMap<_, _>>();
+
+        self.consts = consts
             .into_iter()
             .filter_map(|(name, (const_, _, needed))| {
                 if let TopLevel::Const(const_) = const_ {
@@ -115,7 +142,6 @@ impl Compiler {
                 }
             })
             .collect::<HashMap<_, _>>();
-        self.consts = consts;
 
         self.emit(Call("main".to_string()));
 
@@ -124,7 +150,21 @@ impl Compiler {
             self.compile_proc(name, proc)
         }
 
-        (self.result, self.strings)
+        (
+            self.result,
+            self.strings,
+            self.mems
+                .into_iter()
+                .map(|(nm, sz)| {
+                    (nm, {
+                        match sz {
+                            ComMem::Compiled(sz) => sz,
+                            ComMem::NotCompiled(_) => unreachable!(),
+                        }
+                    })
+                })
+                .collect(),
+        )
     }
 
     fn compile_proc(&mut self, name: String, proc: Proc) {
@@ -194,6 +234,40 @@ impl Compiler {
         const_
     }
 
+    fn compile_mem(&mut self, name: &String) {
+        let mem = match self.mems.get(name) {
+            Some(ComMem::Compiled(_)) => return,
+            Some(ComMem::NotCompiled(c)) => c.clone(),
+            None => unreachable!(),
+        };
+        let Mem { body } = mem;
+        let mut com = Self::with_consts_and_strings(self.consts.clone(), self.strings.clone());
+        com.compile_body(body.clone());
+        self.consts = com.consts;
+        self.strings = com.strings;
+        let ops = com.result;
+        let size;
+        match eval(ops, &self.strings) {
+            Ok(Either::Right(bytes)) => size = bytes[0] as usize,
+            Err(req) => {
+                self.compile_const(req);
+                let mut com =
+                    Self::with_consts_and_strings(self.consts.clone(), self.strings.clone());
+                com.compile_body(body);
+                com.emit(Exit);
+                let ops = com.result;
+                self.consts = com.consts;
+                self.strings = com.strings;
+                match eval(ops, &self.strings) {
+                    Ok(Either::Right(bytes)) => size = bytes[0] as usize,
+                    _ => unreachable!(),
+                }
+            }
+            Ok(Either::Left(_)) => unreachable!(),
+        };
+        self.mems.insert(name.clone(), ComMem::Compiled(size));
+    }
+
     fn compile_body(&mut self, body: Vec<AstNode>) {
         for node in body {
             match node.ast {
@@ -212,6 +286,10 @@ impl Compiler {
                     for c in c {
                         self.emit(Push(c))
                     }
+                }
+                AstKind::Word(w) if self.is_mem(&w) => {
+                    self.compile_mem(&w);
+                    self.emit(PushMem(w))
                 }
                 AstKind::Word(w) if self.is_binding(&w) => {
                     let offset = self
@@ -237,6 +315,7 @@ impl Compiler {
                     Intrinsic::WriteU8 => self.emit(WriteU8),
                     Intrinsic::PtrAdd => self.emit(Add),
                     Intrinsic::PtrSub => self.emit(Sub),
+                    Intrinsic::Cast(_) => (), // this is a noop
 
                     Intrinsic::Add => self.emit(Add),
                     Intrinsic::Sub => self.emit(Sub),
@@ -327,6 +406,7 @@ impl Compiler {
         let num_branches = cond.branches.len() - 1;
         let mut this_branch_label = self.gen_label();
         let mut next_branch_label = self.gen_label();
+        let default_branch_label = self.gen_label();
         for (i, CondBranch { pattern, body }) in cond.branches.into_iter().enumerate() {
             if i != 0 {
                 self.emit(Label(this_branch_label));
@@ -343,12 +423,17 @@ impl Compiler {
             self.emit(Eq);
             if i < num_branches {
                 self.emit(JumpF(next_branch_label.clone()));
+            } else {
+                self.emit(JumpF(default_branch_label.clone()));
             }
             this_branch_label = next_branch_label;
             next_branch_label = self.gen_label();
             self.compile_body(body);
             self.emit(Jump(phi_label.clone()));
         }
+        self.emit(Label(default_branch_label));
+        self.compile_body(cond.other);
+
         self.emit(Label(phi_label))
     }
 
@@ -372,6 +457,7 @@ impl Compiler {
             consts: Default::default(),
             strings: Default::default(),
             bindings: Default::default(),
+            mems: Default::default(),
         }
     }
     fn with_consts_and_strings(consts: HashMap<String, ComConst>, strings: Vec<String>) -> Self {
@@ -384,6 +470,7 @@ impl Compiler {
             consts,
             strings,
             bindings: Default::default(),
+            mems: Default::default(),
         }
     }
 
@@ -407,6 +494,9 @@ impl Compiler {
     }
     fn is_binding(&self, w: &str) -> bool {
         self.bindings.iter().flatten().any(|n| n == w)
+    }
+    fn is_mem(&self, w: &str) -> bool {
+        self.mems.contains_key(w)
     }
 }
 

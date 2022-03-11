@@ -2,4 +2,4 @@ proc main: u64 do
     foo drop 0
 end
 
-proc foo: &> &> &> &> &> char do &?& end
+proc foo: &>&>&>&>&>char do &?& end

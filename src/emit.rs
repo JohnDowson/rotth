@@ -1,6 +1,10 @@
 use crate::{hir::IConst, lir::Op};
 use indoc::indoc;
-use std::io::{BufWriter, Write};
+use somok::Somok;
+use std::{
+    collections::HashMap,
+    io::{BufWriter, Write},
+};
 
 pub struct Compiler {}
 
@@ -13,6 +17,7 @@ impl Compiler {
         self,
         ops: Vec<Op>,
         strings: &[String],
+        mems: &HashMap<String, usize>,
         mut sink: BufWriter<S>,
     ) -> std::io::Result<()> {
         use Op::*;
@@ -30,6 +35,14 @@ impl Compiler {
         )?;
         for op in ops {
             match &op {
+                PushMem(nm) => write!(
+                    sink,
+                    indoc! {"
+                    ; {:?}
+                        push mem_{}
+                    "},
+                    op, nm
+                )?,
                 PushStr(i) => write!(
                     sink,
                     indoc! {"
@@ -526,7 +539,18 @@ impl Compiler {
                 ret_stack: resb 65536
                 ret_stack_end:
         "},
-        )
+        )?;
+        for (name, size) in mems {
+            write!(
+                sink,
+                indoc! {"
+            mem_{}:
+                resb {}
+        "},
+                name, size
+            )?;
+        }
+        ().okay()
     }
 }
 

@@ -60,66 +60,74 @@ pub struct Signature {
     pub outs: Vec<Type>,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Type {
-    ptr_depth: Option<u8>,
+    ptr_depth: u8,
     value_type: ValueType,
+}
+
+impl std::fmt::Debug for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}{:?}",
+            "&>".repeat(self.ptr_depth as usize),
+            self.value_type
+        )
+    }
 }
 impl Type {
     pub const BOOL: Self = Type {
-        ptr_depth: None,
+        ptr_depth: 0,
         value_type: ValueType::Bool,
     };
 
     pub const CHAR: Self = Type {
-        ptr_depth: None,
+        ptr_depth: 0,
         value_type: ValueType::Char,
     };
 
     pub const U64: Self = Type {
-        ptr_depth: None,
+        ptr_depth: 0,
         value_type: ValueType::U64,
     };
     pub const U32: Self = Type {
-        ptr_depth: None,
+        ptr_depth: 0,
         value_type: ValueType::U32,
     };
     pub const U16: Self = Type {
-        ptr_depth: None,
+        ptr_depth: 0,
         value_type: ValueType::U16,
     };
     pub const U8: Self = Type {
-        ptr_depth: None,
+        ptr_depth: 0,
         value_type: ValueType::U8,
     };
 
     pub const I64: Self = Type {
-        ptr_depth: None,
+        ptr_depth: 0,
         value_type: ValueType::I64,
     };
     pub const I32: Self = Type {
-        ptr_depth: None,
+        ptr_depth: 0,
         value_type: ValueType::I32,
     };
     pub const I16: Self = Type {
-        ptr_depth: None,
+        ptr_depth: 0,
         value_type: ValueType::I16,
     };
     pub const I8: Self = Type {
-        ptr_depth: None,
+        ptr_depth: 0,
         value_type: ValueType::I8,
     };
 
     pub const ANY: Self = Type {
-        ptr_depth: None,
+        ptr_depth: 0,
         value_type: ValueType::Any,
     };
 
     pub fn ptr_to(ty: Self) -> Self {
-        let ptr_depth = match ty.ptr_depth {
-            Some(depth) => Some(depth + 1),
-            None => Some(1),
-        };
+        let ptr_depth = ty.ptr_depth + 1;
         Self {
             ptr_depth,
             value_type: ty.value_type,
@@ -127,12 +135,12 @@ impl Type {
     }
 
     pub fn is_ptr(&self) -> bool {
-        self.ptr_depth.is_some()
+        self.ptr_depth > 0
     }
     pub fn is_ptr_to(&self, ty: Self) -> bool {
         self.is_ptr()
             && Self {
-                ptr_depth: self.ptr_depth.map(|d| d - 1),
+                ptr_depth: self.ptr_depth.saturating_sub(1),
                 value_type: self.value_type,
             } == ty
     }
@@ -164,8 +172,16 @@ pub struct Proc {
 fn ty() -> impl Parser<Token, Type, Error = Simple<Token, Span>> {
     let value_type = filter_map(|s, t| match &t {
         Token::Word(ty) => match &**ty {
-            "i64" => Type::I64.okay(),
             "u64" => Type::U64.okay(),
+            "u32" => Type::U32.okay(),
+            "u16" => Type::U16.okay(),
+            "u8" => Type::U8.okay(),
+
+            "i64" => Type::I64.okay(),
+            "i32" => Type::I32.okay(),
+            "i16" => Type::I16.okay(),
+            "i8" => Type::I8.okay(),
+
             "bool" => Type::BOOL.okay(),
             "char" => Type::CHAR.okay(),
             _ => Simple::expected_input_found(
@@ -183,7 +199,7 @@ fn ty() -> impl Parser<Token, Type, Error = Simple<Token, Span>> {
         .error(),
     });
     let ptr_type = recursive(|p_ty| {
-        just(Token::KeyWord(KeyWord::Ptr))
+        just(Token::Ptr)
             .ignore_then(choice((p_ty, value_type)))
             .map(Type::ptr_to)
     });
@@ -237,6 +253,7 @@ pub enum AstKind {
 #[derive(Debug, Clone)]
 pub struct Cond {
     pub branches: Vec<CondBranch>,
+    pub other: Vec<AstNode>,
 }
 
 #[derive(Debug, Clone)]
@@ -254,6 +271,8 @@ pub enum Intrinsic {
 
     PtrAdd,
     PtrSub,
+    Cast(Type),
+
     ReadU8,
     WriteU8,
 
@@ -657,25 +676,32 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
             ast: AstKind::Return,
         });
 
-        let pattern = choice((num, char, word()));
+        let cast = just(Token::KeyWord(KeyWord::Cast))
+            .ignore_then(ty())
+            .map_with_span(|ty, span| AstNode {
+                span,
+                ast: AstKind::Intrinsic(Intrinsic::Cast(ty)),
+            });
+
+        let pattern = choice((num, char, bool, word()));
         let cond_branch = pattern
             .then_ignore(just(Token::KeyWord(KeyWord::Do)))
-            .then(body.clone());
+            .then(body.clone())
+            .map(|(pattern, body)| CondBranch { pattern, body });
         let cond = just(Token::KeyWord(KeyWord::Cond))
             .ignore_then(
                 cond_branch
                     .separated_by(just(Token::KeyWord(KeyWord::Else)))
                     .at_least(1),
             )
-            .then_ignore(just(Token::KeyWord(KeyWord::End)))
-            .map_with_span(|branches, span| AstNode {
+            .then(
+                just(Token::KeyWord(KeyWord::Otherwise))
+                    .ignore_then(body)
+                    .then_ignore(just(Token::KeyWord(KeyWord::End))),
+            )
+            .map_with_span(|(branches, other), span| AstNode {
                 span,
-                ast: AstKind::Cond(Cond {
-                    branches: branches
-                        .into_iter()
-                        .map(|(pattern, body)| CondBranch { pattern, body })
-                        .collect(),
-                }),
+                ast: AstKind::Cond(Cond { branches, other }),
             });
 
         choice((
@@ -689,6 +715,7 @@ fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clo
             cond,
             while_,
             bind,
+            cast,
         ))
         .repeated()
     })
@@ -719,10 +746,16 @@ fn include() -> impl Parser<Token, (String, (TopLevel, Span)), Error = Simple<To
 }
 
 #[derive(Debug, Clone)]
+pub struct Mem {
+    pub body: Vec<AstNode>,
+}
+
+#[derive(Debug, Clone)]
 pub enum TopLevel {
     Proc(Proc),
     Const(Const),
     Include(PathBuf),
+    Mem(Mem),
 }
 impl TopLevel {
     pub fn as_proc(&self) -> Option<&Proc> {
@@ -742,15 +775,25 @@ impl TopLevel {
     }
 }
 
-fn procs() -> impl Parser<Token, Vec<(String, (TopLevel, Span))>, Error = Simple<Token, Span>> {
-    choice((proc(), constant(), include()))
+fn mem() -> impl Parser<Token, (String, (TopLevel, Span)), Error = Simple<Token, Span>> {
+    just(Token::KeyWord(KeyWord::Mem))
+        .ignore_then(identifier())
+        .then_ignore(just(Token::KeyWord(KeyWord::Do)))
+        .then(body())
+        .then_ignore(just(Token::KeyWord(KeyWord::End)))
+        .map_with_span(|(name, body), span| (name, (TopLevel::Mem(Mem { body }), span)))
+}
+
+fn toplevel_items(
+) -> impl Parser<Token, Vec<(String, (TopLevel, Span))>, Error = Simple<Token, Span>> {
+    choice((proc(), constant(), include(), mem()))
         .repeated()
         .then_ignore(end())
         .collect()
 }
 
 pub fn parse(tokens: Vec<(Token, Span)>) -> Result<HashMap<String, (TopLevel, Span)>, Error> {
-    let items = match procs().parse(Stream::from_iter(
+    let items = match toplevel_items().parse(Stream::from_iter(
         tokens.last().unwrap().1.clone(),
         tokens.into_iter(),
     )) {

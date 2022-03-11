@@ -23,6 +23,9 @@ pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<Either<u64, Vec<u64>>, S
         #[cfg(debug_assertions)]
         println!("{}:\t{:?}", i, op);
         match op {
+            Op::PushMem(_i) => {
+                todo!("Support memories in eval")
+            }
             Op::PushStr(i) => {
                 let len = strings[*i].len() as u64;
                 stack.push(len);

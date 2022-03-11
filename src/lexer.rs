@@ -13,6 +13,7 @@ pub enum Token {
     Num(String),
     Ignore,
     SigSep,
+    Ptr,
 }
 
 impl std::fmt::Debug for Token {
@@ -23,8 +24,9 @@ impl std::fmt::Debug for Token {
             Self::Char(c) => write!(f, "{:?}", c),
             Self::KeyWord(keyword) => keyword.fmt(f),
             Self::Num(num) => write!(f, "{}", num),
-            Self::Ignore => write!(f, "i_"),
+            Self::Ignore => write!(f, "_"),
             Self::SigSep => write!(f, ":"),
+            Self::Ptr => write!(f, "&>"),
         }
     }
 }
@@ -34,6 +36,7 @@ pub enum KeyWord {
     Include,
     Return,
     Cond,
+    Otherwise,
     If,
     Else,
     Proc,
@@ -41,8 +44,9 @@ pub enum KeyWord {
     Do,
     Bind,
     Const,
+    Mem,
+    Cast,
     End,
-    Ptr,
 }
 
 pub fn word_parser<C: Character, E: CError<C>>(
@@ -112,6 +116,7 @@ where
             "include" => KeyWord::Include,
             "return" => KeyWord::Return,
             "cond" => KeyWord::Cond,
+            "otherwise" => KeyWord::Otherwise,
             "if" => KeyWord::If,
             "else" => KeyWord::Else,
             "proc" => KeyWord::Proc,
@@ -119,8 +124,9 @@ where
             "do" => KeyWord::Do,
             "bind" => KeyWord::Bind,
             "const" => KeyWord::Const,
+            "mem" => KeyWord::Mem,
+            "cast" => KeyWord::Cast,
             "end" => KeyWord::End,
-            "&>" => KeyWord::Ptr,
             _ => return Simple::custom(s, "Invalid keyword".to_string()).error(),
         })
         .okay()
@@ -131,11 +137,14 @@ where
         _ => Simple::custom(s, "Invalid keyword".to_string()).error(),
     });
 
-    let sig_sep = just(':').map(|_| Token::SigSep);
+    let ptr = just('&').ignore_then(just('>').ignored()).to(Token::Ptr);
+
+    let sig_sep = just(':').to(Token::SigSep);
 
     let token = num
         .or(char)
         .or(string)
+        .or(ptr)
         .or(sig_sep)
         .or(ignore)
         .or(keyword)

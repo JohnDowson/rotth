@@ -5,11 +5,60 @@ const STDIN: u64 do 0 end
 const STDOUT: u64 do 1 end
 const STDERR: u64 do 2 end
 
-proc puts u64 &> char do
+mem PUTU_BUF do 32 end
+
+proc utoa &>u8 u64 : u64 &>char do
+    0
+    bind buf: &>u8 u: u64 n: u64 do
+        u 0 = if
+            '0' cast u8 buf !u8
+            '\n' cast u8 buf 1 ptr+ !u8
+            2 buf cast &>char return
+        end
+        n
+        u while dup 0 != do
+            bind n: u64 u: u64 do
+                u 10 mod '0' cast u64 +
+                cast u8
+                buf n ptr+ !u8
+                n 1 + u 10 div
+            end
+        end drop
+        bind n: u64 do
+            n buf rev-slice
+            n 1 + buf cast &>char
+        end
+    end
+end
+
+proc rev-slice u64 &>u8 do
+    bind n: u64 buf: &>u8 do
+        0
+        n 1 -
+        while over over < do
+            bind start: u64 finish: u64 do
+                buf start ptr+ @u8 cast u8
+                buf finish ptr+ @u8 cast u8
+
+                buf start ptr+ !u8
+                buf finish ptr+ !u8
+
+                start 1 +
+                finish 1 -
+            end
+        end drop drop
+    end
+end
+
+proc putu u64 do
+    PUTU_BUF swap utoa puts
+end
+
+proc puts u64 &>char do
     STDOUT SYS_write syscall3 drop
 end
 
-proc eputs u64 &> char do
+proc eputs u64 &>char do
     STDERR SYS_write syscall3 drop
 end
 
@@ -23,4 +72,16 @@ end
 
 proc mod u64 u64 : u64 do
     divmod swap drop
+end
+
+proc and bool bool : bool do
+    cast u64 swap cast u64 + 2 =
+end
+
+proc not bool : bool do
+    if false else true end
+end
+
+proc or bool bool : bool do
+    cast u64 swap cast u64 + 0 >
 end
