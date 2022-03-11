@@ -2,6 +2,6 @@ proc foo do
     foo
 end
 
-proc main : u64 do
+proc main: u64 do
     foo 1
 end

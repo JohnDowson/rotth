@@ -154,12 +154,12 @@ impl Compiler {
         match eval(ops, &self.strings) {
             Ok(Either::Right(bytes)) => {
                 for (ty, bytes) in types.iter().zip(bytes) {
-                    match ty {
-                        Type::Bool => const_.push(IConst::Bool(bytes == 1)),
+                    match *ty {
+                        Type::BOOL => const_.push(IConst::Bool(bytes == 1)),
                         Type::U64 => const_.push(IConst::U64(bytes)),
                         Type::I64 => const_.push(IConst::I64(bytes as i64)),
-                        Type::Char => const_.push(IConst::Char(bytes as u8 as char)),
-                        Type::Ptr => todo!("Figure out a way to support const string literals"),
+                        Type::CHAR => const_.push(IConst::Char(bytes as u8 as char)),
+                        _ => todo!("Handle pointer types?"),
                     }
                 }
             }
@@ -175,14 +175,12 @@ impl Compiler {
                 match eval(ops, &self.strings) {
                     Ok(Either::Right(bytes)) => {
                         for (ty, bytes) in types.iter().zip(bytes) {
-                            match ty {
-                                Type::Bool => const_.push(IConst::Bool(bytes == 1)),
+                            match *ty {
+                                Type::BOOL => const_.push(IConst::Bool(bytes == 1)),
                                 Type::U64 => const_.push(IConst::U64(bytes)),
                                 Type::I64 => const_.push(IConst::I64(bytes as i64)),
-                                Type::Char => const_.push(IConst::Char(bytes as u8 as char)),
-                                Type::Ptr => {
-                                    todo!("Figure out a way to support const string literals")
-                                }
+                                Type::CHAR => const_.push(IConst::Char(bytes as u8 as char)),
+                                _ => todo!("Handle pointer types?"),
                             }
                         }
                     }

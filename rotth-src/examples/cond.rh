@@ -1,8 +1,8 @@
 include "./rotth-src/std.rh"
 
-const QUIT : char do 'q' end
+const QUIT: char do 'q' end
 
-proc main : u64 do
+proc main: u64 do
     'q' cond
         'a' do
             "hello\n"

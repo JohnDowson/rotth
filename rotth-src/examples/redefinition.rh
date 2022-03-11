@@ -1,6 +1,6 @@
 include "./std.rh"
 
-proc main : u64 do
+proc main: u64 do
 end
 
 proc puts do

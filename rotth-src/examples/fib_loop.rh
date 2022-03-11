@@ -1,4 +1,4 @@
-proc main : u64 do
+proc main: u64 do
     1 while dup 10 < do
         dup fib print
         1 +

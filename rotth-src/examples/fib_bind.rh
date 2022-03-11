@@ -1,4 +1,4 @@
-proc main : u64 do
+proc main: u64 do
     25 fib print
     0
 end
@@ -7,7 +7,7 @@ proc fib u64 : u64 do
     dup 3 <= if
         drop 1
     else
-        bind n : u64 do
+        bind n: u64 do
             n 1 - fib n 2 - fib +
         end
     end

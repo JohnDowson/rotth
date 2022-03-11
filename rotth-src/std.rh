@@ -1,15 +1,15 @@
-const SYS_write : u64 do 1 end
-const SYS_exit : u64 do 60 end
+const SYS_write: u64 do 1 end
+const SYS_exit: u64 do 60 end
 
-const STDIN : u64 do 0 end
-const STDOUT : u64 do 1 end
-const STDERR : u64 do 2 end
+const STDIN: u64 do 0 end
+const STDOUT: u64 do 1 end
+const STDERR: u64 do 2 end
 
-proc puts u64 ptr do
+proc puts u64 &> char do
     STDOUT SYS_write syscall3 drop
 end
 
-proc eputs u64 ptr do
+proc eputs u64 &> char do
     STDERR SYS_write syscall3 drop
 end
 

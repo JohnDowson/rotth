@@ -1,4 +1,4 @@
-proc main : u64 do
+proc main: u64 do
     5 2 div print
     0
 end

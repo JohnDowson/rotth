@@ -1,6 +1,6 @@
 include "./rotth-src/std.rh"
 
-proc main : u64 do
+proc main: u64 do
     "hello\n"
     dup 'f' swap !u8 puts
     0

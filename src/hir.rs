@@ -61,12 +61,99 @@ pub struct Signature {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum Type {
+pub struct Type {
+    ptr_depth: Option<u8>,
+    value_type: ValueType,
+}
+impl Type {
+    pub const BOOL: Self = Type {
+        ptr_depth: None,
+        value_type: ValueType::Bool,
+    };
+
+    pub const CHAR: Self = Type {
+        ptr_depth: None,
+        value_type: ValueType::Char,
+    };
+
+    pub const U64: Self = Type {
+        ptr_depth: None,
+        value_type: ValueType::U64,
+    };
+    pub const U32: Self = Type {
+        ptr_depth: None,
+        value_type: ValueType::U32,
+    };
+    pub const U16: Self = Type {
+        ptr_depth: None,
+        value_type: ValueType::U16,
+    };
+    pub const U8: Self = Type {
+        ptr_depth: None,
+        value_type: ValueType::U8,
+    };
+
+    pub const I64: Self = Type {
+        ptr_depth: None,
+        value_type: ValueType::I64,
+    };
+    pub const I32: Self = Type {
+        ptr_depth: None,
+        value_type: ValueType::I32,
+    };
+    pub const I16: Self = Type {
+        ptr_depth: None,
+        value_type: ValueType::I16,
+    };
+    pub const I8: Self = Type {
+        ptr_depth: None,
+        value_type: ValueType::I8,
+    };
+
+    pub const ANY: Self = Type {
+        ptr_depth: None,
+        value_type: ValueType::Any,
+    };
+
+    pub fn ptr_to(ty: Self) -> Self {
+        let ptr_depth = match ty.ptr_depth {
+            Some(depth) => Some(depth + 1),
+            None => Some(1),
+        };
+        Self {
+            ptr_depth,
+            value_type: ty.value_type,
+        }
+    }
+
+    pub fn is_ptr(&self) -> bool {
+        self.ptr_depth.is_some()
+    }
+    pub fn is_ptr_to(&self, ty: Self) -> bool {
+        self.is_ptr()
+            && Self {
+                ptr_depth: self.ptr_depth.map(|d| d - 1),
+                value_type: self.value_type,
+            } == ty
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ValueType {
     Bool,
-    U64,
-    I64,
-    Ptr,
     Char,
+
+    U64,
+    U32,
+    U16,
+    U8,
+
+    I64,
+    I32,
+    I16,
+    I8,
+
+    Any,
 }
 
 #[derive(Debug, Clone)]
@@ -75,13 +162,12 @@ pub struct Proc {
     pub body: Vec<AstNode>,
 }
 fn ty() -> impl Parser<Token, Type, Error = Simple<Token, Span>> {
-    filter_map(|s, t| match &t {
+    let value_type = filter_map(|s, t| match &t {
         Token::Word(ty) => match &**ty {
             "i64" => Type::I64.okay(),
             "u64" => Type::U64.okay(),
-            "bool" => Type::Bool.okay(),
-            "ptr" => Type::Ptr.okay(),
-            "char" => Type::Char.okay(),
+            "bool" => Type::BOOL.okay(),
+            "char" => Type::CHAR.okay(),
             _ => Simple::expected_input_found(
                 s,
                 vec![Some(Token::Word("type".to_string()))],
@@ -91,15 +177,17 @@ fn ty() -> impl Parser<Token, Type, Error = Simple<Token, Span>> {
         },
         _ => Simple::expected_input_found(
             s,
-            vec![
-                Some(Token::Word("int".to_string())),
-                Some(Token::Word("uint".to_string())),
-                Some(Token::Word("bool".to_string())),
-            ],
+            vec![Some(Token::Word("some-type".to_string()))],
             Some(t),
         )
         .error(),
-    })
+    });
+    let ptr_type = recursive(|p_ty| {
+        just(Token::KeyWord(KeyWord::Ptr))
+            .ignore_then(choice((p_ty, value_type)))
+            .map(Type::ptr_to)
+    });
+    choice((value_type, ptr_type))
 }
 
 fn proc() -> impl Parser<Token, (String, (TopLevel, Span)), Error = Simple<Token, Span>> {

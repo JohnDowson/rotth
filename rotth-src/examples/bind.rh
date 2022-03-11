@@ -1,8 +1,8 @@
 include "./rotth-src/std.rh"
 
-proc main : u64 do
+proc main: u64 do
     "hello"
-    bind len : u64 str : ptr  do
+    bind len: u64 str: ptr  do
         1 while dup len <= do
             dup str puts "\n" puts
             1 +

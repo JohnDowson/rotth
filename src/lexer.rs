@@ -42,6 +42,7 @@ pub enum KeyWord {
     Bind,
     Const,
     End,
+    Ptr,
 }
 
 pub fn word_parser<C: Character, E: CError<C>>(
@@ -119,6 +120,7 @@ where
             "bind" => KeyWord::Bind,
             "const" => KeyWord::Const,
             "end" => KeyWord::End,
+            "&>" => KeyWord::Ptr,
             _ => return Simple::custom(s, "Invalid keyword".to_string()).error(),
         })
         .okay()

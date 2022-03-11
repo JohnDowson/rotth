@@ -1,4 +1,4 @@
-proc main : u64 do
+proc main  u64 do
     25 fib print
     0
 end

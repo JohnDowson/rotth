@@ -1,7 +1,7 @@
-proc main : u64 do
+proc main: u64 do
     'a' 'a' = print
     1 1 = print
-    "hello" bind _ ptr : ptr do
+    "hello" bind _ ptr: ptr do
         ptr ptr = print
     end
     0

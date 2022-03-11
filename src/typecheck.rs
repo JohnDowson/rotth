@@ -202,14 +202,14 @@ fn typecheck_body(
     for node in body {
         match &node.ast {
             AstKind::Literal(c) => match c {
-                IConst::Bool(_) => stack.push(heap, Type::Bool),
+                IConst::Bool(_) => stack.push(heap, Type::BOOL),
                 IConst::U64(_) => stack.push(heap, Type::U64),
                 IConst::I64(_) => stack.push(heap, Type::I64),
-                IConst::Ptr(_) => stack.push(heap, Type::Ptr),
-                IConst::Char(_) => stack.push(heap, Type::Char),
+                IConst::Ptr(_) => stack.push(heap, Type::ptr_to(Type::U64)),
+                IConst::Char(_) => stack.push(heap, Type::CHAR),
                 IConst::Str(_) => {
                     stack.push(heap, Type::U64);
-                    stack.push(heap, Type::Ptr);
+                    stack.push(heap, Type::ptr_to(Type::CHAR));
                 }
             },
             AstKind::Cond(_) => typecheck_cond(name, node, stack, heap, items, in_const, bindings)?,
@@ -363,12 +363,12 @@ fn typecheck_body(
                             "Not enough data to pop",
                         )
                     })?;
-                    if !matches!(ty, Type::Ptr) {
+                    if !ty.is_ptr() {
                         return error(
                             node.span.clone(),
                             TypeMismatch {
                                 actual: vec![ty],
-                                expected: vec![Type::Ptr],
+                                expected: vec![Type::ptr_to(Type::ANY)],
                             },
                             "Wrong types for @u8",
                         );
@@ -390,12 +390,12 @@ fn typecheck_body(
                             "Not enough data to pop",
                         )
                     })?;
-                    if !matches!((ty, ty_store), (Type::Ptr, _)) {
+                    if !ty.is_ptr_to(Type::U8) && matches!(ty_store, Type::U8) {
                         return error(
                             node.span.clone(),
                             TypeMismatch {
-                                actual: vec![ty],
-                                expected: vec![Type::Ptr],
+                                actual: vec![ty, ty_store],
+                                expected: vec![Type::ptr_to(Type::ANY)],
                             },
                             "Wrong types for !u8",
                         );
@@ -416,17 +416,17 @@ fn typecheck_body(
                             "Not enough data to pop",
                         )
                     })?;
-                    if !matches!((pointer, offset), (Type::Ptr, Type::U64)) {
+                    if !pointer.is_ptr() || !matches!(offset, Type::U64) {
                         return error(
                             node.span.clone(),
                             TypeMismatch {
                                 actual: vec![pointer, offset],
-                                expected: vec![Type::Ptr, Type::U64],
+                                expected: vec![Type::ptr_to(Type::ANY), Type::U64],
                             },
                             "Wrong types for ptr+",
                         );
                     }
-                    stack.push(heap, Type::Ptr)
+                    stack.push(heap, pointer)
                 }
                 Intrinsic::PtrSub => {
                     let offset = stack.pop(heap).ok_or_else(|| {
@@ -443,17 +443,17 @@ fn typecheck_body(
                             "Not enough data to pop",
                         )
                     })?;
-                    if !matches!((pointer, offset), (Type::Ptr, Type::U64)) {
+                    if !pointer.is_ptr() || !matches!(offset, Type::U64) {
                         return error(
                             node.span.clone(),
                             TypeMismatch {
                                 actual: vec![pointer, offset],
-                                expected: vec![Type::Ptr, Type::U64],
+                                expected: vec![Type::ptr_to(Type::ANY), Type::U64],
                             },
-                            "Wrong types for ptr-",
+                            "Wrong types for ptr+",
                         );
                     }
-                    stack.push(heap, Type::Ptr)
+                    stack.push(heap, pointer)
                 }
 
                 Intrinsic::CompStop => {
@@ -607,14 +607,14 @@ fn typecheck_body(
                 let ty = stack.pop(heap).ok_or_else(|| {
                     TypecheckError::new(node.span.clone(), NotEnoughData, "Not enough data for if")
                 })?;
-                if ty != Type::Bool {
+                if ty != Type::BOOL {
                     return error(
                         node.span.clone(),
                         TypeMismatch {
                             actual: vec![ty],
-                            expected: vec![Type::Bool],
+                            expected: vec![Type::BOOL],
                         },
-                        "If expects a bool",
+                        "If expects to consume a bool",
                     );
                 }
                 typecheck_if(
@@ -638,12 +638,12 @@ fn typecheck_body(
                         "Not enough data for while",
                     )
                 })?;
-                if ty != Type::Bool {
+                if ty != Type::BOOL {
                     return error(
                         node.span.clone(),
                         TypeMismatch {
                             actual: vec![ty],
-                            expected: vec![Type::Bool],
+                            expected: vec![Type::BOOL],
                         },
                         "While expects to consume a bool",
                     );
@@ -721,12 +721,12 @@ fn typecheck_cond(
     for CondBranch { pattern, body } in &cond.branches {
         let pat_ty = match &pattern.ast {
             AstKind::Literal(pat) => match pat {
-                IConst::Bool(_) => Type::Bool,
+                IConst::Bool(_) => Type::BOOL,
                 IConst::U64(_) => Type::U64,
                 IConst::I64(_) => Type::I64,
-                IConst::Char(_) => Type::Char,
+                IConst::Char(_) => Type::CHAR,
                 IConst::Str(_) => todo!(),
-                IConst::Ptr(_) => Type::Ptr,
+                IConst::Ptr(_) => Type::ptr_to(Type::ANY),
             },
             AstKind::Word(const_name) if is_const(const_name, items) => {
                 typecheck_const(const_name, items)?;
@@ -871,7 +871,7 @@ fn typecheck_boolean(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) ->
         )
     })?;
     match (a, b) {
-        (a, b) if a == b => stack.push(heap, Type::Bool),
+        (a, b) if a == b => stack.push(heap, Type::BOOL),
         (a, b) => {
             return error(
                 node.span.clone(),
