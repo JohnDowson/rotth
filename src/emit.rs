@@ -1,4 +1,4 @@
-use crate::{hir::IConst, lir::Op};
+use crate::{iconst::IConst, lir::Op};
 use indoc::indoc;
 use somok::Somok;
 use std::{

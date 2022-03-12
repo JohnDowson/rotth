@@ -1,0 +1,6 @@
+proc main: u64 do
+    1 bind i: u64 do
+        i i print print
+    end
+    0
+end

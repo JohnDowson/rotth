@@ -1,4 +1,4 @@
-use crate::{hir::IConst, lir::Op};
+use crate::{iconst::IConst, lir::Op};
 use somok::{Either, Somok};
 use std::collections::HashMap;
 

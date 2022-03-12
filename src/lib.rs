@@ -1,14 +1,19 @@
 #![feature(assert_matches)]
 #![feature(iter_intersperse)]
+#![feature(box_syntax)]
+#![feature(box_patterns)]
 
+pub mod ast;
 pub mod emit;
 pub mod eval;
 pub mod hir;
+pub mod iconst;
 pub mod lexer;
 pub mod lir;
 pub mod resolver;
 pub mod span;
 pub mod typecheck;
+pub mod types;
 
 use chumsky::prelude::Simple;
 use lexer::Token;

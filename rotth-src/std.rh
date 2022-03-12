@@ -10,7 +10,7 @@ proc utoa &>u8 u64 : u64 &>char do
     bind buf: &>u8 u: u64 n: u64 do
         u 0 = if
             '0' cast u8 buf !u8
-            '\n' cast u8 buf 1 ptr+ !u8
+            '\n' cast u8 buf 1 ptr+ cast &>u8 !u8
             2 buf cast &>char return
         end
         n
@@ -18,7 +18,7 @@ proc utoa &>u8 u64 : u64 &>char do
             bind n: u64 u: u64 do
                 u 10 mod '0' cast u64 +
                 cast u8
-                buf n ptr+ !u8
+                buf n ptr+ cast &>u8 !u8
                 n 1 + u 10 div
             end
         end drop
@@ -35,11 +35,11 @@ proc rev-slice u64 &>u8 do
         n 1 -
         while over over < do
             bind start: u64 finish: u64 do
-                buf start ptr+ @u8 cast u8
-                buf finish ptr+ @u8 cast u8
+                buf start ptr+ cast &>u8 @u8 cast u8
+                buf finish ptr+ cast &>u8 @u8 cast u8
 
-                buf start ptr+ !u8
-                buf finish ptr+ !u8
+                buf start ptr+ cast &>u8 !u8
+                buf finish ptr+ cast &>u8 !u8
 
                 start 1 +
                 finish 1 -
@@ -68,9 +68,8 @@ end
 
 proc cstrlen &>char : u64 do
     cast &>u8
-    dup ; p p
+    dup
     while dup @u8 0 cast u8 != do
-        ; p p+1
         1 ptr+
     end cast u64 swap cast u64 absdiff
 end

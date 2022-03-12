@@ -6,6 +6,7 @@ use somok::Somok;
 
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub enum Token {
+    Bool(bool),
     Word(String),
     Str(String),
     Char(char),
@@ -19,6 +20,7 @@ pub enum Token {
 impl std::fmt::Debug for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Bool(b) => write!(f, "{}", b),
             Self::Word(word) => write!(f, "{}", word),
             Self::Str(str) => write!(f, "{:?}", str),
             Self::Char(c) => write!(f, "{:?}", c),
@@ -34,6 +36,7 @@ impl std::fmt::Debug for Token {
 impl std::fmt::Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Bool(b) => write!(f, "{}", b),
             Self::Word(word) => write!(f, "{}", word),
             Self::Str(str) => write!(f, "{:?}", str),
             Self::Char(c) => write!(f, "{:?}", c),
@@ -51,7 +54,6 @@ pub enum KeyWord {
     Include,
     Return,
     Cond,
-    Otherwise,
     If,
     Else,
     Proc,
@@ -70,7 +72,6 @@ impl std::fmt::Display for KeyWord {
             Self::Include => write!(f, "Include"),
             Self::Return => write!(f, "Return"),
             Self::Cond => write!(f, "Cond"),
-            Self::Otherwise => write!(f, "Otherwise"),
             Self::If => write!(f, "If"),
             Self::Else => write!(f, "Else"),
             Self::Proc => write!(f, "Proc"),
@@ -111,6 +112,7 @@ where
         '\\' => '\\',
         _ => panic!("Invalid escape sequence"),
     });
+
     let char = just('\'')
         .ignore_then(choice((escaped, any())))
         .then_ignore(just('\''))
@@ -147,12 +149,20 @@ where
 
     let word = word_parser().map(Token::Word);
 
+    let bool = word_parser().try_map(|i: String, s| {
+        Token::Bool(match i.as_str() {
+            "true" => true,
+            "false" => false,
+            _ => return Simple::custom(s, "Invalid keyword".to_string()).error(),
+        })
+        .okay()
+    });
+
     let keyword = word_parser().try_map(|i: String, s| {
         Token::KeyWord(match i.as_str() {
             "include" => KeyWord::Include,
             "return" => KeyWord::Return,
             "cond" => KeyWord::Cond,
-            "otherwise" => KeyWord::Otherwise,
             "if" => KeyWord::If,
             "else" => KeyWord::Else,
             "proc" => KeyWord::Proc,
@@ -177,14 +187,7 @@ where
 
     let sig_sep = just(':').to(Token::SigSep);
 
-    let token = num
-        .or(char)
-        .or(string)
-        .or(ptr)
-        .or(sig_sep)
-        .or(ignore)
-        .or(keyword)
-        .or(word)
+    let token = choice((num, char, string, ptr, sig_sep, ignore, bool, keyword, word))
         .recover_with(skip_then_retry_until([]));
 
     let comment = just(";").then(take_until(just('\n'))).padded();
@@ -211,7 +214,7 @@ pub fn lex(source: PathBuf) -> Result<Vec<(Token, Span)>> {
     }
 }
 
-pub fn lex_string(source: String, file: String) -> Result<Vec<(Token, Span)>> {
+pub fn lex_string(source: String, file: PathBuf) -> Result<Vec<(Token, Span)>> {
     match lexer().parse(Stream::from_iter(
         Span::new(file.clone(), source.len(), source.len()),
         source

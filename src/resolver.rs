@@ -1,16 +1,12 @@
 use crate::{
-    hir::{parse, TopLevel},
+    ast::{parse, TopLevel},
     lexer::lex,
-    span::Span,
     Result,
 };
 use somok::Somok;
 use std::path::PathBuf;
 
-pub fn resolve_include(
-    path: PathBuf,
-    existing: &mut Vec<(String, (TopLevel, Span))>,
-) -> Result<()> {
+pub fn resolve_include(path: PathBuf, existing: &mut Vec<TopLevel>) -> Result<()> {
     let source = path.canonicalize()?;
     std::env::set_current_dir(&source.parent().unwrap())?;
 
@@ -18,6 +14,6 @@ pub fn resolve_include(
 
     let ast = parse(tokens)?;
 
-    existing.extend(ast);
+    existing.extend(ast.into_iter().map(|(_, i)| i));
     ().okay()
 }

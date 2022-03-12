@@ -23,6 +23,7 @@ compiler:
     nasm -g -F dwarf -f elf64 {{root}}/print.asm -o {{root}}/print.o
     nasm -g -F dwarf -f elf64 {{compiler}}.asm -o {{compiler}}.o
     ld -o {{compiler}} {{compiler}}.o {{root}}/print.o
+    {{compiler}}
 
 clean-run FILE: clean (run FILE)
 

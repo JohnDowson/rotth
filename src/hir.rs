@@ -1,276 +1,126 @@
 use crate::{
-    lexer::{KeyWord, Token},
-    resolver::resolve_include,
+    ast::{self, AstKind, AstNode, Cast},
+    iconst::IConst,
+    lexer::KeyWord,
     span::Span,
-    Error, RedefinitionError,
+    types::Type,
 };
-use chumsky::{prelude::*, Stream};
 use somok::Somok;
-use std::{
-    collections::{hash_map::Entry, HashMap},
-    path::PathBuf,
-};
+use std::collections::HashMap;
 
-#[derive(Clone, Debug)]
-pub enum IConst {
-    Bool(bool),
-    U64(u64),
-    I64(i64),
-    Char(char),
-    Str(String),
-    Ptr(u64),
+macro_rules! coerce_ast {
+    ($node:expr => $kind:tt || None) => {
+        if let AstKind::$kind(ast) = $node.ast {
+            Some(ast)
+        } else {
+            None
+        }
+    };
+    ($node:expr => $kind:tt || $or:expr) => {
+        if let AstKind::$kind(ast) = $node.ast {
+            ast
+        } else {
+            $or
+        }
+    };
 }
 
-impl IConst {
-    pub fn as_bool(&self) -> Option<&bool> {
-        if let Self::Bool(v) = self {
-            Some(v)
-        } else {
-            None
-        }
-    }
-
-    pub fn as_u64(&self) -> Option<&u64> {
-        if let Self::U64(v) = self {
-            Some(v)
-        } else {
-            None
-        }
-    }
-
-    pub fn as_i64(&self) -> Option<&i64> {
-        if let Self::I64(v) = self {
-            Some(v)
-        } else {
-            None
-        }
-    }
-
-    pub fn as_str(&self) -> Option<&String> {
-        if let Self::Str(v) = self {
-            Some(v)
-        } else {
-            None
-        }
-    }
-}
 #[derive(Debug, Clone)]
-pub struct Signature {
-    pub ins: Vec<Type>,
-    pub outs: Vec<Type>,
+pub enum TopLevel {
+    Proc(Proc),
+    Const(Const),
+    Mem(Mem),
 }
-
-#[derive(Copy, Clone, Eq)]
-pub struct Type {
-    ptr_depth: u8,
-    value_type: ValueType,
-}
-
-impl PartialEq for Type {
-    fn eq(&self, other: &Self) -> bool {
-        if self.value_type == ValueType::Any && self.ptr_depth > 0 && other.ptr_depth > 0 {
-            true
+impl TopLevel {
+    pub fn as_proc(&self) -> Option<&Proc> {
+        if let Self::Proc(v) = self {
+            Some(v)
         } else {
-            self.value_type == other.value_type && self.ptr_depth == other.ptr_depth
-        }
-    }
-}
-
-impl std::fmt::Debug for Type {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}{:?}",
-            "&>".repeat(self.ptr_depth as usize),
-            self.value_type
-        )
-    }
-}
-impl Type {
-    pub const BOOL: Self = Type {
-        ptr_depth: 0,
-        value_type: ValueType::Bool,
-    };
-
-    pub const CHAR: Self = Type {
-        ptr_depth: 0,
-        value_type: ValueType::Char,
-    };
-
-    pub const U64: Self = Type {
-        ptr_depth: 0,
-        value_type: ValueType::U64,
-    };
-    pub const U32: Self = Type {
-        ptr_depth: 0,
-        value_type: ValueType::U32,
-    };
-    pub const U16: Self = Type {
-        ptr_depth: 0,
-        value_type: ValueType::U16,
-    };
-    pub const U8: Self = Type {
-        ptr_depth: 0,
-        value_type: ValueType::U8,
-    };
-
-    pub const I64: Self = Type {
-        ptr_depth: 0,
-        value_type: ValueType::I64,
-    };
-    pub const I32: Self = Type {
-        ptr_depth: 0,
-        value_type: ValueType::I32,
-    };
-    pub const I16: Self = Type {
-        ptr_depth: 0,
-        value_type: ValueType::I16,
-    };
-    pub const I8: Self = Type {
-        ptr_depth: 0,
-        value_type: ValueType::I8,
-    };
-
-    pub const ANY: Self = Type {
-        ptr_depth: 0,
-        value_type: ValueType::Any,
-    };
-
-    pub fn ptr_to(ty: Self) -> Self {
-        let ptr_depth = ty.ptr_depth + 1;
-        Self {
-            ptr_depth,
-            value_type: ty.value_type,
+            None
         }
     }
 
-    pub fn is_ptr(&self) -> bool {
-        self.ptr_depth > 0
+    pub fn as_const(&self) -> Option<&Const> {
+        if let Self::Const(v) = self {
+            Some(v)
+        } else {
+            None
+        }
     }
-    pub fn is_ptr_to(&self, ty: Self) -> bool {
-        self.is_ptr()
-            && Self {
-                ptr_depth: self.ptr_depth.saturating_sub(1),
-                value_type: self.value_type,
-            } == ty
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ValueType {
-    Bool,
-    Char,
-
-    U64,
-    U32,
-    U16,
-    U8,
-
-    I64,
-    I32,
-    I16,
-    I8,
-
-    Any,
 }
 
 #[derive(Debug, Clone)]
 pub struct Proc {
-    pub signature: Signature,
-    pub body: Vec<AstNode>,
-}
-fn ty() -> impl Parser<Token, Type, Error = Simple<Token, Span>> {
-    let value_type = filter_map(|s, t| match &t {
-        Token::Word(ty) => match &**ty {
-            "u64" => Type::U64.okay(),
-            "u32" => Type::U32.okay(),
-            "u16" => Type::U16.okay(),
-            "u8" => Type::U8.okay(),
-
-            "i64" => Type::I64.okay(),
-            "i32" => Type::I32.okay(),
-            "i16" => Type::I16.okay(),
-            "i8" => Type::I8.okay(),
-
-            "bool" => Type::BOOL.okay(),
-            "char" => Type::CHAR.okay(),
-            _ => Simple::expected_input_found(
-                s,
-                vec![Some(Token::Word("type".to_string()))],
-                Some(t),
-            )
-            .error(),
-        },
-        _ => Simple::expected_input_found(
-            s,
-            vec![Some(Token::Word("some-type".to_string()))],
-            Some(t),
-        )
-        .error(),
-    });
-    let any = just(Token::Word("()".to_string())).to(Type::ANY);
-    let ptr_type = recursive(|p_ty| {
-        just(Token::Ptr)
-            .ignore_then(choice((p_ty, choice((value_type, any)))))
-            .map(Type::ptr_to)
-    });
-    choice((value_type, ptr_type))
-}
-
-fn proc() -> impl Parser<Token, (String, (TopLevel, Span)), Error = Simple<Token, Span>> {
-    let sig_sep = just(Token::SigSep);
-    let signature = ty()
-        .repeated()
-        .then(sig_sep.then(ty().repeated().at_least(1)).or_not())
-        .map(|(ins, outs)| {
-            let outs = if let Some((_, types)) = outs {
-                types
-            } else {
-                vec![]
-            };
-            Signature { ins, outs }
-        });
-
-    just(Token::KeyWord(KeyWord::Proc))
-        .ignored()
-        .then(identifier())
-        .then(signature)
-        .then_ignore(just(Token::KeyWord(KeyWord::Do)))
-        .then(body())
-        .then_ignore(just(Token::KeyWord(KeyWord::End)))
-        .map_with_span(|((((), name), signature), body), s| {
-            (name, (TopLevel::Proc(Proc { signature, body }), s))
-        })
-}
-
-#[derive(Debug, Clone)]
-pub struct AstNode {
+    pub ins: Vec<Type>,
+    pub outs: Vec<Type>,
+    pub body: Vec<HirNode>,
     pub span: Span,
-    pub ast: AstKind,
 }
 
 #[derive(Debug, Clone)]
-pub enum AstKind {
-    Literal(IConst),
+pub struct Const {
+    pub outs: Vec<Type>,
+    pub body: Vec<HirNode>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Mem {
+    pub body: Vec<HirNode>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirNode {
+    pub span: Span,
+    pub hir: HirKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum HirKind {
     Word(String),
     Intrinsic(Intrinsic),
+    Bind(Bind),
+    While(While),
     If(If),
     Cond(Cond),
+    Literal(IConst),
+    IgnorePattern,
     Return,
-    While(While),
-    Bind(Bind),
+}
+
+#[derive(Debug, Clone)]
+pub struct If {
+    pub truth: Vec<HirNode>,
+    pub lie: Option<Vec<HirNode>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Cond {
     pub branches: Vec<CondBranch>,
-    pub other: Vec<AstNode>,
 }
 
 #[derive(Debug, Clone)]
 pub struct CondBranch {
-    pub pattern: AstNode,
-    pub body: Vec<AstNode>,
+    pub pattern: HirNode,
+    pub body: Vec<HirNode>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Bind {
+    pub bindings: Vec<Binding>,
+    pub body: Vec<HirNode>,
+}
+#[derive(Debug, Clone)]
+pub struct While {
+    pub cond: Vec<HirNode>,
+    pub body: Vec<HirNode>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Binding {
+    Ignore,
+    Bind { name: String, ty: Type },
 }
 
 #[derive(Debug, Clone)]
@@ -315,419 +165,290 @@ pub enum Intrinsic {
     Ge,
 }
 
-#[derive(Debug, Clone)]
-pub struct Const {
-    pub body: Vec<AstNode>,
-    pub types: Vec<Type>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Bind {
-    pub bindings: Vec<Binding>,
-    pub body: Vec<AstNode>,
-}
-
-#[derive(Debug, Clone)]
-pub enum Binding {
-    Ignore,
-    Bind { name: String, ty: Type },
-}
-
-#[derive(Debug, Clone)]
-pub struct If {
-    pub truth: Vec<AstNode>,
-    pub lie: Option<Vec<AstNode>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct While {
-    pub cond: Vec<AstNode>,
-    pub body: Vec<AstNode>,
-}
-
-fn word() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    filter_map(|span, token| {
-        match token {
-            Token::Word(ref w)
-                if matches!(
-                    w.as_str(),
-                    "drop"
-                        | "dup"
-                        | "swap"
-                        | "over"
-                        | "&?&"
-                        | "&?"
-                        | "print"
-                        | "="
-                        | "!="
-                        | "<"
-                        | "<="
-                        | ">"
-                        | ">="
-                ) =>
-            {
-                return Simple::expected_input_found(
-                    span,
-                    vec![Some(Token::Word("not-intrinsic".to_string()))],
-                    Some(token),
-                )
-                .error();
-            }
-            Token::Word(w) => AstNode {
-                ast: AstKind::Word(w),
-                span,
-            },
-            _ => {
-                return Simple::expected_input_found(
-                    span,
-                    vec![Some(Token::Word("not-intrinsic".to_string()))],
-                    Some(token),
-                )
-                .error();
-            }
-        }
-        .okay()
-    })
-}
-
-fn intrinsic() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    filter_map(|span, token| match &token {
-        Token::Word(w) => AstNode {
-            ast: match w.as_str() {
-                "drop" => AstKind::Intrinsic(Intrinsic::Drop),
-                "dup" => AstKind::Intrinsic(Intrinsic::Dup),
-                "swap" => AstKind::Intrinsic(Intrinsic::Swap),
-                "over" => AstKind::Intrinsic(Intrinsic::Over),
-
-                "@u64" => AstKind::Intrinsic(Intrinsic::ReadU64),
-                "@u8" => AstKind::Intrinsic(Intrinsic::ReadU8),
-                "!u64" => AstKind::Intrinsic(Intrinsic::WriteU64),
-                "!u8" => AstKind::Intrinsic(Intrinsic::WriteU8),
-
-                "&?&" => AstKind::Intrinsic(Intrinsic::CompStop),
-                "&?" => AstKind::Intrinsic(Intrinsic::Dump),
-                "print" => AstKind::Intrinsic(Intrinsic::Print),
-
-                "syscall0" => AstKind::Intrinsic(Intrinsic::Syscall0),
-                "syscall1" => AstKind::Intrinsic(Intrinsic::Syscall1),
-                "syscall2" => AstKind::Intrinsic(Intrinsic::Syscall2),
-                "syscall3" => AstKind::Intrinsic(Intrinsic::Syscall3),
-                "syscall4" => AstKind::Intrinsic(Intrinsic::Syscall4),
-                "syscall5" => AstKind::Intrinsic(Intrinsic::Syscall5),
-                "syscall6" => AstKind::Intrinsic(Intrinsic::Syscall6),
-
-                "argc" => AstKind::Intrinsic(Intrinsic::Argc),
-                "argv" => AstKind::Intrinsic(Intrinsic::Argv),
-
-                "+" => AstKind::Intrinsic(Intrinsic::Add),
-                "-" => AstKind::Intrinsic(Intrinsic::Sub),
-                "*" => AstKind::Intrinsic(Intrinsic::Mul),
-                "divmod" => AstKind::Intrinsic(Intrinsic::Divmod),
-
-                "=" => AstKind::Intrinsic(Intrinsic::Eq),
-                "!=" => AstKind::Intrinsic(Intrinsic::Ne),
-                "<" => AstKind::Intrinsic(Intrinsic::Lt),
-                "<=" => AstKind::Intrinsic(Intrinsic::Le),
-                ">" => AstKind::Intrinsic(Intrinsic::Gt),
-                ">=" => AstKind::Intrinsic(Intrinsic::Ge),
-                _ => {
-                    return Simple::expected_input_found(
-                        span,
-                        vec![Some(Token::Word("some-intrinsic".to_string()))],
-                        Some(token),
-                    )
-                    .error()
-                }
-            },
-            span,
-        }
-        .okay(),
-        _ => Simple::expected_input_found(
-            span,
-            vec![Some(Token::Word("some-intrinsic".to_string()))],
-            Some(token),
-        )
-        .error(),
-    })
-}
-
-fn identifier() -> impl Parser<Token, String, Error = Simple<Token, Span>> {
-    filter(|t| matches!(t, Token::Word(_))).map(|token| match token {
-        Token::Word(w) => w,
-        _ => unreachable!(),
-    })
-}
-
-fn body() -> impl Parser<Token, Vec<AstNode>, Error = Simple<Token, Span>> + Clone {
-    recursive(|body| {
-        let name_type = identifier()
-            .then_ignore(just(Token::SigSep))
-            .then(ty())
-            .map(|(name, ty)| Binding::Bind { name, ty });
-
-        let ignore = just(Token::Ignore).to(Binding::Ignore);
-
-        let bind = just(Token::KeyWord(KeyWord::Bind))
-            .ignore_then(choice((ignore, name_type)).repeated().at_least(1))
-            .then_ignore(just(Token::KeyWord(KeyWord::Do)))
-            .then(body.clone())
-            .then_ignore(just(Token::KeyWord(KeyWord::End)))
-            .map_with_span(|(bindings, body), span| AstNode {
-                ast: AstKind::Bind(Bind { bindings, body }),
-                span,
-            });
-
-        let num = filter(|t| matches!(t, Token::Num(_))).map_with_span(|token, span| AstNode {
-            ast: AstKind::Literal(if let Token::Num(n) = token {
-                IConst::U64(n.parse().unwrap())
-            } else {
-                unreachable!()
-            }),
-            span,
-        });
-
-        let char =
-            filter(|token| matches!(token, Token::Char(_))).map_with_span(
-                |token, span| match token {
-                    Token::Char(c) => AstNode {
-                        span,
-                        ast: AstKind::Literal(IConst::Char(c)),
-                    },
-                    _ => unreachable!(),
+fn intrinsic(ast: &AstNode) -> Option<HirNode> {
+    let intrinsic = match &ast.ast {
+        AstKind::Cast(Cast {
+            cast: _,
+            ty:
+                box AstNode {
+                    span: _,
+                    ast: AstKind::Type(ty),
                 },
-            );
+        }) => Intrinsic::Cast(*ty),
+        AstKind::Word(ref w) => match w.as_str() {
+            "drop" => Intrinsic::Drop,
+            "dup" => Intrinsic::Dup,
+            "swap" => Intrinsic::Swap,
+            "over" => Intrinsic::Over,
 
-        let string =
-            filter(|token| matches!(token, Token::Str(_))).map_with_span(
-                |token, span| match token {
-                    Token::Str(s) => AstNode {
-                        span,
-                        ast: AstKind::Literal(IConst::Str(s)),
-                    },
-                    _ => unreachable!(),
-                },
-            );
+            "@u64" => Intrinsic::ReadU64,
+            "@u8" => Intrinsic::ReadU8,
+            "!u64" => Intrinsic::WriteU64,
+            "!u8" => Intrinsic::WriteU8,
 
-        let bool = filter(|t| matches!(t, Token::Word(_))).try_map(|token, span| match &token {
-            Token::Word(w) => match w.as_str() {
-                "true" => AstNode {
-                    ast: AstKind::Literal(IConst::Bool(true)),
-                    span,
-                }
-                .okay(),
-                "false" => AstNode {
-                    ast: AstKind::Literal(IConst::Bool(false)),
-                    span,
-                }
-                .okay(),
-                _ => Simple::expected_input_found(
-                    span,
-                    vec![
-                        Some(Token::Word("true".to_string())),
-                        Some(Token::Word("false".to_string())),
-                    ],
-                    Some(token),
-                )
-                .error(),
-            },
-            _ => unreachable!(),
-        });
+            "&?&" => Intrinsic::CompStop,
+            "&?" => Intrinsic::Dump,
+            "print" => Intrinsic::Print,
 
-        let while_ = {
-            just(Token::KeyWord(KeyWord::While))
-                .ignore_then(body.clone())
-                .then_ignore(just(Token::KeyWord(KeyWord::Do)))
-                .then(body.clone())
-                .then_ignore(just(Token::KeyWord(KeyWord::End)))
-                .map_with_span(|(cond, body), span| AstNode {
-                    ast: AstKind::While(While { cond, body }),
-                    span,
-                })
-        };
+            "syscall0" => Intrinsic::Syscall0,
+            "syscall1" => Intrinsic::Syscall1,
+            "syscall2" => Intrinsic::Syscall2,
+            "syscall3" => Intrinsic::Syscall3,
+            "syscall4" => Intrinsic::Syscall4,
+            "syscall5" => Intrinsic::Syscall5,
+            "syscall6" => Intrinsic::Syscall6,
 
-        let if_ = {
-            let truth = body
-                .clone()
-                .then(
-                    just(Token::KeyWord(KeyWord::Else))
-                        .ignore_then(body.clone())
-                        .or_not(),
-                )
-                .then_ignore(just(Token::KeyWord(KeyWord::End)));
+            "argc" => Intrinsic::Argc,
+            "argv" => Intrinsic::Argv,
 
-            just(Token::KeyWord(KeyWord::If))
-                .ignored()
-                .then(truth)
-                .map_with_span(|((), (truth, lie)), span| AstNode {
-                    ast: AstKind::If(If { truth, lie }),
-                    span,
-                })
-        };
+            "+" => Intrinsic::Add,
+            "-" => Intrinsic::Sub,
+            "*" => Intrinsic::Mul,
+            "divmod" => Intrinsic::Divmod,
 
-        let ret = just(Token::KeyWord(KeyWord::Return)).map_with_span(|_, span| AstNode {
-            span,
-            ast: AstKind::Return,
-        });
-
-        let cast = just(Token::KeyWord(KeyWord::Cast))
-            .ignore_then(ty())
-            .map_with_span(|ty, span| AstNode {
-                span,
-                ast: AstKind::Intrinsic(Intrinsic::Cast(ty)),
-            });
-
-        let pattern = choice((num, char, bool, word()));
-        let cond_branch = pattern
-            .then_ignore(just(Token::KeyWord(KeyWord::Do)))
-            .then(body.clone())
-            .map(|(pattern, body)| CondBranch { pattern, body });
-        let cond = just(Token::KeyWord(KeyWord::Cond))
-            .ignore_then(
-                cond_branch
-                    .separated_by(just(Token::KeyWord(KeyWord::Else)))
-                    .at_least(1),
-            )
-            .then(
-                just(Token::KeyWord(KeyWord::Otherwise))
-                    .ignore_then(body)
-                    .then_ignore(just(Token::KeyWord(KeyWord::End))),
-            )
-            .map_with_span(|(branches, other), span| AstNode {
-                span,
-                ast: AstKind::Cond(Cond { branches, other }),
-            });
-
-        choice((
-            intrinsic(),
-            word(),
-            bool,
-            char,
-            string,
-            num,
-            ret,
-            if_,
-            cond,
-            while_,
-            bind,
-            cast,
-        ))
-        .repeated()
-    })
+            "=" => Intrinsic::Eq,
+            "!=" => Intrinsic::Ne,
+            "<" => Intrinsic::Lt,
+            "<=" => Intrinsic::Le,
+            ">" => Intrinsic::Gt,
+            ">=" => Intrinsic::Ge,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    HirNode {
+        span: ast.span.clone(),
+        hir: HirKind::Intrinsic(intrinsic),
+    }
+    .some()
 }
 
-fn constant() -> impl Parser<Token, (String, (TopLevel, Span)), Error = Simple<Token, Span>> {
-    just(Token::KeyWord(KeyWord::Const))
-        .ignore_then(identifier())
-        .then_ignore(just(Token::SigSep))
-        .then(ty().repeated().at_least(1))
-        .then_ignore(just(Token::KeyWord(KeyWord::Do)))
-        .then(body())
-        .then_ignore(just(Token::KeyWord(KeyWord::End)))
-        .map_with_span(|((name, types), body), span| {
-            (name, (TopLevel::Const(Const { body, types }), span))
-        })
-}
-
-fn include() -> impl Parser<Token, (String, (TopLevel, Span)), Error = Simple<Token, Span>> {
-    just(Token::KeyWord(KeyWord::Include))
-        .ignore_then(
-            filter(|token| matches!(token, Token::Str(_))).map(|token| match token {
-                Token::Str(s) => s.into(),
+fn hir_bindings(bindings: Vec<AstNode>) -> Vec<Binding> {
+    let mut res = Vec::with_capacity(bindings.len());
+    for binding in bindings {
+        if let AstKind::Binding(binding) = binding.ast {
+            match binding {
+                ast::Binding::Ignore => res.push(Binding::Ignore),
+                ast::Binding::Bind {
+                    name:
+                        box AstNode {
+                            span: _,
+                            ast: AstKind::Word(name),
+                        },
+                    sep: _,
+                    ty:
+                        box AstNode {
+                            span: _,
+                            ast: AstKind::Type(ty),
+                        },
+                } => res.push(Binding::Bind { name, ty }),
                 _ => unreachable!(),
-            }),
-        )
-        .map_with_span(|path, span| (String::new(), (TopLevel::Include(path), span)))
-}
-
-#[derive(Debug, Clone)]
-pub struct Mem {
-    pub body: Vec<AstNode>,
-}
-
-#[derive(Debug, Clone)]
-pub enum TopLevel {
-    Proc(Proc),
-    Const(Const),
-    Include(PathBuf),
-    Mem(Mem),
-}
-impl TopLevel {
-    pub fn as_proc(&self) -> Option<&Proc> {
-        if let Self::Proc(v) = self {
-            Some(v)
+            }
         } else {
-            None
+            unreachable!()
         }
     }
-
-    pub fn as_const(&self) -> Option<&Const> {
-        if let Self::Const(v) = self {
-            Some(v)
-        } else {
-            None
-        }
-    }
+    res
 }
 
-fn mem() -> impl Parser<Token, (String, (TopLevel, Span)), Error = Simple<Token, Span>> {
-    just(Token::KeyWord(KeyWord::Mem))
-        .ignore_then(identifier())
-        .then_ignore(just(Token::KeyWord(KeyWord::Do)))
-        .then(body())
-        .then_ignore(just(Token::KeyWord(KeyWord::End)))
-        .map_with_span(|(name, body), span| (name, (TopLevel::Mem(Mem { body }), span)))
-}
-
-fn toplevel_items(
-) -> impl Parser<Token, Vec<(String, (TopLevel, Span))>, Error = Simple<Token, Span>> {
-    choice((proc(), constant(), include(), mem()))
-        .repeated()
-        .then_ignore(end())
+pub fn hir_for_ast(ast: HashMap<String, ast::TopLevel>) -> HashMap<String, TopLevel> {
+    ast.into_iter()
+        .map(|(name, item)| (name, item.into()))
         .collect()
 }
 
-pub fn parse(tokens: Vec<(Token, Span)>) -> Result<HashMap<String, (TopLevel, Span)>, Error> {
-    let items = match toplevel_items().parse(Stream::from_iter(
-        tokens.last().unwrap().1.clone(),
-        tokens.into_iter(),
-    )) {
-        Ok(items) => items,
-        Err(es) => return Error::Parser(es).error(),
-    };
+impl From<ast::TopLevel> for TopLevel {
+    fn from(item: ast::TopLevel) -> Self {
+        match item {
+            ast::TopLevel::Proc(p) => TopLevel::Proc(p.into()),
+            ast::TopLevel::Const(c) => TopLevel::Const(c.into()),
+            ast::TopLevel::Mem(m) => TopLevel::Mem(m.into()),
+            _ => unreachable!(),
+        }
+    }
+}
 
-    let (includes, mut items) = items
-        .into_iter()
-        .partition::<Vec<_>, _>(|(_, (item, _))| matches!(item, TopLevel::Include(_)));
+impl From<ast::Mem> for Mem {
+    fn from(mem: ast::Mem) -> Self {
+        let body = coerce_ast!(mem.body => Body || unreachable!())
+            .into_iter()
+            .map(|ast| Option::<HirNode>::from(ast).unwrap())
+            .collect::<Vec<_>>();
+        Mem {
+            body,
+            span: mem.mem.span.merge(mem.end.span),
+        }
+    }
+}
 
-    for (_, (include, _)) in includes {
-        if let TopLevel::Include(path) = include {
-            resolve_include(path, &mut items)?;
+impl From<ast::Const> for Const {
+    fn from(const_: ast::Const) -> Self {
+        let outs = coerce_ast!(const_.signature => ConstSignature || unreachable!())
+            .tys
+            .into_iter()
+            .map(|ty| coerce_ast!(ty => Type || unreachable!()))
+            .collect();
+        let body = coerce_ast!(const_.body => Body || unreachable!())
+            .into_iter()
+            .map(|ast| Option::<HirNode>::from(ast).unwrap())
+            .collect::<Vec<_>>();
+        Const {
+            outs,
+            body,
+            span: const_.const_.span.merge(const_.end.span),
+        }
+    }
+}
+
+impl From<ast::Proc> for Proc {
+    fn from(proc: ast::Proc) -> Self {
+        let (ins, outs) = match proc.signature.ast {
+            AstKind::ProcSignature(signature) => signature.into(),
+            _ => unreachable!(),
+        };
+
+        let body: Option<_> = proc.body.into();
+
+        Proc {
+            ins,
+            outs,
+            body: body.unwrap(),
+            span: proc.proc.span.merge(proc.end.span),
+        }
+    }
+}
+
+impl From<AstNode> for Option<Vec<HirNode>> {
+    fn from(node: AstNode) -> Self {
+        let body = coerce_ast!(node => Body || None)?;
+        body.into_iter()
+            .map(|ast| Option::<HirNode>::from(ast).unwrap())
+            .collect::<Vec<_>>()
+            .some()
+    }
+}
+
+impl From<AstNode> for Option<HirNode> {
+    fn from(node: AstNode) -> Self {
+        if let Some(node) = intrinsic(&node) {
+            return node.some();
+        }
+        let hir = match node.ast {
+            AstKind::Bind(bind) => HirKind::Bind(bind.into()),
+            AstKind::While(while_) => HirKind::While(while_.into()),
+            AstKind::If(if_) => HirKind::If(if_.into()),
+            AstKind::Cond(cond) => HirKind::Cond(cond.into()),
+            AstKind::Cast(_) => unreachable!(),
+            AstKind::Word(w) => HirKind::Word(w),
+            AstKind::Literal(l) => HirKind::Literal(l),
+            AstKind::KeyWord(KeyWord::Return) => HirKind::Return,
+            shouldnt_happen => {
+                eprintln!("{:?}", shouldnt_happen);
+                return None;
+            }
+        };
+        HirNode {
+            span: node.span,
+            hir,
+        }
+        .some()
+    }
+}
+
+impl From<ast::Bind> for Bind {
+    fn from(bind: ast::Bind) -> Self {
+        let bindings = hir_bindings(bind.bindings);
+        let body = coerce_ast!(bind.body => Body || unreachable!())
+            .into_iter()
+            .map(|node| Option::<HirNode>::from(node).unwrap())
+            .collect();
+        Bind { bindings, body }
+    }
+}
+
+impl From<ast::Cond> for Cond {
+    fn from(cond: ast::Cond) -> Self {
+        let branches = cond.branches.into_iter().map(|b| b.into()).collect();
+        Cond { branches }
+    }
+}
+
+impl From<ast::CondBranch> for CondBranch {
+    fn from(branch: ast::CondBranch) -> Self {
+        let pattern = match branch.pat.ast {
+            AstKind::Binding(ast::Binding::Ignore) => HirNode {
+                span: branch.pat.span,
+                hir: HirKind::IgnorePattern,
+            },
+            AstKind::Literal(l) => HirNode {
+                span: branch.pat.span,
+                hir: HirKind::Literal(l),
+            },
+            _ => unreachable!(),
+        };
+        let body = coerce_ast!(branch.body => Body || unreachable!())
+            .into_iter()
+            .map(|node| Option::<HirNode>::from(node).unwrap())
+            .collect();
+        CondBranch { pattern, body }
+    }
+}
+
+impl From<ast::While> for While {
+    fn from(while_: ast::While) -> Self {
+        let cond = coerce_ast!(while_.cond => Body || unreachable!())
+            .into_iter()
+            .map(|node| Option::<HirNode>::from(node).unwrap())
+            .collect();
+        let body = coerce_ast!(while_.body => Body || unreachable!())
+            .into_iter()
+            .map(|node| Option::<HirNode>::from(node).unwrap())
+            .collect();
+        While { cond, body }
+    }
+}
+
+impl From<ast::If> for If {
+    fn from(if_: ast::If) -> Self {
+        let truth = coerce_ast!(if_.truth => Body || unreachable!())
+            .into_iter()
+            .map(|node| Option::<HirNode>::from(node).unwrap())
+            .collect();
+        let lie = if_.lie.map(|lie| {
+            coerce_ast!(lie.body => Body || unreachable!())
+                .into_iter()
+                .map(|node| Option::<HirNode>::from(node).unwrap())
+                .collect()
+        });
+
+        If { truth, lie }
+    }
+}
+
+impl From<ast::ProcSignature> for (Vec<Type>, Vec<Type>) {
+    fn from(signature: ast::ProcSignature) -> Self {
+        let mut ins = Vec::with_capacity(signature.ins.len());
+        for ty in signature.ins {
+            if let AstKind::Type(ty) = ty.ast {
+                ins.push(ty);
+            } else {
+                unreachable!();
+            }
+        }
+        let outs = if let Some(outs) = signature.outs {
+            let mut proc_outs = Vec::with_capacity(outs.len());
+            for ty in outs {
+                if let AstKind::Type(ty) = ty.ast {
+                    proc_outs.push(ty);
+                } else {
+                    unreachable!();
+                }
+            }
+            proc_outs
         } else {
-            unreachable!();
-        }
-    }
+            Vec::new()
+        };
 
-    let mut res = HashMap::new();
-    let mut errors = Vec::new();
-
-    for (name, (item, span)) in items {
-        match res.entry(name) {
-            Entry::Occupied(it) => {
-                let redefined: &(TopLevel, Span) = it.get();
-                errors.push(RedefinitionError {
-                    redefining_item: span,
-                    redefined_item: redefined.1.clone(),
-                });
-            }
-            Entry::Vacant(v) => {
-                v.insert((item, span));
-            }
-        }
-    }
-
-    if errors.is_empty() {
-        res.okay()
-    } else {
-        Error::Redefinition(errors).error()
+        (ins, outs)
     }
 }

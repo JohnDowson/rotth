@@ -28,6 +28,16 @@ impl Span {
     pub fn length(&self) -> usize {
         self.end - self.start
     }
+
+    pub fn merge(self, other: Self) -> Self {
+        assert!(self.file == other.file);
+        assert!(self.start < other.start);
+        Self {
+            file: self.file,
+            start: self.start,
+            end: other.end,
+        }
+    }
 }
 
 impl std::fmt::Debug for Span {

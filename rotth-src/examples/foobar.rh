@@ -7,7 +7,7 @@ proc main: u64 do
             0 = dup if "Foo" puts end
             i 5 mod
             0 = dup if "Bar" puts end
-            or not if i print end
+            or not if i putu end
             "\n" puts
             i 1 +
         end

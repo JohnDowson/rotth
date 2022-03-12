@@ -1,0 +1,15 @@
+proc main: u64 do
+    'q' cond
+        'a' do
+            1
+        else
+        'q' do
+            2
+        else
+        'c' do
+            3
+        else _ do
+            4
+    end print
+    0
+end

@@ -12,7 +12,7 @@ proc main: u64 do
         else
         'c' do
             "get out\n"
-        otherwise
+        else _ do
             "default case\n"
     end puts
     0

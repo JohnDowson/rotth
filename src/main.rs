@@ -2,9 +2,10 @@ use ariadne::{Color, FileCache, Fmt, Label, Report, ReportKind, Span};
 use chumsky::error::SimpleReason;
 use clap::Parser as ClapParser;
 use rotth::{
+    ast::parse,
     emit,
     eval::eval,
-    hir::parse,
+    hir::hir_for_ast,
     lexer::lex,
     lir,
     typecheck::{typecheck_program, ErrorKind},
@@ -241,7 +242,9 @@ fn compiler() -> Result<()> {
         println!("{ast:#?}");
     }
 
-    let procs = typecheck_program(ast)?;
+    let hir = hir_for_ast(ast);
+
+    let procs = typecheck_program(hir)?;
 
     let typechecked = Instant::now();
     if args.time {

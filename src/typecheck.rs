@@ -4,10 +4,10 @@ use simplearena::{Heap, Ref};
 use somok::Somok;
 
 use crate::{
-    hir::{
-        AstKind, AstNode, Binding, CondBranch, IConst, If, Intrinsic, Signature, TopLevel, Type,
-    },
+    hir::{Binding, CondBranch, HirKind, HirNode, If, Intrinsic, TopLevel},
+    iconst::IConst,
     span::Span,
+    types::Type,
     Error,
 };
 
@@ -49,22 +49,19 @@ fn error<T>(span: Span, kind: ErrorKind, message: impl ToString) -> Result<T> {
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub fn typecheck_program(
-    items: HashMap<String, (TopLevel, Span)>,
-) -> Result<HashMap<String, (TopLevel, Span, bool)>> {
+    items: HashMap<String, TopLevel>,
+) -> Result<HashMap<String, (TopLevel, bool)>> {
     let mut items = items
         .into_iter()
-        .map(|(k, (p, s))| (k, (p, s, false)))
+        .map(|(name, item)| (name, (item, false)))
         .collect();
 
     typecheck_proc("main", &mut items)?;
     items.okay()
 }
 
-fn typecheck_const(
-    const_name: &str,
-    items: &mut HashMap<String, (TopLevel, Span, bool)>,
-) -> Result<()> {
-    let (const_, span, typechecked) = items
+fn typecheck_const(const_name: &str, items: &mut HashMap<String, (TopLevel, bool)>) -> Result<()> {
+    let (const_, typechecked) = items
         .get(const_name)
         .ok_or_else(|| {
             TypecheckError::new(
@@ -85,7 +82,7 @@ fn typecheck_const(
     let mut heap = THeap::default();
     let mut actual = TypeStack::default();
     let mut expected = TypeStack::default();
-    for ty in &const_.types {
+    for ty in &const_.outs {
         expected.push(&mut heap, *ty);
     }
     let mut bindings = Vec::new();
@@ -100,14 +97,14 @@ fn typecheck_const(
     )?;
 
     if actual.eq(&expected, &heap) {
-        let (_, _, typechecked) = items.get_mut(const_name).unwrap();
+        let (_, typechecked) = items.get_mut(const_name).unwrap();
         *typechecked = true;
         ().okay()
     } else {
         error(
-            span,
+            const_.span.clone(),
             TypeMismatch {
-                expected: const_.types,
+                expected: const_.outs,
                 actual: actual.into_vec(&heap),
             },
             "Const body does not equal const type",
@@ -115,11 +112,8 @@ fn typecheck_const(
     }
 }
 
-fn typecheck_mem(
-    mem_name: &str,
-    items: &mut HashMap<String, (TopLevel, Span, bool)>,
-) -> Result<()> {
-    let (mem, span, typechecked) = items
+fn typecheck_mem(mem_name: &str, items: &mut HashMap<String, (TopLevel, bool)>) -> Result<()> {
+    let (mem, typechecked) = items
         .get(mem_name)
         .ok_or_else(|| {
             TypecheckError::new(
@@ -155,12 +149,12 @@ fn typecheck_mem(
     )?;
 
     if actual.eq(&expected, &heap) {
-        let (_, _, typechecked) = items.get_mut(mem_name).unwrap();
+        let (_, typechecked) = items.get_mut(mem_name).unwrap();
         *typechecked = true;
         ().okay()
     } else {
         error(
-            span,
+            mem.span.clone(),
             TypeMismatch {
                 expected: vec![Type::U64],
                 actual: actual.into_vec(&heap),
@@ -170,8 +164,8 @@ fn typecheck_mem(
     }
 }
 
-fn typecheck_proc(name: &str, items: &mut HashMap<String, (TopLevel, Span, bool)>) -> Result<()> {
-    let (proc, span, typechecked) = items
+fn typecheck_proc(name: &str, items: &mut HashMap<String, (TopLevel, bool)>) -> Result<()> {
+    let (proc, typechecked) = items
         .get(name)
         .ok_or_else(|| {
             TypecheckError::new(
@@ -188,24 +182,21 @@ fn typecheck_proc(name: &str, items: &mut HashMap<String, (TopLevel, Span, bool)
     if typechecked {
         return ().okay();
     }
-    if name == "main"
-        && (!proc.signature.ins.is_empty() || !(proc.signature.outs[..] == [Type::U64]))
-    {
+    if name == "main" && (!proc.ins.is_empty() || !(proc.outs[..] == [Type::U64])) {
         return error(
-            span,
+            proc.span.clone(),
             InvalidMain,
             "Main must have no inputs and a single uint output",
         );
     }
 
     let mut heap = THeap::default();
-    let Signature { ins, outs } = &proc.signature;
     let mut actual = TypeStack::default();
     let mut expected = TypeStack::default();
-    for ty in ins {
+    for ty in &proc.ins {
         actual.push(&mut heap, *ty)
     }
-    for ty in outs {
+    for ty in &proc.outs {
         expected.push(&mut heap, *ty)
     }
     let mut bindings = Vec::new();
@@ -221,7 +212,7 @@ fn typecheck_proc(name: &str, items: &mut HashMap<String, (TopLevel, Span, bool)
 
     if !actual.eq(&expected, &heap) {
         error(
-            span,
+            proc.span.clone(),
             TypeMismatch {
                 actual: actual.into_vec(&heap),
                 expected: expected.into_vec(&heap),
@@ -229,37 +220,37 @@ fn typecheck_proc(name: &str, items: &mut HashMap<String, (TopLevel, Span, bool)
             "Type mismatch: proc body does not equal proc outputs",
         )
     } else {
-        let (_, _, typechecked) = items.get_mut(name).unwrap();
+        let (_, typechecked) = items.get_mut(name).unwrap();
         *typechecked = true;
         ().okay()
     }
 }
 
-fn is_proc(name: &str, items: &HashMap<String, (TopLevel, Span, bool)>) -> bool {
-    matches!(items.get(name), Some((TopLevel::Proc(_), _, _)))
+fn is_proc(name: &str, items: &HashMap<String, (TopLevel, bool)>) -> bool {
+    matches!(items.get(name), Some((TopLevel::Proc(_), _)))
 }
-fn is_mem(name: &str, items: &HashMap<String, (TopLevel, Span, bool)>) -> bool {
-    matches!(items.get(name), Some((TopLevel::Mem(_), _, _)))
+fn is_mem(name: &str, items: &HashMap<String, (TopLevel, bool)>) -> bool {
+    matches!(items.get(name), Some((TopLevel::Mem(_), _)))
 }
 fn is_binding(name: &str, bindings: &[Vec<(String, Type)>]) -> bool {
     bindings.iter().flatten().any(|b| b.0 == name)
 }
-fn is_const(name: &str, items: &HashMap<String, (TopLevel, Span, bool)>) -> bool {
-    matches!(items.get(name), Some((TopLevel::Const(_), _, _)))
+fn is_const(name: &str, items: &HashMap<String, (TopLevel, bool)>) -> bool {
+    matches!(items.get(name), Some((TopLevel::Const(_), _)))
 }
 
 fn typecheck_body(
     name: &str,
-    body: &[AstNode],
+    body: &[HirNode],
     stack: &mut TypeStack,
     heap: &mut THeap,
-    items: &mut HashMap<String, (TopLevel, Span, bool)>,
+    items: &mut HashMap<String, (TopLevel, bool)>,
     in_const: bool,
     bindings: &mut Vec<Vec<(String, Type)>>,
 ) -> Result<()> {
     for node in body {
-        match &node.ast {
-            AstKind::Literal(c) => match c {
+        match &node.hir {
+            HirKind::Literal(c) => match c {
                 IConst::Bool(_) => stack.push(heap, Type::BOOL),
                 IConst::U64(_) => stack.push(heap, Type::U64),
                 IConst::I64(_) => stack.push(heap, Type::I64),
@@ -270,18 +261,18 @@ fn typecheck_body(
                     stack.push(heap, Type::ptr_to(Type::CHAR));
                 }
             },
-            AstKind::Cond(_) => typecheck_cond(name, node, stack, heap, items, in_const, bindings)?,
-            AstKind::Return => match items.get(name) {
-                Some((TopLevel::Proc(p), _, _)) => {
+            HirKind::Cond(_) => typecheck_cond(name, node, stack, heap, items, in_const, bindings)?,
+            HirKind::Return => match items.get(name) {
+                Some((TopLevel::Proc(p), _)) => {
                     let mut expected = TypeStack::default();
-                    for &ty in &p.signature.outs {
+                    for &ty in &p.outs {
                         expected.push(heap, ty)
                     }
                     if !expected.eq(stack, heap) {
                         return error(
                             node.span.clone(),
                             TypeMismatch {
-                                expected: p.signature.outs.clone(),
+                                expected: p.outs.clone(),
                                 actual: stack.clone().into_vec(heap),
                             },
                             "Type mismatched types for early return",
@@ -297,7 +288,7 @@ fn typecheck_body(
                 }
                 None => unreachable!(),
             },
-            AstKind::Word(w) => match w.as_str() {
+            HirKind::Word(w) => match w.as_str() {
                 rec if rec == name => {
                     let proc = &items[rec].0.as_proc().ok_or_else(|| {
                         TypecheckError::new(
@@ -306,7 +297,7 @@ fn typecheck_body(
                             "Recursive const definition",
                         )
                     })?;
-                    for ty_expected in proc.signature.ins.iter().rev() {
+                    for ty_expected in proc.ins.iter().rev() {
                         let ty_actual = stack.pop(heap).ok_or_else(|| {
                             TypecheckError::new(
                                 node.span.clone(),
@@ -325,7 +316,7 @@ fn typecheck_body(
                             );
                         }
                     }
-                    for ty in &proc.signature.outs {
+                    for ty in &proc.outs {
                         stack.push(heap, *ty)
                     }
                 }
@@ -344,7 +335,7 @@ fn typecheck_body(
                             "Recursive const definition",
                         )
                     })?;
-                    for ty_expected in proc.signature.ins.iter().rev() {
+                    for ty_expected in proc.ins.iter().rev() {
                         let ty_actual = stack.pop(heap).ok_or_else(|| {
                             TypecheckError::new(
                                 node.span.clone(),
@@ -371,7 +362,7 @@ fn typecheck_body(
                             "Recursive const definition",
                         )
                     })?;
-                    for ty in &proc.signature.outs {
+                    for ty in &proc.outs {
                         stack.push(heap, *ty)
                     }
                 }
@@ -384,7 +375,7 @@ fn typecheck_body(
                             "Recursive const definition",
                         )
                     })?;
-                    for ty in &const_.types {
+                    for ty in &const_.outs {
                         stack.push(heap, *ty);
                     }
                 }
@@ -417,7 +408,7 @@ fn typecheck_body(
                     )
                 }
             },
-            AstKind::Intrinsic(i) => match i {
+            HirKind::Intrinsic(i) => match i {
                 Intrinsic::ReadU64 => {
                     let ty = stack.pop(heap).ok_or_else(|| {
                         TypecheckError::new(
@@ -675,7 +666,7 @@ fn typecheck_body(
                 | Intrinsic::Ge => typecheck_boolean(stack, heap, node)?,
                 Intrinsic::Dump => (),
             },
-            AstKind::If(cond) => {
+            HirKind::If(cond) => {
                 let ty = stack.pop(heap).ok_or_else(|| {
                     TypecheckError::new(node.span.clone(), NotEnoughData, "Not enough data for if")
                 })?;
@@ -700,7 +691,7 @@ fn typecheck_body(
                     bindings,
                 )?;
             }
-            AstKind::While(while_) => {
+            HirKind::While(while_) => {
                 let stack_before = stack.clone().into_vec(heap);
                 typecheck_body(name, &while_.cond, stack, heap, items, in_const, bindings)?;
                 let ty = stack.pop(heap).ok_or_else(|| {
@@ -725,7 +716,7 @@ fn typecheck_body(
                     return error(node.span.clone(), InvalidWhile, "Invalid while");
                 }
             }
-            AstKind::Bind(bind) => {
+            HirKind::Bind(bind) => {
                 let mut new_bindings = Vec::new();
                 for binding in bind.bindings.iter().rev() {
                     match binding {
@@ -763,6 +754,7 @@ fn typecheck_body(
                 bindings.push(new_bindings);
                 typecheck_body(name, &bind.body, stack, heap, items, in_const, bindings)?;
             }
+            HirKind::IgnorePattern => todo!(), // noop
         }
     }
     ().okay()
@@ -770,25 +762,25 @@ fn typecheck_body(
 
 fn typecheck_cond(
     name: &str,
-    node: &AstNode,
+    node: &HirNode,
     stack: &mut TypeStack,
     heap: &mut THeap,
-    items: &mut HashMap<String, (TopLevel, Span, bool)>,
+    items: &mut HashMap<String, (TopLevel, bool)>,
     in_const: bool,
     bindings: &mut Vec<Vec<(String, Type)>>,
 ) -> Result<()> {
     let ty = stack.pop(heap).ok_or_else(|| {
         TypecheckError::new(node.span.clone(), NotEnoughData, "Not enough data for cond")
     })?;
-    let cond = match &node.ast {
-        AstKind::Cond(c) => c,
+    let cond = match &node.hir {
+        HirKind::Cond(c) => c,
         _ => unreachable!(),
     };
     let mut first_branch_stack = TypeStack::default();
     let mut first_branch = true;
     for CondBranch { pattern, body } in &cond.branches {
-        let pat_ty = match &pattern.ast {
-            AstKind::Literal(pat) => match pat {
+        let pat_ty = match &pattern.hir {
+            HirKind::Literal(pat) => match pat {
                 IConst::Bool(_) => Type::BOOL,
                 IConst::U64(_) => Type::U64,
                 IConst::I64(_) => Type::I64,
@@ -796,7 +788,7 @@ fn typecheck_cond(
                 IConst::Str(_) => todo!(),
                 IConst::Ptr(_) => Type::ptr_to(Type::ANY),
             },
-            AstKind::Word(const_name) if is_const(const_name, items) => {
+            HirKind::Word(const_name) if is_const(const_name, items) => {
                 typecheck_const(const_name, items)?;
                 let const_ = items[const_name].0.as_const().ok_or_else(|| {
                     TypecheckError::new(
@@ -805,23 +797,24 @@ fn typecheck_cond(
                         "Recursive const definition",
                     )
                 })?;
-                if const_.types.len() != 1 {
+                if const_.outs.len() != 1 {
                     return error(
                         pattern.span.clone(),
                         Unexpected,
                         "Cond only supports single-value consts",
                     );
                 }
-                const_.types[0]
+                const_.outs[0]
             }
-            AstKind::Word(_) => {
+            HirKind::Word(_) => {
                 return error(
                     pattern.span.clone(),
                     Unexpected,
                     "Cond only supports constant patterns",
                 )
             }
-            _ => unreachable!(),
+            HirKind::IgnorePattern => Type::ANY,
+            hir => unreachable!("{:?}", hir),
         };
         if pat_ty != ty {
             return error(
@@ -868,26 +861,26 @@ fn typecheck_cond(
         first_branch = false;
     }
 
-    let mut default_branch_stack = TypeStack::default();
-    typecheck_body(
-        name,
-        &cond.other,
-        &mut default_branch_stack,
-        heap,
-        items,
-        in_const,
-        bindings,
-    )?;
-    if !first_branch_stack.eq(&default_branch_stack, heap) {
-        return error(
-            node.span.clone(),
-            TypeMismatch {
-                expected: first_branch_stack.into_vec(heap),
-                actual: default_branch_stack.into_vec(heap),
-            },
-            "Type mismatch between cond branches",
-        );
-    }
+    // let mut default_branch_stack = TypeStack::default();
+    // typecheck_body(
+    //     name,
+    //     &cond.other,
+    //     &mut default_branch_stack,
+    //     heap,
+    //     items,
+    //     in_const,
+    //     bindings,
+    // )?;
+    // if !first_branch_stack.eq(&default_branch_stack, heap) {
+    //     return error(
+    //         node.span.clone(),
+    //         TypeMismatch {
+    //             expected: first_branch_stack.into_vec(heap),
+    //             actual: default_branch_stack.into_vec(heap),
+    //         },
+    //         "Type mismatch between cond branches",
+    //     );
+    // }
 
     let first_branch_stack = first_branch_stack.into_vec(heap);
     for ty in first_branch_stack.into_iter() {
@@ -906,13 +899,13 @@ fn expect_arity(arity: usize, stack: &mut TypeStack, heap: &mut THeap) -> bool {
     true
 }
 
-fn typecheck_divmod(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) -> Result<()> {
+fn typecheck_divmod(stack: &mut TypeStack, heap: &mut THeap, node: &HirNode) -> Result<()> {
     typecheck_binop(stack, heap, node)?;
     stack.push(heap, Type::U64);
     ().okay()
 }
 
-fn typecheck_binop(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) -> Result<()> {
+fn typecheck_binop(stack: &mut TypeStack, heap: &mut THeap, node: &HirNode) -> Result<()> {
     let b = stack.pop(heap).ok_or_else(|| {
         TypecheckError::new(
             node.span.clone(),
@@ -946,7 +939,7 @@ fn typecheck_binop(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) -> R
     ().okay()
 }
 
-fn typecheck_boolean(stack: &mut TypeStack, heap: &mut THeap, node: &AstNode) -> Result<()> {
+fn typecheck_boolean(stack: &mut TypeStack, heap: &mut THeap, node: &HirNode) -> Result<()> {
     let b = stack.pop(heap).ok_or_else(|| {
         TypecheckError::new(
             node.span.clone(),
@@ -984,7 +977,7 @@ fn typecheck_if(
     span: &Span,
     heap: &mut THeap,
     stack: &mut TypeStack,
-    procs: &mut HashMap<String, (TopLevel, Span, bool)>,
+    procs: &mut HashMap<String, (TopLevel, bool)>,
     in_const: bool,
     bindings: &mut Vec<Vec<(String, Type)>>,
 ) -> Result<()> {
@@ -1098,22 +1091,20 @@ type THeap = Heap<TypeFrame, 0>;
 
 #[test]
 fn test_typecheck() {
-    use super::hir::{AstKind, AstNode, Proc};
+    use super::hir::{HirKind, HirNode, Proc};
     use std::assert_matches::assert_matches;
     let mut procs = [(
         "main".to_string(),
         (
             TopLevel::Proc(Proc {
-                signature: Signature {
-                    ins: vec![],
-                    outs: vec![Type::U64],
-                },
-                body: vec![AstNode {
+                ins: vec![],
+                outs: vec![Type::U64],
+                body: vec![HirNode {
                     span: Span::point("".to_string(), 0),
-                    ast: AstKind::Literal(IConst::U64(1)),
+                    hir: HirKind::Literal(IConst::U64(1)),
                 }],
+                span: Span::point("".to_string(), 0),
             }),
-            Span::point("".to_string(), 0),
             false,
         ),
     )]

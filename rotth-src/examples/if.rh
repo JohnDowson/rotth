@@ -1,0 +1,4 @@
+proc main: u64 do
+    1 2 > if 1 print else 2 print end
+    0
+end

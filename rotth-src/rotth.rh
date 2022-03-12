@@ -1,6 +1,17 @@
-include "../std.rh"
+include "./std.rh"
 
-proc main : uint do
-    "Unimplemented\n" eputs 1 exit
+proc main: u64 do
+    "string of words to be tokenized" scan putu "\n" puts
     0
+end
+
+proc scan u64 &>char : u64 do
+    swap
+    0 while over over != do
+        bind s: &>char n: u64 i: u64 do
+            s i ptr+ cast &>u8 @u8 cast char
+            ' ' = if i return end
+            s n i 1 +
+        end
+    end bind _ _ i: u64 do i end
 end

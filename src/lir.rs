@@ -3,10 +3,11 @@ use std::collections::HashMap;
 use crate::{
     eval::eval,
     hir::{
-        AstKind, AstNode, Bind, Binding, Cond, CondBranch, Const, IConst, If, Intrinsic, Mem, Proc,
-        TopLevel, Type, While,
+        Bind, Binding, Cond, CondBranch, Const, HirKind, HirNode, If, Intrinsic, Mem, Proc,
+        TopLevel, While,
     },
-    span::Span,
+    iconst::IConst,
+    types::Type,
 };
 
 #[derive(Debug)]
@@ -93,14 +94,14 @@ pub struct Compiler {
 impl Compiler {
     pub fn compile(
         mut self,
-        items: HashMap<String, (TopLevel, Span, bool)>,
+        items: HashMap<String, (TopLevel, bool)>,
     ) -> (Vec<Op>, Vec<String>, HashMap<String, usize>) {
         let (procs, consts_and_mems) = items
             .into_iter()
-            .partition::<Vec<_>, _>(|(_, (it, _, _))| matches!(it, TopLevel::Proc(_)));
+            .partition::<Vec<_>, _>(|(_, (it, _))| matches!(it, TopLevel::Proc(_)));
         let procs = procs
             .into_iter()
-            .filter_map(|(name, (proc, _, needed))| {
+            .filter_map(|(name, (proc, needed))| {
                 if let TopLevel::Proc(proc) = proc {
                     if needed {
                         let mangled = self.mangle_name(name);
@@ -116,11 +117,11 @@ impl Compiler {
 
         let (consts, mems) = consts_and_mems
             .into_iter()
-            .partition::<Vec<_>, _>(|(_, (it, _, _))| matches!(it, TopLevel::Const(_)));
+            .partition::<Vec<_>, _>(|(_, (it, _))| matches!(it, TopLevel::Const(_)));
 
         self.mems = mems
             .into_iter()
-            .filter_map(|(name, (mem, _, needed))| {
+            .filter_map(|(name, (mem, needed))| {
                 if let TopLevel::Mem(mem) = mem {
                     if needed {
                         (name, ComMem::NotCompiled(mem)).some()
@@ -135,7 +136,7 @@ impl Compiler {
 
         self.consts = consts
             .into_iter()
-            .filter_map(|(name, (const_, _, needed))| {
+            .filter_map(|(name, (const_, needed))| {
                 if let TopLevel::Const(const_) = const_ {
                     if needed {
                         (name, ComConst::NotCompiled(const_)).some()
@@ -189,7 +190,11 @@ impl Compiler {
             Some(ComConst::NotCompiled(c)) => c.clone(),
             None => unreachable!(),
         };
-        let Const { body, types } = const_;
+        let Const {
+            outs,
+            body,
+            span: _,
+        } = const_;
         let mut com = Self::with_consts_and_strings(self.consts.clone(), self.strings.clone());
         com.compile_body(body.clone());
         self.consts = com.consts;
@@ -198,7 +203,7 @@ impl Compiler {
         let mut const_ = Vec::new();
         match eval(ops, &self.strings) {
             Ok(Either::Right(bytes)) => {
-                for (&ty, bytes) in types.iter().zip(bytes) {
+                for (&ty, bytes) in outs.iter().zip(bytes) {
                     if ty == Type::BOOL {
                         const_.push(IConst::Bool(bytes == 1))
                     } else if ty == Type::U64 {
@@ -223,7 +228,7 @@ impl Compiler {
                 self.strings = com.strings;
                 match eval(ops, &self.strings) {
                     Ok(Either::Right(bytes)) => {
-                        for (&ty, bytes) in types.iter().zip(bytes) {
+                        for (&ty, bytes) in outs.iter().zip(bytes) {
                             if ty == Type::BOOL {
                                 const_.push(IConst::Bool(bytes == 1))
                             } else if ty == Type::U64 {
@@ -253,7 +258,7 @@ impl Compiler {
             Some(ComMem::NotCompiled(c)) => c.clone(),
             None => unreachable!(),
         };
-        let Mem { body } = mem;
+        let Mem { body, span: _ } = mem;
         let mut com = Self::with_consts_and_strings(self.consts.clone(), self.strings.clone());
         com.compile_body(body.clone());
         self.consts = com.consts;
@@ -281,12 +286,18 @@ impl Compiler {
         self.mems.insert(name.clone(), ComMem::Compiled(size));
     }
 
-    fn compile_body(&mut self, body: Vec<AstNode>) {
+    fn compile_body(&mut self, body: Vec<HirNode>) {
         for node in body {
-            match node.ast {
-                AstKind::Cond(cond) => self.compile_cond(cond),
-                AstKind::Return => self.emit(Return),
-                AstKind::Literal(c) => match c {
+            match node.hir {
+                HirKind::Cond(cond) => self.compile_cond(cond),
+                HirKind::Return => {
+                    let num_bindings = self.bindings.iter().flatten().count();
+                    for _ in 0..num_bindings {
+                        self.emit(Unbind)
+                    }
+                    self.emit(Return)
+                }
+                HirKind::Literal(c) => match c {
                     IConst::Str(s) => {
                         let i = self.strings.len();
                         self.strings.push(s);
@@ -294,17 +305,17 @@ impl Compiler {
                     }
                     _ => self.emit(Push(c)),
                 },
-                AstKind::Word(w) if self.is_const(&w) => {
+                HirKind::Word(w) if self.is_const(&w) => {
                     let c = self.compile_const(w);
                     for c in c {
                         self.emit(Push(c))
                     }
                 }
-                AstKind::Word(w) if self.is_mem(&w) => {
+                HirKind::Word(w) if self.is_mem(&w) => {
                     self.compile_mem(&w);
                     self.emit(PushMem(w))
                 }
-                AstKind::Word(w) if self.is_binding(&w) => {
+                HirKind::Word(w) if self.is_binding(&w) => {
                     let offset = self
                         .bindings
                         .iter()
@@ -314,11 +325,11 @@ impl Compiler {
                         .unwrap();
                     self.emit(UseBinding(offset))
                 }
-                AstKind::Word(w) => {
+                HirKind::Word(w) => {
                     let mangled = self.mangle_table.get(&w).unwrap().clone();
                     self.emit(Call(mangled))
                 }
-                AstKind::Intrinsic(i) => match i {
+                HirKind::Intrinsic(i) => match i {
                     Intrinsic::Drop => self.emit(Drop),
                     Intrinsic::Dup => self.emit(Dup),
                     Intrinsic::Swap => self.emit(Swap),
@@ -359,9 +370,10 @@ impl Compiler {
 
                     Intrinsic::CompStop => return,
                 },
-                AstKind::If(cond) => self.compile_if(cond),
-                AstKind::While(while_) => self.compile_while(while_),
-                AstKind::Bind(bind) => self.compile_bind(bind),
+                HirKind::If(cond) => self.compile_if(cond),
+                HirKind::While(while_) => self.compile_while(while_),
+                HirKind::Bind(bind) => self.compile_bind(bind),
+                HirKind::IgnorePattern => todo!(), // this is a noop
             }
         }
     }
@@ -423,33 +435,36 @@ impl Compiler {
         let num_branches = cond.branches.len() - 1;
         let mut this_branch_label = self.gen_label();
         let mut next_branch_label = self.gen_label();
-        let default_branch_label = self.gen_label();
+        // let default_branch_label = self.gen_label();
         for (i, CondBranch { pattern, body }) in cond.branches.into_iter().enumerate() {
             if i != 0 {
                 self.emit(Label(this_branch_label));
             }
 
             self.emit(Dup);
-            let pat = match pattern.ast {
-                AstKind::Literal(c) => c,
-                AstKind::Word(w) if self.is_const(&w) => self.compile_const(w)[0].clone(),
-                AstKind::Word(w) => unreachable!("Impossible non-constant: {}", w),
+            match pattern.hir {
+                HirKind::Literal(c) => self.emit(Push(c)),
+                HirKind::Word(w) if self.is_const(&w) => {
+                    let c = self.compile_const(w)[0].clone();
+                    self.emit(Push(c))
+                }
+                HirKind::Word(w) => unreachable!("Impossible non-constant: {}", w),
+                HirKind::IgnorePattern => self.emit(Dup), // todo: this is hacky
                 _ => unreachable!(),
-            };
-            self.emit(Push(pat));
+            }
             self.emit(Eq);
             if i < num_branches {
                 self.emit(JumpF(next_branch_label.clone()));
             } else {
-                self.emit(JumpF(default_branch_label.clone()));
+                // self.emit(JumpF(default_branch_label.clone()));
             }
             this_branch_label = next_branch_label;
             next_branch_label = self.gen_label();
             self.compile_body(body);
             self.emit(Jump(phi_label.clone()));
         }
-        self.emit(Label(default_branch_label));
-        self.compile_body(cond.other);
+        // self.emit(Label(default_branch_label));
+        // self.compile_body(cond.other);
 
         self.emit(Label(phi_label))
     }
