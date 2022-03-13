@@ -13,7 +13,20 @@
 		"onLanguage:rotth"
 	],
 	"main": "./dist/extension.js",
-	"contributes": {},
+	"contributes": {
+		"configuration": {
+			"title": "Rotth LSP",
+			"properties": {
+				"rotthLSP.command": {
+					"type": [
+						"string"
+					],
+					"default": "rotth-lsp",
+					"description": "Rotth LSP command"
+				}
+			}
+		}
+	},
 	"scripts": {
 		"vscode:prepublish": "yarn run package",
 		"compile": "webpack",

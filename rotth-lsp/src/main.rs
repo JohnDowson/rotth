@@ -4,7 +4,6 @@ use rotth::ast::{parse_no_include, TopLevel};
 use rotth::lexer::lex_string;
 use rotth_lsp::semantic_token::{semantic_token_from_ast, CompleteSemanticToken, LEGEND_TYPE};
 use somok::Somok;
-use std::fs::File;
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncReadExt;
 use tower_lsp::jsonrpc::Result;
@@ -49,12 +48,12 @@ impl Backend {
         };
         let ast = self
             .parse_text(TextDocument {
-                uri: Url::from_file_path(dbg! {&path}).unwrap(),
+                uri: Url::from_file_path(&path).unwrap(),
                 text,
                 version: 0,
             })
             .await
-            .unwrap_or_default();
+            .unwrap();
         let includes: Vec<(PathBuf, PathBuf)> = ast
             .iter()
             .filter_map(|i| {
@@ -73,13 +72,9 @@ impl Backend {
 
     async fn parse_text(&self, params: TextDocument) -> Option<Vec<TopLevel>> {
         let rope = ropey::Rope::from_str(&params.text);
-        if self
-            .document_map
-            .insert(params.uri.to_file_path().unwrap(), rope.clone())
-            .is_some()
-        {
-            return None;
-        }
+        self.document_map
+            .insert(params.uri.to_file_path().unwrap(), rope.clone());
+
         let tokens = match lex_string(params.text, params.uri.to_file_path().unwrap()) {
             Ok(tokens) => tokens,
             Err(e) => {
@@ -173,7 +168,7 @@ impl Backend {
     }
 
     async fn on_change(&self, params: TextDocument) {
-        let ast = self.parse_text(params.clone()).await.unwrap_or_default();
+        let ast = self.parse_text(params.clone()).await.unwrap();
 
         self.semantic_token_map.insert(
             params.uri.to_file_path().unwrap(),
@@ -190,14 +185,13 @@ impl Backend {
                 }
             })
             .collect::<Vec<_>>();
+        self.ast_map.insert(params.uri.to_file_path().unwrap(), ast);
 
         while !includes.is_empty() {
             let (parent, path) = includes.pop().unwrap();
             let extend = self.parse_file(Some(&parent), &path).await.unwrap();
             includes.extend(extend)
         }
-
-        self.ast_map.insert(params.uri.to_file_path().unwrap(), ast);
 
         self.client
             .log_message(
@@ -341,29 +335,21 @@ impl LanguageServer for Backend {
 
         let item = self.ast_map.iter().find_map(|r| {
             for item in r.value() {
-                if item.name()? == word {
-                    return item.clone().some();
+                if let Some(name) = item.name() {
+                    if name == word {
+                        return item.clone().some();
+                    }
                 }
             }
             None
         });
-        let names = dbg! {
-            self
-                .ast_map
-                .get(&PathBuf::from("/home/johnd/pets/rotth/rotth-src/std.rh"))
-                .unwrap()
-                .iter().filter_map(|i| i.name()).collect::<Vec<_>>()
-        };
-        dbg! {names.iter().find(|n| n == &"putu")};
 
         let definition = item.and_then(|item| {
             let span = &item.span();
             let uri = Url::from_file_path(&span.file).unwrap();
 
-            let rope = &*self
-                .document_map
-                .entry(span.file.clone())
-                .or_insert(Rope::from_reader(File::open(&span.file).unwrap()).unwrap());
+            let rope = &*self.document_map.get(&span.file)?;
+
             let start_position = offset_to_position(span.start, rope)?;
             let end_position = offset_to_position(span.end, rope)?;
 
