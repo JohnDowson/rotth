@@ -8,23 +8,6 @@ use crate::{
 use somok::Somok;
 use std::collections::HashMap;
 
-macro_rules! coerce_ast {
-    ($node:expr => $kind:tt || None) => {
-        if let AstKind::$kind(ast) = $node.ast {
-            Some(ast)
-        } else {
-            None
-        }
-    };
-    ($node:expr => $kind:tt || $or:expr) => {
-        if let AstKind::$kind(ast) = $node.ast {
-            ast
-        } else {
-            $or
-        }
-    };
-}
-
 #[derive(Debug, Clone)]
 pub enum TopLevel {
     Proc(Proc),

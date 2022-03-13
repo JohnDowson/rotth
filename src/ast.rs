@@ -1,7 +1,10 @@
 #[cfg(test)]
 mod test;
 
-use std::collections::{hash_map::Entry, HashMap};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    path::{Path, PathBuf},
+};
 
 use crate::{
     iconst::IConst,
@@ -84,9 +87,9 @@ pub struct Include {
 }
 
 impl Include {
-    pub fn path(&self) -> &str {
+    pub fn path(&self) -> &Path {
         match &self.path.ast {
-            AstKind::Literal(IConst::Str(p)) => p,
+            AstKind::Path(p) => p,
             _ => unreachable!(),
         }
     }
@@ -115,6 +118,7 @@ pub enum AstKind {
     Cast(Cast),
 
     Word(String),
+    Path(PathBuf),
     Literal(IConst),
     Pattern(Box<AstNode>),
 
@@ -253,7 +257,7 @@ fn literal() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
 }
 fn include_path() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
     select! { span,
-        Token::Str(s) => AstNode { span, ast: AstKind::Literal(IConst::Str(s)) },
+        Token::Str(s) => AstNode { span, ast: AstKind::Path(PathBuf::from(s)) },
     }
 }
 fn kw_include() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
@@ -546,6 +550,15 @@ fn toplevel() -> impl Parser<Token, Vec<TopLevel>, Error = Simple<Token, Span>> 
         .then_ignore(end())
 }
 
+pub fn parse_no_include(tokens: Vec<(Token, Span)>) -> Result<Vec<TopLevel>, Error> {
+    toplevel()
+        .parse(Stream::from_iter(
+            tokens.last().unwrap().1.clone(),
+            tokens.into_iter(),
+        ))
+        .map_err(Error::Parser)
+}
+
 pub fn parse(tokens: Vec<(Token, Span)>) -> Result<HashMap<String, TopLevel>, Error> {
     let items = match toplevel().parse(Stream::from_iter(
         tokens.last().unwrap().1.clone(),
@@ -561,7 +574,7 @@ pub fn parse(tokens: Vec<(Token, Span)>) -> Result<HashMap<String, TopLevel>, Er
 
     for include in includes {
         if let TopLevel::Include(include) = include {
-            resolve_include(include.path().into(), &mut items)?;
+            resolve_include(&include.path.span.file, include.path(), &mut items)?;
         } else {
             unreachable!();
         }

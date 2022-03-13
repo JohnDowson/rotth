@@ -218,7 +218,6 @@ fn compiler() -> Result<()> {
     let start = Instant::now();
 
     let source = args.source.canonicalize()?;
-    std::env::set_current_dir(&source.parent().unwrap())?;
 
     let tokens = lex(source.clone())?;
 

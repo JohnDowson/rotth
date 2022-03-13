@@ -4,12 +4,18 @@ use crate::{
     Result,
 };
 use somok::Somok;
-use std::path::PathBuf;
+use std::path::Path;
 
-pub fn resolve_include(path: PathBuf, existing: &mut Vec<TopLevel>) -> Result<()> {
-    let source = path.canonicalize()?;
-    std::env::set_current_dir(&source.parent().unwrap())?;
-
+pub fn resolve_include(
+    included_from: &Path,
+    path: &Path,
+    existing: &mut Vec<TopLevel>,
+) -> Result<()> {
+    let source = if path.is_relative() {
+        included_from.parent().unwrap().join(path)
+    } else {
+        path.into()
+    };
     let tokens = lex(source)?;
 
     let ast = parse(tokens)?;
