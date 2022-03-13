@@ -18,6 +18,8 @@ use std::{fs::OpenOptions, io::BufWriter, path::PathBuf, time::Instant};
 struct Args {
     #[clap(short = 'k', long)]
     dump_tokens: bool,
+    #[clap(short = 'a', long)]
+    dump_ast: bool,
     #[clap(short = 'i', long)]
     dump_hir: bool,
     #[clap(short = 'l', long)]
@@ -218,7 +220,7 @@ fn compiler() -> Result<()> {
     let source = args.source.canonicalize()?;
     std::env::set_current_dir(&source.parent().unwrap())?;
 
-    let tokens = lex(source)?;
+    let tokens = lex(source.clone())?;
 
     let tokenized = Instant::now();
     if args.time {
@@ -237,18 +239,28 @@ fn compiler() -> Result<()> {
         println!("Parsed in:\t{:?}", parsed - tokenized)
     }
 
-    if args.dump_hir {
-        println!("HIR:\n");
+    if args.dump_ast {
+        println!("AST:\n");
         println!("{ast:#?}");
     }
 
     let hir = hir_for_ast(ast);
 
+    let lowered = Instant::now();
+    if args.time {
+        println!("Lowered in:\t{:?}", lowered - parsed)
+    }
+
+    if args.dump_ast {
+        println!("HIR:\n");
+        println!("{hir:#?}");
+    }
+
     let procs = typecheck_program(hir)?;
 
     let typechecked = Instant::now();
     if args.time {
-        println!("Typechecked in:\t{:?}", typechecked - parsed)
+        println!("Typechecked in:\t{:?}", typechecked - lowered)
     }
 
     let comp = lir::Compiler::default();
@@ -276,7 +288,7 @@ fn compiler() -> Result<()> {
                     .create(true)
                     .write(true)
                     .truncate(true)
-                    .open(args.source.with_extension("asm"))?,
+                    .open(source.with_extension("asm"))?,
             ),
         )?;
 
