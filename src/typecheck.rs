@@ -83,6 +83,16 @@ fn typecheck_const(const_name: &str, items: &mut HashMap<String, (TopLevel, bool
     let mut actual = TypeStack::default();
     let mut expected = TypeStack::default();
     for ty in &const_.outs {
+        if ty.is_ptr() {
+            return error(
+                Span::point("".to_string(), 0),
+                TypeMismatch {
+                    expected: vec![Type::ANY],
+                    actual: vec![*ty],
+                },
+                format!("Const `{}` does not exist", const_name),
+            );
+        }
         expected.push(&mut heap, *ty);
     }
     let mut bindings = Vec::new();
@@ -305,14 +315,14 @@ fn typecheck_body(
                                 format!("Not enough data for proc invocation {}", rec),
                             )
                         })?;
-                        if *ty_expected != ty_actual {
+                        if !ty_expected.type_eq(&ty_actual) {
                             return error(
                                 node.span.clone(),
                                 TypeMismatch {
                                     expected: vec![*ty_expected],
                                     actual: vec![ty_actual],
                                 },
-                                format!("Wrong types for proc invocation {}", rec),
+                                format!("Wrong types for proc invocation `{}`", rec),
                             );
                         }
                     }
@@ -343,7 +353,7 @@ fn typecheck_body(
                                 format!("Not enough data for proc invocation {}", proc_name),
                             )
                         })?;
-                        if *ty_expected != ty_actual {
+                        if !ty_expected.type_eq(&ty_actual) {
                             return error(
                                 node.span.clone(),
                                 TypeMismatch {
@@ -670,7 +680,7 @@ fn typecheck_body(
                 let ty = stack.pop(heap).ok_or_else(|| {
                     TypecheckError::new(node.span.clone(), NotEnoughData, "Not enough data for if")
                 })?;
-                if ty != Type::BOOL {
+                if !ty.type_eq(&Type::BOOL) {
                     return error(
                         node.span.clone(),
                         TypeMismatch {
@@ -701,7 +711,7 @@ fn typecheck_body(
                         "Not enough data for while",
                     )
                 })?;
-                if ty != Type::BOOL {
+                if !ty.type_eq(&Type::BOOL) {
                     return error(
                         node.span.clone(),
                         TypeMismatch {
@@ -737,7 +747,7 @@ fn typecheck_body(
                                     "Not enough data for binding",
                                 )
                             })?;
-                            if actual != *ty {
+                            if !actual.type_eq(ty) {
                                 return error(
                                     node.span.clone(),
                                     TypeMismatch {
@@ -816,7 +826,7 @@ fn typecheck_cond(
             HirKind::IgnorePattern => Type::ANY,
             hir => unreachable!("{:?}", hir),
         };
-        if pat_ty != ty {
+        if !ty.type_eq(&pat_ty) {
             return error(
                 pattern.span.clone(),
                 TypeMismatch {
@@ -955,7 +965,7 @@ fn typecheck_boolean(stack: &mut TypeStack, heap: &mut THeap, node: &HirNode) ->
         )
     })?;
     match (a, b) {
-        (a, b) if a == b => stack.push(heap, Type::BOOL),
+        (a, b) if a.type_eq(&b) => stack.push(heap, Type::BOOL),
         (a, b) => {
             return error(
                 node.span.clone(),
@@ -1035,7 +1045,7 @@ impl TypeStack {
                 (Some(lhs), Some(rhs)) => {
                     let lhs = lhs.deref(heap).unwrap();
                     let rhs = rhs.deref(heap).unwrap();
-                    if lhs.ty != rhs.ty {
+                    if !lhs.ty.type_eq(&rhs.ty) {
                         break false;
                     }
                     next_left = &lhs.prev;

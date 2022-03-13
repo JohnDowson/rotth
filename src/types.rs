@@ -1,25 +1,7 @@
-#[derive(Copy, Clone, Eq)]
+#[derive(Copy, Clone, Hash, Eq, PartialEq)]
 pub struct Type {
     ptr_depth: u8,
     value_type: ValueType,
-}
-
-impl std::hash::Hash for Type {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // unsound btw
-        self.ptr_depth.hash(state);
-        self.value_type.hash(state);
-    }
-}
-
-impl PartialEq for Type {
-    fn eq(&self, other: &Self) -> bool {
-        if self.value_type == ValueType::Any {
-            true
-        } else {
-            self.value_type == other.value_type && self.ptr_depth == other.ptr_depth
-        }
-    }
 }
 
 impl std::fmt::Debug for Type {
@@ -90,15 +72,24 @@ impl Type {
         }
     }
 
+    pub fn type_eq(&self, other: &Self) -> bool {
+        if self.value_type == ValueType::Any || other.value_type == ValueType::Any {
+            self.ptr_depth == other.ptr_depth
+        } else {
+            self.ptr_depth == other.ptr_depth && self.value_type == other.value_type
+        }
+    }
     pub fn is_ptr(&self) -> bool {
         self.ptr_depth > 0
     }
     pub fn is_ptr_to(&self, ty: Self) -> bool {
-        self.is_ptr()
-            && Self {
-                ptr_depth: self.ptr_depth.saturating_sub(1),
-                value_type: self.value_type,
-            } == ty
+        if self.value_type == ValueType::Any || ty.value_type == ValueType::Any {
+            self.is_ptr() && self.ptr_depth.saturating_sub(1) == ty.ptr_depth
+        } else {
+            self.is_ptr()
+                && self.ptr_depth.saturating_sub(1) == ty.ptr_depth
+                && self.value_type == ty.value_type
+        }
     }
 }
 

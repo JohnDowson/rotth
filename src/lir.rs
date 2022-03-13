@@ -204,16 +204,12 @@ impl Compiler {
         match eval(ops, &self.strings) {
             Ok(Either::Right(bytes)) => {
                 for (&ty, bytes) in outs.iter().zip(bytes) {
-                    if ty == Type::BOOL {
-                        const_.push(IConst::Bool(bytes == 1))
-                    } else if ty == Type::U64 {
-                        const_.push(IConst::U64(bytes))
-                    } else if ty == Type::I64 {
-                        const_.push(IConst::I64(bytes as i64))
-                    } else if ty == Type::CHAR {
-                        const_.push(IConst::Char(bytes as u8 as char))
-                    } else {
-                        todo!("Handle pointer types?")
+                    match ty {
+                        Type::BOOL => const_.push(IConst::Bool(bytes == 1)),
+                        Type::U64 => const_.push(IConst::U64(bytes)),
+                        Type::I64 => const_.push(IConst::I64(bytes as i64)),
+                        Type::CHAR => const_.push(IConst::Char(bytes as u8 as char)),
+                        ty => unreachable!("{:?}", ty),
                     }
                 }
             }
@@ -229,16 +225,12 @@ impl Compiler {
                 match eval(ops, &self.strings) {
                     Ok(Either::Right(bytes)) => {
                         for (&ty, bytes) in outs.iter().zip(bytes) {
-                            if ty == Type::BOOL {
-                                const_.push(IConst::Bool(bytes == 1))
-                            } else if ty == Type::U64 {
-                                const_.push(IConst::U64(bytes))
-                            } else if ty == Type::I64 {
-                                const_.push(IConst::I64(bytes as i64))
-                            } else if ty == Type::CHAR {
-                                const_.push(IConst::Char(bytes as u8 as char))
-                            } else {
-                                todo!("Handle pointer types?")
+                            match ty {
+                                Type::BOOL => const_.push(IConst::Bool(bytes == 1)),
+                                Type::U64 => const_.push(IConst::U64(bytes)),
+                                Type::I64 => const_.push(IConst::I64(bytes as i64)),
+                                Type::CHAR => const_.push(IConst::Char(bytes as u8 as char)),
+                                ty => unreachable!("{:?}", ty),
                             }
                         }
                     }
