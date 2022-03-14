@@ -2,8 +2,10 @@ use dashmap::DashMap;
 use ropey::Rope;
 use rotth::ast::{parse_no_include, TopLevel};
 use rotth::lexer::lex_string;
+use rotth_lsp::completion::{completion, CompleteCompletionItem};
 use rotth_lsp::semantic_token::{semantic_token_from_ast, CompleteSemanticToken, LEGEND_TYPE};
 use somok::Somok;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncReadExt;
 use tower_lsp::jsonrpc::Result;
@@ -14,13 +16,13 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 struct TextDocument {
     uri: Url,
     text: String,
-    version: i32,
 }
 
 #[derive(Debug)]
 struct Backend {
     client: Client,
     ast_map: DashMap<PathBuf, Vec<TopLevel>>,
+    include_map: DashMap<PathBuf, HashSet<PathBuf>>,
     semantic_token_map: DashMap<PathBuf, Vec<CompleteSemanticToken>>,
     document_map: DashMap<PathBuf, Rope>,
 }
@@ -37,9 +39,9 @@ impl Backend {
             path.canonicalize()
         }
         .unwrap();
-        self.client
-            .log_message(MessageType::INFO, format!("Parsing file {:?}", &path))
-            .await;
+        // self.client
+        //     .log_message(MessageType::INFO, format!("Parsing file {:?}", &path))
+        //     .await;
         let text = {
             let mut src = String::new();
             let mut file = tokio::fs::File::open(&path).await?;
@@ -50,7 +52,6 @@ impl Backend {
             .parse_text(TextDocument {
                 uri: Url::from_file_path(&path).unwrap(),
                 text,
-                version: 0,
             })
             .await
             .unwrap();
@@ -58,8 +59,13 @@ impl Backend {
             .iter()
             .filter_map(|i| {
                 if let TopLevel::Include(inc) = &i {
-                    let p = inc.path().to_owned();
-                    (i.span().file, p).some()
+                    let parent = i.span().file;
+                    let path = parent.parent().unwrap().join(inc.path());
+                    self.include_map
+                        .entry(parent)
+                        .or_insert_with(Default::default)
+                        .insert(path);
+                    (i.span().file, inc.path().to_owned()).some()
                 } else {
                     None
                 }
@@ -77,17 +83,17 @@ impl Backend {
 
         let tokens = match lex_string(params.text, params.uri.to_file_path().unwrap()) {
             Ok(tokens) => tokens,
-            Err(e) => {
-                self.client
-                    .log_message(MessageType::INFO, format!("{:?}", e))
-                    .await;
+            Err(_e) => {
+                // self.client
+                //     .log_message(MessageType::ERROR, format!("{:?}", e))
+                //     .await;
                 return None;
             } // TODO!
         };
         let ast = match parse_no_include(tokens) {
             Ok(ast) => ast,
             Err(e) => {
-                let diagnostics = match e {
+                let _diagnostics = match e {
                     rotth::Error::Parser(errors) => errors
                         .into_iter()
                         .filter_map(|item| {
@@ -150,16 +156,17 @@ impl Backend {
                             }()
                         })
                         .collect::<Vec<_>>(),
-                    todo => {
-                        self.client
-                            .log_message(MessageType::INFO, format!("{:?}", todo))
-                            .await;
+                    _e => {
+                        // self.client
+                        //     .log_message(MessageType::INFO, format!("{:?}", todo))
+                        //     .await;
                         return None;
                     }
                 };
-                self.client
-                    .publish_diagnostics(params.uri.clone(), diagnostics, Some(params.version))
-                    .await;
+                // todo: unbreak diagnostics
+                // self.client
+                //     .publish_diagnostics(params.uri.clone(), diagnostics, None)
+                //     .await;
                 return None;
             } // TODO!
         };
@@ -168,7 +175,11 @@ impl Backend {
     }
 
     async fn on_change(&self, params: TextDocument) {
-        let ast = self.parse_text(params.clone()).await.unwrap();
+        let ast = if let Some(ast) = self.parse_text(params.clone()).await {
+            ast
+        } else {
+            return;
+        };
 
         self.semantic_token_map.insert(
             params.uri.to_file_path().unwrap(),
@@ -178,8 +189,14 @@ impl Backend {
         let mut includes = ast
             .iter()
             .filter_map(|i| {
-                if let TopLevel::Include(include) = i {
-                    (i.span().file, include.path().to_owned()).some()
+                if let TopLevel::Include(inc) = i {
+                    let parent = i.span().file;
+                    let path = parent.parent().unwrap().join(inc.path());
+                    self.include_map
+                        .entry(parent)
+                        .or_insert_with(Default::default)
+                        .insert(path);
+                    (i.span().file, inc.path().to_owned()).some()
                 } else {
                     None
                 }
@@ -193,12 +210,12 @@ impl Backend {
             includes.extend(extend)
         }
 
-        self.client
-            .log_message(
-                MessageType::INFO,
-                format!("Parsed AST for {:?}", params.uri.to_string()),
-            )
-            .await;
+        // self.client
+        //     .log_message(
+        //         MessageType::INFO,
+        //         format!("Parsed AST for {:?}", params.uri.to_string()),
+        //     )
+        //     .await;
     }
 }
 
@@ -212,8 +229,8 @@ impl LanguageServer for Backend {
             }),
             capabilities: ServerCapabilities {
                 definition_provider: Some(OneOf::Left(true)),
-                references_provider: Some(OneOf::Left(true)),
-                rename_provider: Some(OneOf::Left(true)),
+                // references_provider: Some(OneOf::Left(true)),
+                // rename_provider: Some(OneOf::Left(true)),
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
@@ -253,6 +270,58 @@ impl LanguageServer for Backend {
         })
     }
 
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let path = params
+            .text_document_position
+            .text_document
+            .uri
+            .to_file_path()
+            .unwrap();
+        self.client
+            .log_message(MessageType::INFO, format!("Completion in file {:?}", &path))
+            .await;
+        let position = params.text_document_position.position;
+        let completions = || -> Option<Vec<CompletionItem>> {
+            let rope = self.document_map.get(&path)?;
+            let includes = &*self.include_map.get(&path)?;
+            let mut asts = self.ast_map.get(&path)?.clone();
+            for include in includes {
+                let ast = self.ast_map.get(include)?.clone();
+                asts.extend(ast)
+            }
+
+            let char = rope.try_line_to_char(position.line as usize).ok()?;
+            let offset = char + position.character as usize;
+            let completions = completion(&asts, offset);
+            let mut ret = Vec::with_capacity(completions.len());
+            for item in completions {
+                match item {
+                    CompleteCompletionItem::Const(name) | CompleteCompletionItem::Mem(name) => {
+                        ret.push(CompletionItem {
+                            label: name.clone(),
+                            insert_text: Some(name.clone()),
+                            kind: Some(CompletionItemKind::CONSTANT),
+                            detail: Some(name),
+                            ..Default::default()
+                        });
+                    }
+                    CompleteCompletionItem::Proc(name) => {
+                        ret.push(CompletionItem {
+                            label: name.clone(),
+                            kind: Some(CompletionItemKind::FUNCTION),
+                            detail: Some(name.clone()),
+                            insert_text: Some(name),
+                            insert_text_format: Some(InsertTextFormat::SNIPPET),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+            Some(ret)
+        }();
+        Ok(completions.map(CompletionResponse::Array))
+    }
+
     async fn initialized(&self, _: InitializedParams) {
         self.client
             .log_message(MessageType::INFO, "Rotth-LSP initialized!")
@@ -276,7 +345,6 @@ impl LanguageServer for Backend {
         self.on_change(TextDocument {
             uri: params.text_document.uri,
             text: params.text_document.text,
-            version: params.text_document.version,
         })
         .await
     }
@@ -285,7 +353,6 @@ impl LanguageServer for Backend {
         self.on_change(TextDocument {
             uri: params.text_document.uri,
             text: std::mem::take(&mut params.content_changes[0].text),
-            version: params.text_document.version,
         })
         .await
     }
@@ -421,6 +488,7 @@ async fn main() {
         document_map: Default::default(),
         semantic_token_map: Default::default(),
         ast_map: Default::default(),
+        include_map: Default::default(),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }

@@ -6,28 +6,28 @@
 #[macro_export]
 macro_rules! coerce_ast {
     ($node:expr => $kind:tt || None) => {
-        if let AstKind::$kind(ast) = $node.ast {
+        if let $crate::ast::AstKind::$kind(ast) = $node.ast {
             Some(ast)
         } else {
             None
         }
     };
     ($node:expr => $kind:tt || $or:expr) => {
-        if let AstKind::$kind(ast) = $node.ast {
+        if let $crate::ast::AstKind::$kind(ast) = $node.ast {
             ast
         } else {
             $or
         }
     };
     ($node:expr => REF $kind:tt || None) => {
-        if let AstKind::$kind(ast) = &$node.ast {
+        if let $crate::ast::AstKind::$kind(ast) = &$node.ast {
             Some(ast)
         } else {
             None
         }
     };
     ($node:expr => REF $kind:tt || $or:expr) => {
-        if let AstKind::$kind(ast) = &$node.ast {
+        if let $crate::ast::AstKind::$kind(ast) = &$node.ast {
             ast
         } else {
             $or
