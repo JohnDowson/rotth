@@ -330,107 +330,107 @@ fn ty() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
         })
 }
 fn literal() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::Bool(b) => AstNode { span, ast: AstKind::Literal(IConst::Bool(b)) },
-        Token::Num(n) => AstNode { span, ast: AstKind::Literal(IConst::U64(n.parse().unwrap())) },
-        Token::Str(s) => AstNode { span, ast: AstKind::Literal(IConst::Str(s)) },
-        Token::Char(c) => AstNode { span, ast: AstKind::Literal(IConst::Char(c)) },
+    select! {
+        Token::Bool(b), span => AstNode { span, ast: AstKind::Literal(IConst::Bool(b)) },
+        Token::Num(n), span => AstNode { span, ast: AstKind::Literal(IConst::U64(n.parse().unwrap())) },
+        Token::Str(s), span => AstNode { span, ast: AstKind::Literal(IConst::Str(s)) },
+        Token::Char(c), span => AstNode { span, ast: AstKind::Literal(IConst::Char(c)) },
     }
 }
 fn include_path() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::Str(s) => AstNode { span, ast: AstKind::Path(PathBuf::from(s)) },
+    select! {
+        Token::Str(s), span => AstNode { span, ast: AstKind::Path(PathBuf::from(s)) },
     }
 }
 fn kw_include() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::KeyWord(kw @ KeyWord::Include) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    select! {
+        Token::KeyWord(kw @ KeyWord::Include), span=> AstNode { span, ast: AstKind::KeyWord(kw) },
     }
 }
 fn kw_bind() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::KeyWord(kw @ KeyWord::Bind) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    select! {
+        Token::KeyWord(kw @ KeyWord::Bind), span => AstNode { span, ast: AstKind::KeyWord(kw) },
     }
 }
 fn kw_while() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::KeyWord(kw @ KeyWord::While) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    select! {
+        Token::KeyWord(kw @ KeyWord::While), span => AstNode { span, ast: AstKind::KeyWord(kw) },
     }
 }
 fn kw_cond() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::KeyWord(kw @ KeyWord::Cond) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    select! {
+        Token::KeyWord(kw @ KeyWord::Cond), span => AstNode { span, ast: AstKind::KeyWord(kw) },
     }
 }
 fn kw_if() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::KeyWord(kw @ KeyWord::If) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    select! {
+        Token::KeyWord(kw @ KeyWord::If), span => AstNode { span, ast: AstKind::KeyWord(kw) },
     }
 }
 fn kw_else() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::KeyWord(kw @ KeyWord::Else) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    select! {
+        Token::KeyWord(kw @ KeyWord::Else), span => AstNode { span, ast: AstKind::KeyWord(kw) },
     }
 }
 fn kw_do() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::KeyWord(kw @ KeyWord::Do) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    select! {
+        Token::KeyWord(kw @ KeyWord::Do), span => AstNode { span, ast: AstKind::KeyWord(kw) },
     }
 }
 fn kw_end() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::KeyWord(kw @ KeyWord::End) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    select! {
+        Token::KeyWord(kw @ KeyWord::End), span => AstNode { span, ast: AstKind::KeyWord(kw) },
     }
 }
 fn kw_ret() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::KeyWord(kw @ KeyWord::Return) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    select! {
+        Token::KeyWord(kw @ KeyWord::Return), span => AstNode { span, ast: AstKind::KeyWord(kw) },
     }
 }
 fn kw_cast() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::KeyWord(kw @ KeyWord::Cast) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    select! {
+        Token::KeyWord(kw @ KeyWord::Cast), span => AstNode { span, ast: AstKind::KeyWord(kw) },
     }
 }
 fn kw_proc() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::KeyWord(kw @ KeyWord::Proc) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    select! {
+        Token::KeyWord(kw @ KeyWord::Proc), span => AstNode { span, ast: AstKind::KeyWord(kw) },
     }
 }
 fn kw_const() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::KeyWord(kw @ KeyWord::Const) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    select! {
+        Token::KeyWord(kw @ KeyWord::Const), span => AstNode { span, ast: AstKind::KeyWord(kw) },
     }
 }
 fn kw_mem() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::KeyWord(kw @ KeyWord::Mem) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    select! {
+        Token::KeyWord(kw @ KeyWord::Mem), span => AstNode { span, ast: AstKind::KeyWord(kw) },
     }
 }
 fn kw_var() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::KeyWord(kw @ KeyWord::Var) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    select! {
+        Token::KeyWord(kw @ KeyWord::Var), span => AstNode { span, ast: AstKind::KeyWord(kw) },
     }
 }
 fn kw_struct() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::KeyWord(kw @ KeyWord::Struct) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    select! {
+        Token::KeyWord(kw @ KeyWord::Struct), span => AstNode { span, ast: AstKind::KeyWord(kw) },
     }
 }
 
 fn word() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::Word(w) => AstNode { span, ast: AstKind::Word(w) },
+    select! {
+        Token::Word(w), span => AstNode { span, ast: AstKind::Word(w) },
     }
 }
 fn separator() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::SigSep => AstNode { span, ast: AstKind::Separator },
+    select! {
+        Token::SigSep, span => AstNode { span, ast: AstKind::Separator },
     }
 }
 fn ignore() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    select! { span,
-        Token::Ignore => AstNode { span, ast: AstKind::Binding(Binding::Ignore) },
+    select! {
+        Token::Ignore, span => AstNode { span, ast: AstKind::Binding(Binding::Ignore) },
     }
 }
 fn binding() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {

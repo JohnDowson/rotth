@@ -4,7 +4,7 @@ use somok::Somok;
 use std::collections::VecDeque;
 
 use crate::{
-    hir::{Binding, CondBranch, HirKind, HirNode, If, Intrinsic, TopLevel},
+    hir::{self, Binding, CondBranch, HirKind, HirNode, If, Intrinsic, TopLevel},
     iconst::IConst,
     span::Span,
     types::{StructIndex, Type, ValueType},
@@ -47,49 +47,94 @@ fn error<T>(span: Span, kind: ErrorKind, message: impl ToString) -> Result<T> {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+enum ItemKind {
+    Proc(ItemProc),
+    Mem,
+    Gvar(ItemGvar),
+    Const(ItemConst),
+}
+
+impl ItemKind {
+    fn as_proc(&self) -> Option<&ItemProc> {
+        if let Self::Proc(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    fn as_const(&self) -> Option<&ItemConst> {
+        if let Self::Const(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+}
+struct ItemProc {
+    ins: Vec<Type>,
+    outs: Vec<Type>,
+    vars: FnvHashMap<String, hir::Var>,
+}
+struct ItemGvar {
+    ty: Type,
+}
+struct ItemConst {
+    types: Vec<Type>,
+}
 
 pub struct Typechecker<'s> {
-    items: FnvHashMap<String, (TopLevel, bool)>,
     structs: &'s StructIndex,
     heap: THeap,
+    visited: FnvHashMap<String, ItemKind>,
+    output: FnvHashMap<String, TopLevel>,
 }
 
 impl<'s> Typechecker<'s> {
     pub fn typecheck_program(
-        items: FnvHashMap<String, TopLevel>,
+        mut items: FnvHashMap<String, TopLevel>,
         structs: &'s StructIndex,
-    ) -> Result<FnvHashMap<String, (TopLevel, bool)>> {
-        let items = items
-            .into_iter()
-            .map(|(name, item)| (name, (item, false)))
-            .collect();
-
+    ) -> Result<FnvHashMap<String, TopLevel>> {
         let heap = THeap::default();
-
         let mut this = Self {
-            items,
             structs,
             heap,
+            output: Default::default(),
+            visited: Default::default(),
         };
-        this.typecheck_proc("main")?;
-        this.items.okay()
+
+        this.typecheck_proc("main", &mut items)?;
+
+        this.output.okay()
     }
 
-    fn typecheck_proc(&mut self, name: &str) -> Result<()> {
-        let (proc, typechecked) = self.items.get_mut(name).ok_or_else(|| {
+    fn typecheck_proc(
+        &mut self,
+        name: &str,
+        items: &mut FnvHashMap<String, TopLevel>,
+    ) -> Result<()> {
+        if self.output.contains_key(name) {
+            return ().okay();
+        }
+        let mut item = items.remove(name).ok_or_else(|| {
             TypecheckError::new(
                 Span::point("".to_string(), 0),
                 Undefined(name.to_string()),
                 format!("Proc `{}` does not exist", name),
             )
         })?;
-        let proc = match proc {
+        let proc = match &mut item {
             TopLevel::Proc(p) => p,
             _ => unreachable!("This can't not be proc"),
         };
-        if *typechecked {
-            return ().okay();
-        }
+        self.visited.insert(
+            name.to_string(),
+            ItemKind::Proc(ItemProc {
+                ins: proc.ins.clone(),
+                outs: proc.outs.clone(),
+                vars: proc.vars.clone(),
+            }),
+        );
         if name == "main" && (!proc.ins.is_empty() || !(proc.outs[..] == [Type::U64])) {
             return error(
                 proc.span.clone(),
@@ -109,7 +154,14 @@ impl<'s> Typechecker<'s> {
         }
         let mut bindings = Vec::new();
 
-        self.typecheck_body(name, &mut proc.body, &mut actual, false, &mut bindings)?;
+        self.typecheck_body(
+            name,
+            items,
+            &mut proc.body,
+            &mut actual,
+            false,
+            &mut bindings,
+        )?;
 
         if !actual.eq(&expected, &self.heap) {
             error(
@@ -121,8 +173,7 @@ impl<'s> Typechecker<'s> {
                 "Type mismatch: proc body does not equal proc outputs",
             )
         } else {
-            let (_, typechecked) = self.items.get_mut(name).unwrap();
-            *typechecked = true;
+            self.output.insert(name.to_string(), item);
             ().okay()
         }
     }
@@ -130,6 +181,7 @@ impl<'s> Typechecker<'s> {
     fn typecheck_cond(
         &mut self,
         name: &str,
+        items: &mut FnvHashMap<String, TopLevel>,
         node: &mut HirNode,
         stack: &mut TypeStack,
         in_const: bool,
@@ -154,9 +206,9 @@ impl<'s> Typechecker<'s> {
                     IConst::Str(_) => todo!(),
                     IConst::Ptr(_) => Type::ptr_to(Type::ANY),
                 },
-                HirKind::Word(const_name) if is_const(const_name, &self.items) => {
-                    self.typecheck_const(const_name)?;
-                    let const_ = self.items[const_name].0.as_const().ok_or_else(|| {
+                HirKind::Word(const_name) if self.is_const(const_name, items) => {
+                    self.typecheck_const(const_name, items)?;
+                    let const_ = self.output[const_name].as_const().ok_or_else(|| {
                         TypecheckError::new(
                             pattern.span.clone(),
                             Unexpected,
@@ -195,6 +247,7 @@ impl<'s> Typechecker<'s> {
             if first_branch {
                 self.typecheck_body(
                     name,
+                    items,
                     &mut *body,
                     &mut first_branch_stack,
                     in_const,
@@ -202,7 +255,14 @@ impl<'s> Typechecker<'s> {
                 )?;
             } else {
                 let mut branch_stack = TypeStack::default();
-                self.typecheck_body(name, &mut *body, &mut branch_stack, in_const, bindings)?;
+                self.typecheck_body(
+                    name,
+                    items,
+                    &mut *body,
+                    &mut branch_stack,
+                    in_const,
+                    bindings,
+                )?;
                 if !first_branch_stack.eq(&branch_stack, &self.heap) {
                     return error(
                         node.span.clone(),
@@ -217,27 +277,6 @@ impl<'s> Typechecker<'s> {
             first_branch = false;
         }
 
-        // let mut default_branch_stack = TypeStack::default();
-        // typecheck_body(
-        //     name,
-        //     &cond.other,
-        //     &mut default_branch_stack,
-        //     heap,
-        //     items,
-        //     in_const,
-        //     bindings,
-        // )?;
-        // if !first_branch_stack.eq(&default_branch_stack, heap) {
-        //     return error(
-        //         node.span.clone(),
-        //         TypeMismatch {
-        //             expected: first_branch_stack.into_vec(heap),
-        //             actual: default_branch_stack.into_vec(heap),
-        //         },
-        //         "Type mismatch between cond branches",
-        //     );
-        // }
-
         let first_branch_stack = first_branch_stack.into_vec(&self.heap);
         for ty in first_branch_stack.into_iter() {
             stack.push(&mut self.heap, ty)
@@ -246,23 +285,32 @@ impl<'s> Typechecker<'s> {
         ().okay()
     }
 
-    fn typecheck_const(&mut self, const_name: &str) -> Result<()> {
-        let (const_, typechecked) = self.items.get_mut(const_name).ok_or_else(|| {
+    fn typecheck_const(
+        &mut self,
+        const_name: &str,
+        items: &mut FnvHashMap<String, TopLevel>,
+    ) -> Result<()> {
+        if self.output.contains_key(const_name) {
+            return ().okay();
+        }
+        let mut item = items.remove(const_name).ok_or_else(|| {
             TypecheckError::new(
                 Span::point("".to_string(), 0),
                 Undefined(const_name.to_string()),
                 format!("Const `{}` does not exist", const_name),
             )
         })?;
-        let const_ = match const_ {
+        let const_ = match &mut item {
             TopLevel::Const(c) => c,
             _ => unreachable!("This can't not be const"),
         };
-        if *typechecked {
-            return ().okay();
-        }
+        self.visited.insert(
+            const_name.to_string(),
+            ItemKind::Const(ItemConst {
+                types: const_.outs.clone(),
+            }),
+        );
 
-        let mut heap = THeap::default();
         let mut actual = TypeStack::default();
         let mut expected = TypeStack::default();
         let span = const_.span.clone();
@@ -277,80 +325,92 @@ impl<'s> Typechecker<'s> {
                     format!("Const `{}` does not exist", const_name),
                 );
             }
-            expected.push(&mut heap, *ty);
+            expected.push(&mut self.heap, *ty);
         }
         let mut bindings = Vec::new();
 
         self.typecheck_body(
             const_name,
+            items,
             &mut const_.body,
             &mut actual,
             true,
             &mut bindings,
         )?;
 
-        if actual.eq(&expected, &heap) {
-            let (_, typechecked) = self.items.get_mut(const_name).unwrap();
-            *typechecked = true;
+        if actual.eq(&expected, &self.heap) {
+            self.output.insert(const_name.to_string(), item.clone());
             ().okay()
         } else {
             error(
                 span,
                 TypeMismatch {
-                    expected: expected.into_vec(&heap),
-                    actual: actual.into_vec(&heap),
+                    expected: expected.into_vec(&self.heap),
+                    actual: actual.into_vec(&self.heap),
                 },
                 "Const body does not equal const type",
             )
         }
     }
 
-    fn typecheck_mem(&mut self, mem_name: &str) -> Result<()> {
-        let (mem, typechecked) = self.items.get_mut(mem_name).ok_or_else(|| {
+    fn typecheck_mem(
+        &mut self,
+        mem_name: &str,
+        items: &mut FnvHashMap<String, TopLevel>,
+    ) -> Result<()> {
+        if self.output.contains_key(mem_name) {
+            return ().okay();
+        }
+        self.visited.insert(mem_name.to_string(), ItemKind::Mem);
+        let mut item = items.remove(mem_name).ok_or_else(|| {
             TypecheckError::new(
                 Span::point("".to_string(), 0),
                 Undefined(mem_name.to_string()),
                 format!("Mem `{}` does not exist", mem_name),
             )
         })?;
-        let mem = match mem {
+        let mem = match &mut item {
             TopLevel::Mem(m) => m,
             _ => unreachable!("This can't not be const"),
         };
-        if *typechecked {
-            return ().okay();
-        }
 
         let span = mem.span.clone();
-        let mut heap = THeap::default();
         let mut actual = TypeStack::default();
         let mut expected = TypeStack::default();
 
-        expected.push(&mut heap, Type::U64);
+        expected.push(&mut self.heap, Type::U64);
 
         let mut bindings = Vec::new();
 
-        self.typecheck_body(mem_name, &mut mem.body, &mut actual, true, &mut bindings)?;
+        self.typecheck_body(
+            mem_name,
+            items,
+            &mut mem.body,
+            &mut actual,
+            true,
+            &mut bindings,
+        )?;
 
-        if actual.eq(&expected, &heap) {
-            let (_, typechecked) = self.items.get_mut(mem_name).unwrap();
-            *typechecked = true;
+        if actual.eq(&expected, &self.heap) {
+            self.output.insert(mem_name.to_string(), item.clone());
             ().okay()
         } else {
             error(
                 span,
                 TypeMismatch {
                     expected: vec![Type::U64],
-                    actual: actual.into_vec(&heap),
+                    actual: actual.into_vec(&self.heap),
                 },
                 "Mem body must evaluate to U64",
             )
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn typecheck_if(
         &mut self,
         name: &str,
+        items: &mut FnvHashMap<String, TopLevel>,
         if_: &mut If,
         span: &Span,
         stack: &mut TypeStack,
@@ -358,9 +418,9 @@ impl<'s> Typechecker<'s> {
         bindings: &mut Vec<Vec<(String, Type)>>,
     ) -> Result<()> {
         let (mut truth, mut lie) = (stack.clone(), stack.clone());
-        self.typecheck_body(name, &mut if_.truth, &mut truth, in_const, bindings)?;
+        self.typecheck_body(name, items, &mut if_.truth, &mut truth, in_const, bindings)?;
         if let Some(lie_body) = &mut if_.lie {
-            self.typecheck_body(name, &mut *lie_body, &mut lie, in_const, bindings)?;
+            self.typecheck_body(name, items, &mut *lie_body, &mut lie, in_const, bindings)?;
         } else {
             return ().okay();
         }
@@ -451,6 +511,7 @@ impl<'s> Typechecker<'s> {
     fn typecheck_body(
         &mut self,
         name: &str,
+        items: &mut FnvHashMap<String, TopLevel>,
         body: &mut [HirNode],
         stack: &mut TypeStack,
         in_const: bool,
@@ -469,9 +530,11 @@ impl<'s> Typechecker<'s> {
                         stack.push(&mut self.heap, Type::ptr_to(Type::CHAR));
                     }
                 },
-                HirKind::Cond(_) => self.typecheck_cond(name, node, stack, in_const, bindings)?,
-                HirKind::Return => match self.items.get(name) {
-                    Some((TopLevel::Proc(p), _)) => {
+                HirKind::Cond(_) => {
+                    self.typecheck_cond(name, items, node, stack, in_const, bindings)?
+                }
+                HirKind::Return => match self.visited.get(name) {
+                    Some(ItemKind::Proc(p)) => {
                         let mut expected = TypeStack::default();
                         for &ty in &p.outs {
                             expected.push(&mut self.heap, ty)
@@ -498,13 +561,20 @@ impl<'s> Typechecker<'s> {
                 },
                 HirKind::Word(w) => match w.as_str() {
                     rec if rec == name => {
-                        let proc = &self.items[rec].0.as_proc().ok_or_else(|| {
-                            TypecheckError::new(
-                                node.span.clone(),
-                                Unexpected,
-                                "Recursive const definition",
-                            )
-                        })?;
+                        let proc = self
+                            .visited
+                            .get(rec)
+                            .and_then(|p| match p {
+                                ItemKind::Proc(p) => p.some(),
+                                _ => None,
+                            })
+                            .ok_or_else(|| {
+                                TypecheckError::new(
+                                    node.span.clone(),
+                                    Unexpected,
+                                    "Recursive const definition",
+                                )
+                            })?;
                         for ty_expected in proc.ins.iter().rev() {
                             let ty_actual = stack.pop(&self.heap).ok_or_else(|| {
                                 TypecheckError::new(
@@ -528,7 +598,7 @@ impl<'s> Typechecker<'s> {
                             stack.push(&mut self.heap, *ty)
                         }
                     }
-                    proc_name if is_proc(proc_name, &self.items) => {
+                    proc_name if self.is_proc(proc_name, items) => {
                         if in_const {
                             return error(
                                 node.span.clone(),
@@ -536,7 +606,8 @@ impl<'s> Typechecker<'s> {
                                 "Proc calls not allowed in const context",
                             );
                         }
-                        let proc = self.items[proc_name].0.as_proc().ok_or_else(|| {
+                        self.typecheck_proc(proc_name, items)?;
+                        let proc = self.visited[proc_name].as_proc().ok_or_else(|| {
                             TypecheckError::new(
                                 node.span.clone(),
                                 Unexpected,
@@ -562,8 +633,7 @@ impl<'s> Typechecker<'s> {
                                 );
                             }
                         }
-                        self.typecheck_proc(proc_name)?;
-                        let proc = self.items[proc_name].0.as_proc().ok_or_else(|| {
+                        let proc = self.output[proc_name].as_proc().ok_or_else(|| {
                             TypecheckError::new(
                                 node.span.clone(),
                                 Unexpected,
@@ -574,38 +644,48 @@ impl<'s> Typechecker<'s> {
                             stack.push(&mut self.heap, *ty)
                         }
                     }
-                    const_name if is_const(const_name, &self.items) => {
-                        self.typecheck_const(const_name)?;
-                        let const_ = self.items[const_name].0.as_const().ok_or_else(|| {
+                    const_name if self.is_const(const_name, items) => {
+                        self.typecheck_const(const_name, items)?;
+                        let const_ = self.visited[const_name].as_const().ok_or_else(|| {
                             TypecheckError::new(
                                 node.span.clone(),
                                 Unexpected,
                                 "Recursive const definition",
                             )
                         })?;
-                        for ty in &const_.outs {
+                        for ty in &const_.types {
                             stack.push(&mut self.heap, *ty);
                         }
                     }
-                    mem_name if is_mem(mem_name, &self.items) => {
-                        self.typecheck_mem(mem_name)?;
+                    mem_name if self.is_mem(mem_name, items) => {
+                        self.typecheck_mem(mem_name, items)?;
 
                         stack.push(&mut self.heap, Type::ptr_to(Type::U8));
                     }
-                    lvar_name if is_local_var(name, lvar_name, &self.items) => {
-                        let ty = {
-                            let (p, _) = &self.items[name];
-                            let p = p.as_proc().unwrap();
-                            p.vars[lvar_name].ty
-                        };
+                    lvar_name if self.is_local_var(name, lvar_name, items) => {
+                        let ty = items
+                            .get(name)
+                            .and_then(|p| p.as_proc())
+                            .and_then(|p| p.vars.get(lvar_name))
+                            .map(|lvar| lvar.ty)
+                            .or_else(|| {
+                                self.visited
+                                    .get(name)
+                                    .and_then(|p| p.as_proc())
+                                    .and_then(|p| p.vars.get(lvar_name))
+                                    .map(|v| v.ty)
+                            })
+                            .unwrap();
+
                         stack.push(&mut self.heap, Type::ptr_to(ty));
                     }
-                    gvar_name if is_global_var(gvar_name, &self.items) => {
-                        let (gvar, _) = &self.items[gvar_name];
-                        let gvar = gvar.as_var().unwrap();
+                    gvar_name if self.is_global_var(gvar_name, items) => {
+                        let item = &items[gvar_name];
+                        let gvar = item.as_var().unwrap();
+                        self.output.insert(gvar_name.to_string(), item.clone());
                         stack.push(&mut self.heap, Type::ptr_to(gvar.ty));
                     }
-                    binding_name if is_binding(binding_name, bindings) => {
+                    binding_name if self.is_binding(binding_name, bindings) => {
                         let ty = bindings
                             .iter()
                             .rev()
@@ -905,11 +985,19 @@ impl<'s> Typechecker<'s> {
                             "If expects to consume a bool",
                         );
                     }
-                    self.typecheck_if(name, cond, &node.span.clone(), stack, in_const, bindings)?;
+                    self.typecheck_if(
+                        name,
+                        items,
+                        cond,
+                        &node.span.clone(),
+                        stack,
+                        in_const,
+                        bindings,
+                    )?;
                 }
                 HirKind::While(while_) => {
                     let stack_before = stack.clone().into_vec(&self.heap);
-                    self.typecheck_body(name, &mut while_.cond, stack, in_const, bindings)?;
+                    self.typecheck_body(name, items, &mut while_.cond, stack, in_const, bindings)?;
                     let ty = stack.pop(&self.heap).ok_or_else(|| {
                         TypecheckError::new(
                             node.span.clone(),
@@ -927,7 +1015,7 @@ impl<'s> Typechecker<'s> {
                             "While expects to consume a bool",
                         );
                     }
-                    self.typecheck_body(name, &mut while_.body, stack, in_const, bindings)?;
+                    self.typecheck_body(name, items, &mut while_.body, stack, in_const, bindings)?;
                     if stack.clone().into_vec(&self.heap) != stack_before {
                         return error(node.span.clone(), InvalidWhile, "Invalid while");
                     }
@@ -968,11 +1056,10 @@ impl<'s> Typechecker<'s> {
                         }
                     }
                     bindings.push(new_bindings);
-                    self.typecheck_body(name, &mut bind.body, stack, in_const, bindings)?;
+                    self.typecheck_body(name, items, &mut bind.body, stack, in_const, bindings)?;
                 }
                 HirKind::IgnorePattern => todo!(), // noop
                 HirKind::FieldAccess(f) => {
-                    dbg! {&f};
                     let ty = stack.pop(&self.heap).ok_or_else(|| {
                         TypecheckError::new(
                             node.span.clone(),
@@ -992,7 +1079,6 @@ impl<'s> Typechecker<'s> {
                             );
                         }
                     };
-                    dbg! {&f};
                     stack.push(&mut self.heap, Type::ptr_to(field.ty))
                 }
             }
@@ -1008,29 +1094,54 @@ impl<'s> Typechecker<'s> {
         }
         true
     }
-}
 
-fn is_proc(name: &str, items: &FnvHashMap<String, (TopLevel, bool)>) -> bool {
-    matches!(items.get(name), Some((TopLevel::Proc(_), _)))
-}
-fn is_mem(name: &str, items: &FnvHashMap<String, (TopLevel, bool)>) -> bool {
-    matches!(items.get(name), Some((TopLevel::Mem(_), _)))
-}
-fn is_binding(name: &str, bindings: &[Vec<(String, Type)>]) -> bool {
-    bindings.iter().flatten().any(|b| b.0 == name)
-}
-fn is_const(name: &str, items: &FnvHashMap<String, (TopLevel, bool)>) -> bool {
-    matches!(items.get(name), Some((TopLevel::Const(_), _)))
-}
-fn is_local_var(cur_proc: &str, name: &str, items: &FnvHashMap<String, (TopLevel, bool)>) -> bool {
-    items
-        .get(cur_proc)
-        .and_then(|(proc, _)| proc.as_proc())
-        .and_then(|proc| proc.vars.get(name))
-        .is_some()
-}
-fn is_global_var(name: &str, items: &FnvHashMap<String, (TopLevel, bool)>) -> bool {
-    matches!(items.get(name), Some((TopLevel::Var(_), _)))
+    fn is_proc(&self, name: &str, items: &FnvHashMap<String, TopLevel>) -> bool {
+        matches!(items.get(name), Some(TopLevel::Proc(_)))
+            || matches!(self.output.get(name), Some(TopLevel::Proc(_)))
+            || matches!(self.visited.get(name), Some(ItemKind::Proc(_)))
+    }
+    fn is_mem(&self, name: &str, items: &FnvHashMap<String, TopLevel>) -> bool {
+        matches!(items.get(name), Some(TopLevel::Mem(_)))
+            || matches!(self.output.get(name), Some(TopLevel::Mem(_)))
+            || matches!(self.visited.get(name), Some(ItemKind::Mem))
+    }
+    fn is_binding(&self, name: &str, bindings: &[Vec<(String, Type)>]) -> bool {
+        bindings.iter().flatten().any(|b| b.0 == name)
+    }
+    fn is_const(&self, name: &str, items: &FnvHashMap<String, TopLevel>) -> bool {
+        matches!(items.get(name), Some(TopLevel::Const(_)))
+            || matches!(self.output.get(name), Some(TopLevel::Const(_)))
+            || matches!(self.visited.get(name), Some(ItemKind::Const(_)))
+    }
+    fn is_local_var(
+        &self,
+        cur_proc: &str,
+        name: &str,
+        items: &FnvHashMap<String, TopLevel>,
+    ) -> bool {
+        items
+            .get(cur_proc)
+            .and_then(|proc| proc.as_proc())
+            .and_then(|proc| proc.vars.get(name))
+            .is_some()
+            || self
+                .output
+                .get(cur_proc)
+                .and_then(|proc| proc.as_proc())
+                .and_then(|proc| proc.vars.get(name))
+                .is_some()
+            || self
+                .visited
+                .get(cur_proc)
+                .and_then(|proc| proc.as_proc())
+                .and_then(|proc| proc.vars.get(name))
+                .is_some()
+    }
+    fn is_global_var(&self, name: &str, items: &FnvHashMap<String, TopLevel>) -> bool {
+        matches!(items.get(name), Some(TopLevel::Var(_)))
+            || matches!(self.output.get(name), Some(TopLevel::Var(_)))
+            || matches!(self.visited.get(name), Some(ItemKind::Gvar(_)))
+    }
 }
 
 #[derive(Clone, Default)]
@@ -1063,8 +1174,16 @@ impl TypeStack {
         loop {
             match (next_left, next_right) {
                 (Some(lhs), Some(rhs)) => {
-                    let lhs = lhs.deref(heap).unwrap();
-                    let rhs = rhs.deref(heap).unwrap();
+                    let lhs = if let Some(lhs) = lhs.deref(heap) {
+                        lhs
+                    } else {
+                        return false;
+                    };
+                    let rhs = if let Some(rhs) = rhs.deref(heap) {
+                        rhs
+                    } else {
+                        return false;
+                    };
                     if !lhs.ty.type_eq(&rhs.ty) {
                         break false;
                     }
@@ -1090,27 +1209,7 @@ impl TypeStack {
     }
 }
 
-#[test]
-fn test() {
-    let mut heap = THeap::default();
-    let mut stack = TypeStack::default();
-    let mut stack2 = TypeStack::default();
-    let mut stack3 = TypeStack::default();
-    let mut stack4 = TypeStack::default();
-    stack.push(&mut heap, Type::I64);
-    stack.push(&mut heap, Type::U64);
-    stack2.push(&mut heap, Type::I64);
-    stack2.push(&mut heap, Type::U64);
-    stack3.push(&mut heap, Type::U64);
-    stack3.push(&mut heap, Type::I64);
-    stack4.push(&mut heap, Type::I64);
-
-    assert!(stack.eq(&stack2, &heap));
-    assert!(!stack.eq(&stack3, &heap));
-    assert!(!stack.eq(&stack4, &heap));
-}
-
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct TypeFrame {
     ty: Type,
     prev: Option<TRef>,

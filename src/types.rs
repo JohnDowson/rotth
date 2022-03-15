@@ -95,7 +95,7 @@ impl Type {
         }
     }
 
-    fn size(&self, struct_index: &StructIndex) -> usize {
+    pub fn size(&self, struct_index: &StructIndex) -> usize {
         if self.ptr_depth > 0 {
             8
         } else {

@@ -1,14 +1,16 @@
 include "./std.rh"
 
 ; Token is:
-const Token-Loc: u64 do 0 end  ; Location - offset into source, 8 bytes
-const Token-Kind: u64 do 8 end ; Kind     - token kind, 8 bytes
+struct Token do
+    loc: u64 ; Location - offset into source, 8 bytes
+    kind: u64 ; Kind     - token kind, 8 bytes
+end
 const sizeof(Token): u64 do 16 end
 mem Tokens do sizeof(Token) 1024 * end
-mem Tok-count do 8 end
+var Tok-count: u64
 
 proc push-token u64 &>char do
-    Tokens Tok-count cast &>u64 @u64 sizeof(Token) * ptr+ cast &>u64
+    Tokens Tok-count @u64 sizeof(Token) * ptr+ cast &>u64
     bind len: u64 start: &>char tokens: &>u64 do
 
     end
@@ -29,23 +31,20 @@ end"
     0
 end
 
-mem TmpTok do sizeof(Token) end
 proc process-token &>char u64 &>char do
+    var tok: Token
     bind buf: &>char tn: u64 ts: &>char do
-        buf cast u64 ts cast u64 absdiff TmpTok cast &>u64 !u64
-        tn ts type-of-token
-        TmpTok Token-Kind ptr+ cast &>u64 !u64
+        buf cast u64 ts cast u64 absdiff tok ->loc !u64
+        tn ts type-of-token tok ->kind !u64
         tn ts puts "\n" puts
-        TmpTok cast &>u64 put-token
+        tok put-token
     end
-    0 TmpTok cast &>u64 over over Token-Kind ptr+ !u64 !u64
 end
 
-proc put-token &>u64 do
-    dup @u64 swap Token-Kind ptr+ @u64
-    bind loc: u64 kind: u64 do
-        " loc: " puts loc putu "\n" puts
-        " kind: " puts kind putu "\n" puts
+proc put-token &>Token do
+    bind tok: &>Token do
+        " loc: " puts tok ->loc @u64 putu "\n" puts
+        " kind: " puts tok ->kind @u64 putu "\n" puts
     end
 end
 
