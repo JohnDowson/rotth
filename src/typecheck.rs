@@ -76,7 +76,7 @@ impl<'s> Typechecker<'s> {
     }
 
     fn typecheck_proc(&mut self, name: &str) -> Result<()> {
-        let (proc, typechecked) = self.items.get(name).ok_or_else(|| {
+        let (proc, typechecked) = self.items.get_mut(name).ok_or_else(|| {
             TypecheckError::new(
                 Span::point("".to_string(), 0),
                 Undefined(name.to_string()),
@@ -98,6 +98,7 @@ impl<'s> Typechecker<'s> {
             );
         }
 
+        let span = proc.span.clone();
         let mut actual = TypeStack::default();
         let mut expected = TypeStack::default();
         for ty in &proc.ins {
@@ -107,11 +108,12 @@ impl<'s> Typechecker<'s> {
             expected.push(&mut self.heap, *ty)
         }
         let mut bindings = Vec::new();
+
         self.typecheck_body(name, &mut proc.body, &mut actual, false, &mut bindings)?;
 
         if !actual.eq(&expected, &self.heap) {
             error(
-                proc.span.clone(),
+                span,
                 TypeMismatch {
                     actual: actual.into_vec(&self.heap),
                     expected: expected.into_vec(&self.heap),
@@ -133,7 +135,7 @@ impl<'s> Typechecker<'s> {
         in_const: bool,
         bindings: &mut Vec<Vec<(String, Type)>>,
     ) -> Result<()> {
-        let ty = stack.pop(&mut self.heap).ok_or_else(|| {
+        let ty = stack.pop(&self.heap).ok_or_else(|| {
             TypecheckError::new(node.span.clone(), NotEnoughData, "Not enough data for cond")
         })?;
         let cond = match &mut node.hir {
@@ -263,6 +265,7 @@ impl<'s> Typechecker<'s> {
         let mut heap = THeap::default();
         let mut actual = TypeStack::default();
         let mut expected = TypeStack::default();
+        let span = const_.span.clone();
         for ty in &const_.outs {
             if ty.is_ptr() {
                 return error(
@@ -277,7 +280,14 @@ impl<'s> Typechecker<'s> {
             expected.push(&mut heap, *ty);
         }
         let mut bindings = Vec::new();
-        self.typecheck_body(const_name, const_.body, &mut actual, true, &mut bindings)?;
+
+        self.typecheck_body(
+            const_name,
+            &mut const_.body,
+            &mut actual,
+            true,
+            &mut bindings,
+        )?;
 
         if actual.eq(&expected, &heap) {
             let (_, typechecked) = self.items.get_mut(const_name).unwrap();
@@ -285,9 +295,9 @@ impl<'s> Typechecker<'s> {
             ().okay()
         } else {
             error(
-                const_.span.clone(),
+                span,
                 TypeMismatch {
-                    expected: const_.outs,
+                    expected: expected.into_vec(&heap),
                     actual: actual.into_vec(&heap),
                 },
                 "Const body does not equal const type",
@@ -311,6 +321,7 @@ impl<'s> Typechecker<'s> {
             return ().okay();
         }
 
+        let span = mem.span.clone();
         let mut heap = THeap::default();
         let mut actual = TypeStack::default();
         let mut expected = TypeStack::default();
@@ -318,6 +329,7 @@ impl<'s> Typechecker<'s> {
         expected.push(&mut heap, Type::U64);
 
         let mut bindings = Vec::new();
+
         self.typecheck_body(mem_name, &mut mem.body, &mut actual, true, &mut bindings)?;
 
         if actual.eq(&expected, &heap) {
@@ -326,7 +338,7 @@ impl<'s> Typechecker<'s> {
             ().okay()
         } else {
             error(
-                mem.span.clone(),
+                span,
                 TypeMismatch {
                     expected: vec![Type::U64],
                     actual: actual.into_vec(&heap),
@@ -403,14 +415,14 @@ impl<'s> Typechecker<'s> {
     }
 
     fn typecheck_binop(&mut self, stack: &mut TypeStack, node: &HirNode) -> Result<()> {
-        let b = stack.pop(&mut self.heap).ok_or_else(|| {
+        let b = stack.pop(&self.heap).ok_or_else(|| {
             TypecheckError::new(
                 node.span.clone(),
                 NotEnoughData,
                 "Not enough data for binary operation",
             )
         })?;
-        let a = stack.pop(&mut self.heap).ok_or_else(|| {
+        let a = stack.pop(&self.heap).ok_or_else(|| {
             TypecheckError::new(
                 node.span.clone(),
                 NotEnoughData,
@@ -872,7 +884,7 @@ impl<'s> Typechecker<'s> {
                     | Intrinsic::Lt
                     | Intrinsic::Le
                     | Intrinsic::Gt
-                    | Intrinsic::Ge => self.typecheck_boolean(stack, &node)?,
+                    | Intrinsic::Ge => self.typecheck_boolean(stack, node)?,
                     Intrinsic::Dump => (),
                 },
                 HirKind::If(cond) => {
@@ -1111,26 +1123,23 @@ type THeap = Heap<TypeFrame, 0>;
 fn test_typecheck() {
     use super::hir::{HirKind, HirNode, Proc};
     use std::assert_matches::assert_matches;
-    let mut procs = [(
+    let procs = [(
         "main".to_string(),
-        (
-            TopLevel::Proc(Proc {
-                ins: vec![],
-                outs: vec![Type::U64],
-                body: vec![HirNode {
-                    span: Span::point("".to_string(), 0),
-                    hir: HirKind::Literal(IConst::U64(1)),
-                }],
+        TopLevel::Proc(Proc {
+            ins: vec![],
+            outs: vec![Type::U64],
+            body: vec![HirNode {
                 span: Span::point("".to_string(), 0),
-                vars: Default::default(),
-            }),
-            false,
-        ),
+                hir: HirKind::Literal(IConst::U64(1)),
+            }],
+            span: Span::point("".to_string(), 0),
+            vars: Default::default(),
+        }),
     )]
     .into_iter()
     .collect();
     assert_matches!(
-        typecheck_proc("main", &mut procs, &StructIndex::default()),
-        Ok(())
+        Typechecker::typecheck_program(procs, &StructIndex::default()),
+        Ok(_)
     );
 }
