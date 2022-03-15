@@ -10,7 +10,6 @@ proc utoa &>u8 u64 : u64 &>char do
     bind buf: &>u8 u: u64 n: u64 do
         u 0 = if
             '0' cast u8 buf !u8
-            '\n' cast u8 buf 1 ptr+ cast &>u8 !u8
             2 buf cast &>char return
         end
         n
@@ -24,7 +23,7 @@ proc utoa &>u8 u64 : u64 &>char do
         end drop
         bind n: u64 do
             n buf rev-slice
-            n 1 + buf cast &>char
+            n buf cast &>char
         end
     end
 end
@@ -49,13 +48,25 @@ proc rev-slice u64 &>u8 do
 end
 
 mem PUTU_BUF do 32 end
+proc ZERO_PUTU_BUF do
+    0 while dup 32 8 div < do
+        dup PUTU_BUF swap ptr+ 0 swap !u64
+        1 +
+    end drop
+end
+
+proc putb bool do
+    if "true" else "false" end puts
+end
 
 proc putu u64 do
     PUTU_BUF swap utoa puts
+    ZERO_PUTU_BUF
 end
 
 proc eputu u64 do
     PUTU_BUF swap utoa eputs
+    ZERO_PUTU_BUF
 end
 
 proc puts u64 &>char do
@@ -72,6 +83,17 @@ proc cstrlen &>char : u64 do
     while dup @u8 0 cast u8 != do
         1 ptr+
     end cast u64 swap cast u64 absdiff
+end
+
+proc streq u64 &>char u64 &>char : bool do
+    bind an: u64 as: &>char bn: u64 bs: &>char do
+        an bn != if false return end
+        0 while dup an != do
+            dup dup as swap ptr+ swap bs swap ptr+ cast &>u8 @u8 swap @u8 != if drop false return end
+            1 +
+        end drop
+    end
+    true
 end
 
 proc absdiff u64 u64 : u64 do

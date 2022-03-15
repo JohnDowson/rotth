@@ -137,3 +137,53 @@ fn test_proc() {
         }))
     )
 }
+#[test]
+fn test_struct() {
+    let tokens = lex_string(
+        indoc::indoc! {r#"
+            struct foo do
+                field: u64
+                field2: u64
+            end
+        "#}
+        .into(),
+        "./".try_into().unwrap(),
+    )
+    .unwrap();
+    let ast = struct_().then_ignore(end()).parse(Stream::from_iter(
+        tokens.last().unwrap().1.clone(),
+        tokens.into_iter(),
+    ));
+    assert_matches!(
+        ast,
+        Ok(TopLevel::Struct(Struct {
+            struct_: _,
+            name: _,
+            do_: _,
+            body: _,
+            end: _
+        }))
+    )
+}
+#[test]
+fn test_ty() {
+    let tokens = lex_string(
+        indoc::indoc! {r#"
+            &>char
+        "#}
+        .into(),
+        "./".try_into().unwrap(),
+    )
+    .unwrap();
+    let ast = ty().then_ignore(end()).parse(Stream::from_iter(
+        tokens.last().unwrap().1.clone(),
+        tokens.into_iter(),
+    ));
+    assert_matches!(
+        ast,
+        Ok(AstNode {
+            span: _,
+            ast: AstKind::Type(_)
+        })
+    )
+}

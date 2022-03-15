@@ -140,6 +140,11 @@ pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<Either<u64, Vec<u64>>, S
             }
             Op::Return => i = call_stack.pop().unwrap() as usize,
             Op::Exit => return stack.pop().unwrap().left().okay(),
+            Op::PushLvar(_) => todo!(),
+            Op::ReserveLocals(_) => todo!(),
+            Op::FreeLocals(_) => todo!(),
+            Op::ReserveEscaping(_) => todo!(),
+            Op::PushEscaping(_) => todo!(),
         }
         i += 1;
     }

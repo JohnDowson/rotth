@@ -1,16 +1,124 @@
 include "./std.rh"
 
+; Token is:
+struct Token do
+    loc: u64 ; Location - offset into source, 8 bytes
+    kind: u64 ; Kind     - token kind, 8 bytes
+end
+const sizeof(Token): u64 do 16 end
+mem Tokens do sizeof(Token) 1024 * end
+var Tok-count: u64
+
+proc push-token u64 &>char do
+    Tokens Tok-count @u64 sizeof(Token) * ptr+ cast &>u64
+    bind len: u64 start: &>char tokens: &>u64 do
+
+    end
+end
+
 proc main: u64 do
-    "string of words to be tokenized" scan putu "\n" puts
+"proc main : u64 do
+    0
+end"
+    bind n: u64 s: &>char do
+        n s while over 0 != do
+            scan bind restn: u64 rests: &>char tokn: u64 toks: &>char do
+                s tokn toks process-token
+                restn rests
+            end
+        end drop drop
+    end
     0
 end
 
-proc scan u64 &>char : u64 do
+proc process-token &>char u64 &>char do
+    var tok: Token
+    bind buf: &>char tn: u64 ts: &>char do
+        buf cast u64 ts cast u64 absdiff tok ->loc !u64
+        tn ts type-of-token tok ->kind !u64
+        tn ts puts "\n" puts
+        tok put-token
+    end
+end
+
+proc put-token &>Token do
+    bind tok: &>Token do
+        " loc: " puts tok ->loc @u64 putu "\n" puts
+        " kind: " puts tok ->kind @u64 putu "\n" puts
+    end
+end
+
+; "include"
+; "return"
+; "cond"
+; "if"
+; "else"
+; "proc"
+; "while"
+; "do"
+; "bind"
+; "const"
+; "mem"
+; "cast"
+; "end"
+
+const TOK_WORD: u64 do 0 end
+const TOK_KEYWORD: u64 do 1 end
+const TOK_SEPARATOR: u64 do 2 end
+proc type-of-token u64 &>char : u64 do
+    bind tn: u64 ts: &>char do
+        tn ts "include" streq if TOK_KEYWORD
+        else tn ts "return" streq if TOK_KEYWORD
+        else tn ts "cond" streq if TOK_KEYWORD
+        else tn ts "if" streq if TOK_KEYWORD
+        else tn ts "else" streq if TOK_KEYWORD
+        else tn ts "proc" streq if TOK_KEYWORD
+        else tn ts "while" streq if TOK_KEYWORD
+        else tn ts "do" streq if TOK_KEYWORD
+        else tn ts "bind" streq if TOK_KEYWORD
+        else tn ts "const" streq if TOK_KEYWORD
+        else tn ts "mem" streq if TOK_KEYWORD
+        else tn ts "cast" streq if TOK_KEYWORD
+        else tn ts "end" streq if TOK_KEYWORD
+        else tn ts ":" streq if TOK_SEPARATOR
+        else TOK_WORD
+        end end end end end end end end end end end end end end
+    end
+end
+
+proc scan u64 &>char : u64 &>char u64 &>char do
+    bind n: u64 s: &>char do
+        n s scan-start
+        bind start: u64 do
+            n start - s start ptr+ cast &>char
+            bind n1: u64 s1: &>char do
+                n1 s1 scan-end
+                bind finish: u64 do
+                   n start finish + - s1 finish ptr+ cast &>char
+                   finish s1
+                end
+            end
+        end
+    end
+end
+
+proc scan-start u64 &>char : u64 do
     swap
     0 while over over != do
         bind s: &>char n: u64 i: u64 do
-            s i ptr+ cast &>u8 @u8 cast char
-            ' ' = if i return end
+            s i ptr+ cast &>u8 @u8 cast u64
+            32 > if i return end
+            s n i 1 +
+        end
+    end bind _ _ i: u64 do i end
+end
+
+proc scan-end u64 &>char : u64 do
+    swap
+    0 while over over != do
+        bind s: &>char n: u64 i: u64 do
+            s i ptr+ cast &>u8 @u8 cast u64
+            32 <= if i return end
             s n i 1 +
         end
     end bind _ _ i: u64 do i end

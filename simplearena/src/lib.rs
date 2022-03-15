@@ -33,6 +33,15 @@ pub struct Ref<T, const ID: u32>(AllocId<ID>, PhantomData<Heap<T, ID>>)
 where
     T: 'static;
 
+impl<T, const ID: u32> Debug for Ref<T, ID>
+where
+    T: 'static,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Ref").field(&self.0 .0).finish()
+    }
+}
+
 impl<'h, T, const ID: u32> Ref<T, ID> {
     pub fn as_usize(&self) -> usize {
         self.0.as_usize()
@@ -73,10 +82,6 @@ impl<T: Debug> Debug for Container<T> {
 }
 
 impl<T> Container<T> {
-    fn free(&mut self) {
-        *self = Self::Free;
-    }
-
     pub fn as_value(&self) -> Option<&T> {
         if let Self::Value(v) = self {
             Some(v)
@@ -122,11 +127,6 @@ impl<'h, T, const ID: u32> Heap<T, ID> {
             self.values.push(Container::Value(value));
             Ref::new((self.values.len() - 1).into())
         }
-    }
-
-    pub fn drop(&mut self, vref: Ref<T, ID>) {
-        self.values[vref.as_usize()].free();
-        self.free.push(vref.as_usize())
     }
 
     fn get(&self, rf: &AllocId<ID>) -> Option<&T> {

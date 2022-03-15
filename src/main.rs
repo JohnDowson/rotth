@@ -1,14 +1,15 @@
 use ariadne::{Color, FileCache, Fmt, Label, Report, ReportKind, Span};
 use chumsky::error::SimpleReason;
 use clap::Parser as ClapParser;
+use fnv::FnvHashMap;
 use rotth::{
-    ast::parse,
+    ast::{self, parse},
     emit,
     eval::eval,
-    hir::hir_for_ast,
+    hir::Walker,
     lexer::lex,
     lir,
-    typecheck::{typecheck_program, ErrorKind},
+    typecheck::{ErrorKind, Typechecker},
     Error, Result,
 };
 use somok::Somok;
@@ -232,6 +233,9 @@ fn compiler() -> Result<()> {
     }
 
     let ast = parse(tokens)?;
+    let (structs, ast) = ast
+        .into_iter()
+        .partition::<FnvHashMap<_, _>, _>(|(_, i)| matches!(i, ast::TopLevel::Struct(_)));
 
     let parsed = Instant::now();
     if args.time {
@@ -243,7 +247,10 @@ fn compiler() -> Result<()> {
         println!("{ast:#?}");
     }
 
-    let hir = hir_for_ast(ast);
+    let struct_index = rotth::types::define_structs(structs);
+
+    let mut walker = Walker::new(&struct_index);
+    let hir = walker.walk_ast(ast);
 
     let lowered = Instant::now();
     if args.time {
@@ -255,14 +262,14 @@ fn compiler() -> Result<()> {
         println!("{hir:#?}");
     }
 
-    let procs = typecheck_program(hir)?;
+    let procs = Typechecker::typecheck_program(hir, &struct_index)?;
 
     let typechecked = Instant::now();
     if args.time {
         println!("Typechecked in:\t{:?}", typechecked - lowered)
     }
 
-    let comp = lir::Compiler::default();
+    let comp = lir::Compiler::new(struct_index);
     let (lir, strs, mems) = comp.compile(procs);
 
     let transpiled = Instant::now();
@@ -277,8 +284,7 @@ fn compiler() -> Result<()> {
         }
     }
     if args.compile {
-        let comp = emit::Compiler::default();
-        comp.compile(
+        emit::compile(
             lir,
             &strs,
             &mems,
