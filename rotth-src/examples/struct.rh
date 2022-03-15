@@ -1,0 +1,21 @@
+include "../std.rh"
+
+struct String do
+    len: u64
+    buf: &>char
+end
+
+var global: String
+
+proc main: u64 do
+    var str: String
+    "foobar"
+    bind n: u64 s: &>char do
+        n str -> len !u64
+        s cast u64 str -> buf cast &>u64 !u64
+    end
+    str -> len @u64
+    str -> buf cast &>u64 @u64 cast &>char
+    puts
+    0
+end

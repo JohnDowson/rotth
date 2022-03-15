@@ -54,8 +54,35 @@ pub fn semantic_token_from_ast(ast: &[TopLevel]) -> Vec<CompleteSemanticToken> {
                 push_tokens_recursively(&p.body, &mut semantic_tokens);
                 push_token(&p.end, &mut semantic_tokens, SemanticTokenType::KEYWORD);
             }
-            TopLevel::Const(_) => (),
-            TopLevel::Mem(_) => (),
+            TopLevel::Const(c) => {
+                push_token(&c.const_, &mut semantic_tokens, SemanticTokenType::KEYWORD);
+                push_token(&c.name, &mut semantic_tokens, SemanticTokenType::TYPE);
+                push_token(&c.do_, &mut semantic_tokens, SemanticTokenType::KEYWORD);
+                push_tokens_recursively(&c.body, &mut semantic_tokens);
+                push_token(&c.end, &mut semantic_tokens, SemanticTokenType::KEYWORD);
+            }
+            TopLevel::Mem(m) => {
+                push_token(&m.mem, &mut semantic_tokens, SemanticTokenType::KEYWORD);
+                push_token(&m.name, &mut semantic_tokens, SemanticTokenType::TYPE);
+                push_token(&m.do_, &mut semantic_tokens, SemanticTokenType::KEYWORD);
+                push_tokens_recursively(&m.body, &mut semantic_tokens);
+                push_token(&m.end, &mut semantic_tokens, SemanticTokenType::KEYWORD);
+            }
+            TopLevel::Var(v) => {
+                push_token(&v.var, &mut semantic_tokens, SemanticTokenType::KEYWORD);
+                push_token(&v.name, &mut semantic_tokens, SemanticTokenType::TYPE);
+                push_token(&v.sep, &mut semantic_tokens, SemanticTokenType::KEYWORD);
+                push_token(&v.ty, &mut semantic_tokens, SemanticTokenType::KEYWORD);
+            }
+            TopLevel::Struct(s) => {
+                push_token(&s.struct_, &mut semantic_tokens, SemanticTokenType::KEYWORD);
+                push_token(&s.name, &mut semantic_tokens, SemanticTokenType::TYPE);
+                push_token(&s.do_, &mut semantic_tokens, SemanticTokenType::KEYWORD);
+                for field in &s.body {
+                    push_tokens_recursively(field, &mut semantic_tokens);
+                }
+                push_token(&s.end, &mut semantic_tokens, SemanticTokenType::KEYWORD);
+            }
         }
     }
 
@@ -64,6 +91,11 @@ pub fn semantic_token_from_ast(ast: &[TopLevel]) -> Vec<CompleteSemanticToken> {
 
 fn push_tokens_recursively(node: &AstNode, tokens: &mut Vec<CompleteSemanticToken>) {
     match &node.ast {
+        AstKind::StructField(f) => {
+            push_token(&*f.name, tokens, SemanticTokenType::PARAMETER);
+            push_token(&*f.sep, tokens, SemanticTokenType::KEYWORD);
+            push_token(&*f.ty, tokens, SemanticTokenType::TYPE);
+        }
         AstKind::KeyWord(_) => push_token(node, tokens, SemanticTokenType::KEYWORD),
         AstKind::Type(_) => push_token(node, tokens, SemanticTokenType::TYPE),
         AstKind::Separator => push_token(node, tokens, SemanticTokenType::KEYWORD),
@@ -138,6 +170,15 @@ fn push_tokens_recursively(node: &AstNode, tokens: &mut Vec<CompleteSemanticToke
             for binding in b {
                 push_tokens_recursively(binding, tokens);
             }
+        }
+        AstKind::Var(v) => {
+            push_token(&v.var, tokens, SemanticTokenType::KEYWORD);
+            if let Some(ret) = &v.ret {
+                push_token(ret, tokens, SemanticTokenType::KEYWORD);
+            }
+            push_token(&v.name, tokens, SemanticTokenType::PARAMETER);
+            push_token(&v.sep, tokens, SemanticTokenType::KEYWORD);
+            push_token(&v.ty, tokens, SemanticTokenType::TYPE);
         }
     }
 }

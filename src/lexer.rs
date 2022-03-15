@@ -15,6 +15,7 @@ pub enum Token {
     Ignore,
     SigSep,
     Ptr,
+    FieldAccess,
 }
 
 impl std::fmt::Debug for Token {
@@ -29,23 +30,14 @@ impl std::fmt::Debug for Token {
             Self::Ignore => write!(f, "_"),
             Self::SigSep => write!(f, ":"),
             Self::Ptr => write!(f, "&>"),
+            Self::FieldAccess => write!(f, "->"),
         }
     }
 }
 
 impl std::fmt::Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Bool(b) => write!(f, "{}", b),
-            Self::Word(word) => write!(f, "{}", word),
-            Self::Str(str) => write!(f, "{:?}", str),
-            Self::Char(c) => write!(f, "{:?}", c),
-            Self::KeyWord(keyword) => keyword.fmt(f),
-            Self::Num(num) => write!(f, "{}", num),
-            Self::Ignore => write!(f, "_"),
-            Self::SigSep => write!(f, ":"),
-            Self::Ptr => write!(f, "&>"),
-        }
+        <Self as std::fmt::Debug>::fmt(self, f)
     }
 }
 
@@ -62,33 +54,21 @@ pub enum KeyWord {
     Bind,
     Const,
     Mem,
+    Var,
+    Struct,
     Cast,
     End,
 }
 
 impl std::fmt::Display for KeyWord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Include => write!(f, "Include"),
-            Self::Return => write!(f, "Return"),
-            Self::Cond => write!(f, "Cond"),
-            Self::If => write!(f, "If"),
-            Self::Else => write!(f, "Else"),
-            Self::Proc => write!(f, "Proc"),
-            Self::While => write!(f, "While"),
-            Self::Do => write!(f, "Do"),
-            Self::Bind => write!(f, "Bind"),
-            Self::Const => write!(f, "Const"),
-            Self::Mem => write!(f, "Mem"),
-            Self::Cast => write!(f, "Cast"),
-            Self::End => write!(f, "End"),
-        }
+        std::fmt::Debug::fmt(self, f)
     }
 }
 
 pub fn word_parser<C: Character, E: CError<C>>(
 ) -> impl Parser<C, C::Collection, Error = E> + Copy + Clone {
-    const ALLOWED_NON_ALPHA: &[u8; 24] = b"(){}[]<>|\\/!@#$%^&*-=+_?";
+    const ALLOWED_NON_ALPHA: &[u8; 26] = b"(){}[]<>|\\/!@#$%^&*-=+_?.,";
     filter(|c: &C| {
         c.to_char().is_ascii_alphabetic() || ALLOWED_NON_ALPHA.contains(&(c.to_char() as u8))
     })
@@ -171,24 +151,38 @@ where
             "bind" => KeyWord::Bind,
             "const" => KeyWord::Const,
             "mem" => KeyWord::Mem,
+            "var" => KeyWord::Var,
+            "struct" => KeyWord::Struct,
             "cast" => KeyWord::Cast,
             "end" => KeyWord::End,
-            _ => return Simple::custom(s, "Invalid keyword".to_string()).error(),
+            _ => return Simple::custom(s, "Invalid keyword").error(),
         })
         .okay()
     });
 
     let ignore = word_parser().try_map(|i: String, s| match i.as_str() {
         "_" => Token::Ignore.okay(),
-        _ => Simple::custom(s, "Invalid keyword".to_string()).error(),
+        _ => Simple::custom(s, "Invalid keyword").error(),
     });
 
     let ptr = just('&').ignore_then(just('>').ignored()).to(Token::Ptr);
 
     let sig_sep = just(':').to(Token::SigSep);
+    let field_access = just('-').then(just('>')).to(Token::FieldAccess);
 
-    let token = choice((num, char, string, ptr, sig_sep, ignore, bool, keyword, word))
-        .recover_with(skip_then_retry_until([]));
+    let token = choice((
+        num,
+        char,
+        string,
+        field_access,
+        ptr,
+        sig_sep,
+        ignore,
+        bool,
+        keyword,
+        word,
+    ))
+    .recover_with(skip_then_retry_until([]));
 
     let comment = just(";").then(take_until(just('\n'))).padded();
 

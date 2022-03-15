@@ -3,16 +3,17 @@ use crate::{
     iconst::IConst,
     lexer::KeyWord,
     span::Span,
-    types::Type,
+    types::{self, StructId, StructIndex, Type},
 };
+use fnv::FnvHashMap;
 use somok::Somok;
-use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub enum TopLevel {
     Proc(Proc),
     Const(Const),
     Mem(Mem),
+    Var(TopLevelVar),
 }
 impl TopLevel {
     pub fn as_proc(&self) -> Option<&Proc> {
@@ -30,6 +31,20 @@ impl TopLevel {
             None
         }
     }
+
+    pub fn as_var(&self) -> Option<&TopLevelVar> {
+        if let Self::Var(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TopLevelVar {
+    pub ty: Type,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +53,7 @@ pub struct Proc {
     pub outs: Vec<Type>,
     pub body: Vec<HirNode>,
     pub span: Span,
+    pub vars: FnvHashMap<String, Var>,
 }
 
 #[derive(Debug, Clone)]
@@ -70,8 +86,13 @@ pub enum HirKind {
     Literal(IConst),
     IgnorePattern,
     Return,
+    FieldAccess(FieldAccess),
 }
-
+#[derive(Debug, Clone)]
+pub struct FieldAccess {
+    pub ty: Option<StructId>,
+    pub field: String,
+}
 #[derive(Debug, Clone)]
 pub struct If {
     pub truth: Vec<HirNode>,
@@ -148,132 +169,164 @@ pub enum Intrinsic {
     Ge,
 }
 
-fn intrinsic(ast: &AstNode) -> Option<HirNode> {
-    let intrinsic = match &ast.ast {
-        AstKind::Cast(Cast {
-            cast: _,
-            ty:
-                box AstNode {
-                    span: _,
-                    ast: AstKind::Type(ty),
-                },
-        }) => Intrinsic::Cast(*ty),
-        AstKind::Word(ref w) => match w.as_str() {
-            "drop" => Intrinsic::Drop,
-            "dup" => Intrinsic::Dup,
-            "swap" => Intrinsic::Swap,
-            "over" => Intrinsic::Over,
-
-            "@u64" => Intrinsic::ReadU64,
-            "@u8" => Intrinsic::ReadU8,
-            "!u64" => Intrinsic::WriteU64,
-            "!u8" => Intrinsic::WriteU8,
-
-            "&?&" => Intrinsic::CompStop,
-            "&?" => Intrinsic::Dump,
-            "print" => Intrinsic::Print,
-
-            "syscall0" => Intrinsic::Syscall0,
-            "syscall1" => Intrinsic::Syscall1,
-            "syscall2" => Intrinsic::Syscall2,
-            "syscall3" => Intrinsic::Syscall3,
-            "syscall4" => Intrinsic::Syscall4,
-            "syscall5" => Intrinsic::Syscall5,
-            "syscall6" => Intrinsic::Syscall6,
-
-            "argc" => Intrinsic::Argc,
-            "argv" => Intrinsic::Argv,
-
-            "+" => Intrinsic::Add,
-            "-" => Intrinsic::Sub,
-            "*" => Intrinsic::Mul,
-            "divmod" => Intrinsic::Divmod,
-
-            "=" => Intrinsic::Eq,
-            "!=" => Intrinsic::Ne,
-            "<" => Intrinsic::Lt,
-            "<=" => Intrinsic::Le,
-            ">" => Intrinsic::Gt,
-            ">=" => Intrinsic::Ge,
-            _ => return None,
-        },
-        _ => return None,
-    };
-    HirNode {
-        span: ast.span.clone(),
-        hir: HirKind::Intrinsic(intrinsic),
-    }
-    .some()
+#[derive(Debug, Clone)]
+pub struct Var {
+    pub ty: types::Type,
+    pub escaping: bool,
 }
 
-fn hir_bindings(bindings: Vec<AstNode>) -> Vec<Binding> {
-    let mut res = Vec::with_capacity(bindings.len());
-    for binding in bindings {
-        if let AstKind::Binding(binding) = binding.ast {
-            match binding {
-                ast::Binding::Ignore => res.push(Binding::Ignore),
-                ast::Binding::Bind {
-                    name:
-                        box AstNode {
-                            span: _,
-                            ast: AstKind::Word(name),
-                        },
-                    sep: _,
-                    ty:
-                        box AstNode {
-                            span: _,
-                            ast: AstKind::Type(ty),
-                        },
-                } => res.push(Binding::Bind { name, ty }),
-                _ => unreachable!(),
-            }
-        } else {
-            unreachable!()
+pub struct Walker<'s> {
+    structs: &'s StructIndex,
+    proc_vars: FnvHashMap<String, Var>,
+}
+
+impl<'s> Walker<'s> {
+    pub fn new(structs: &'s StructIndex) -> Self {
+        Self {
+            structs,
+            proc_vars: Default::default(),
         }
     }
-    res
-}
+    fn intrinsic(&mut self, ast: &AstNode) -> Option<HirNode> {
+        let intrinsic = match &ast.ast {
+            AstKind::Cast(Cast {
+                cast: _,
+                ty:
+                    box AstNode {
+                        span: _,
+                        ast: AstKind::Type(ty),
+                    },
+            }) => Intrinsic::Cast(ty.clone().to_type(self.structs).unwrap()),
+            AstKind::Word(ref w) => match w.as_str() {
+                "drop" => Intrinsic::Drop,
+                "dup" => Intrinsic::Dup,
+                "swap" => Intrinsic::Swap,
+                "over" => Intrinsic::Over,
 
-pub fn hir_for_ast(ast: HashMap<String, ast::TopLevel>) -> HashMap<String, TopLevel> {
-    ast.into_iter()
-        .map(|(name, item)| (name, item.into()))
-        .collect()
-}
+                "@u64" => Intrinsic::ReadU64,
+                "@u8" => Intrinsic::ReadU8,
+                "!u64" => Intrinsic::WriteU64,
+                "!u8" => Intrinsic::WriteU8,
 
-impl From<ast::TopLevel> for TopLevel {
-    fn from(item: ast::TopLevel) -> Self {
+                "&?&" => Intrinsic::CompStop,
+                "&?" => Intrinsic::Dump,
+                "print" => Intrinsic::Print,
+
+                "syscall0" => Intrinsic::Syscall0,
+                "syscall1" => Intrinsic::Syscall1,
+                "syscall2" => Intrinsic::Syscall2,
+                "syscall3" => Intrinsic::Syscall3,
+                "syscall4" => Intrinsic::Syscall4,
+                "syscall5" => Intrinsic::Syscall5,
+                "syscall6" => Intrinsic::Syscall6,
+
+                "argc" => Intrinsic::Argc,
+                "argv" => Intrinsic::Argv,
+
+                "+" => Intrinsic::Add,
+                "-" => Intrinsic::Sub,
+                "*" => Intrinsic::Mul,
+                "divmod" => Intrinsic::Divmod,
+
+                "=" => Intrinsic::Eq,
+                "!=" => Intrinsic::Ne,
+                "<" => Intrinsic::Lt,
+                "<=" => Intrinsic::Le,
+                ">" => Intrinsic::Gt,
+                ">=" => Intrinsic::Ge,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        HirNode {
+            span: ast.span.clone(),
+            hir: HirKind::Intrinsic(intrinsic),
+        }
+        .some()
+    }
+
+    fn hir_bindings(&mut self, bindings: Vec<AstNode>) -> Vec<Binding> {
+        let mut res = Vec::with_capacity(bindings.len());
+        for binding in bindings {
+            if let AstKind::Binding(binding) = binding.ast {
+                match binding {
+                    ast::Binding::Ignore => res.push(Binding::Ignore),
+                    ast::Binding::Bind {
+                        name:
+                            box AstNode {
+                                span: _,
+                                ast: AstKind::Word(name),
+                            },
+                        sep: _,
+                        ty:
+                            box AstNode {
+                                span: _,
+                                ast: AstKind::Type(ty),
+                            },
+                    } => res.push(Binding::Bind {
+                        name,
+                        ty: ty.to_type(self.structs).unwrap(),
+                    }),
+                    _ => unreachable!(),
+                }
+            } else {
+                unreachable!()
+            }
+        }
+        res
+    }
+
+    pub fn walk_ast(
+        &mut self,
+        ast: FnvHashMap<String, ast::TopLevel>,
+    ) -> FnvHashMap<String, TopLevel> {
+        ast.into_iter()
+            .map(|(name, item)| (name, self.walk_toplevel(item)))
+            .collect()
+    }
+
+    fn walk_toplevel(&mut self, item: ast::TopLevel) -> TopLevel {
         match item {
-            ast::TopLevel::Proc(p) => TopLevel::Proc(p.into()),
-            ast::TopLevel::Const(c) => TopLevel::Const(c.into()),
-            ast::TopLevel::Mem(m) => TopLevel::Mem(m.into()),
+            ast::TopLevel::Proc(p) => TopLevel::Proc(self.walk_proc(p)),
+            ast::TopLevel::Const(c) => TopLevel::Const(self.walk_const(c)),
+            ast::TopLevel::Mem(m) => TopLevel::Mem(self.walk_mem(m)),
+            ast::TopLevel::Var(v) => {
+                let ty = coerce_ast!(v.ty => Type || unreachable!())
+                    .to_type(self.structs)
+                    .unwrap();
+                TopLevel::Var(TopLevelVar {
+                    ty,
+                    span: v.name.span,
+                })
+            }
             _ => unreachable!(),
         }
     }
-}
 
-impl From<ast::Mem> for Mem {
-    fn from(mem: ast::Mem) -> Self {
+    fn walk_mem(&mut self, mem: ast::Mem) -> Mem {
         let body = coerce_ast!(mem.body => Body || unreachable!())
             .into_iter()
-            .map(|ast| Option::<HirNode>::from(ast).unwrap())
+            .map(|ast| self.walk_node(ast).unwrap())
             .collect::<Vec<_>>();
         Mem {
             body,
             span: mem.mem.span.merge(mem.end.span),
         }
     }
-}
 
-impl From<ast::Const> for Const {
-    fn from(const_: ast::Const) -> Self {
+    fn walk_const(&mut self, const_: ast::Const) -> Const {
         let outs = coerce_ast!(const_.signature => ConstSignature || unreachable!())
             .tys
             .into_iter()
-            .map(|ty| coerce_ast!(ty => Type || unreachable!()))
+            .map(|ty| {
+                coerce_ast!(ty => Type || unreachable!())
+                    .to_type(self.structs)
+                    .unwrap()
+            })
             .collect();
         let body = coerce_ast!(const_.body => Body || unreachable!())
             .into_iter()
-            .map(|ast| Option::<HirNode>::from(ast).unwrap())
+            .map(|ast| self.walk_node(ast).unwrap())
             .collect::<Vec<_>>();
         Const {
             outs,
@@ -281,54 +334,59 @@ impl From<ast::Const> for Const {
             span: const_.const_.span.merge(const_.end.span),
         }
     }
-}
 
-impl From<ast::Proc> for Proc {
-    fn from(proc: ast::Proc) -> Self {
+    fn walk_proc(&mut self, proc: ast::Proc) -> Proc {
         let (ins, outs) = match proc.signature.ast {
-            AstKind::ProcSignature(signature) => signature.into(),
+            AstKind::ProcSignature(signature) => self.walk_proc_signature(signature),
             _ => unreachable!(),
         };
 
-        let body: Option<_> = proc.body.into();
+        let body = self.try_walk_body(proc.body);
+        let mut vars = Default::default();
+        std::mem::swap(&mut vars, &mut self.proc_vars);
 
         Proc {
             ins,
             outs,
             body: body.unwrap(),
+            vars,
             span: proc.proc.span.merge(proc.end.span),
         }
     }
-}
 
-impl From<AstNode> for Option<Vec<HirNode>> {
-    fn from(node: AstNode) -> Self {
+    fn try_walk_body(&mut self, node: AstNode) -> Option<Vec<HirNode>> {
         let body = coerce_ast!(node => Body || None)?;
         body.into_iter()
-            .map(|ast| Option::<HirNode>::from(ast).unwrap())
+            .filter_map(|ast| self.walk_node(ast))
             .collect::<Vec<_>>()
             .some()
     }
-}
 
-impl From<AstNode> for Option<HirNode> {
-    fn from(node: AstNode) -> Self {
-        if let Some(node) = intrinsic(&node) {
+    fn walk_node(&mut self, node: AstNode) -> Option<HirNode> {
+        if let Some(node) = self.intrinsic(&node) {
             return node.some();
         }
         let hir = match node.ast {
-            AstKind::Bind(bind) => HirKind::Bind(bind.into()),
-            AstKind::While(while_) => HirKind::While(while_.into()),
-            AstKind::If(if_) => HirKind::If(if_.into()),
-            AstKind::Cond(cond) => HirKind::Cond(cond.into()),
+            AstKind::Bind(bind) => HirKind::Bind(self.walk_bind(bind)),
+            AstKind::While(while_) => HirKind::While(self.walk_while(while_)),
+            AstKind::If(if_) => HirKind::If(self.walk_if(if_)),
+            AstKind::Cond(cond) => HirKind::Cond(self.walk_cond(cond)),
             AstKind::Cast(_) => unreachable!(),
             AstKind::Word(w) => HirKind::Word(w),
             AstKind::Literal(l) => HirKind::Literal(l),
             AstKind::KeyWord(KeyWord::Return) => HirKind::Return,
-            shouldnt_happen => {
-                eprintln!("{:?}", shouldnt_happen);
+            AstKind::Var(box var) => {
+                self.walk_var(var);
                 return None;
             }
+            AstKind::FieldAccess(box access) => {
+                let access = FieldAccess {
+                    ty: None,
+                    field: coerce_ast!(access.field => Word || unreachable!()),
+                };
+                HirKind::FieldAccess(access)
+            }
+            shouldnt_happen => todo!("{:?}", shouldnt_happen),
         };
         HirNode {
             span: node.span,
@@ -336,28 +394,36 @@ impl From<AstNode> for Option<HirNode> {
         }
         .some()
     }
-}
 
-impl From<ast::Bind> for Bind {
-    fn from(bind: ast::Bind) -> Self {
-        let bindings = hir_bindings(bind.bindings);
+    fn walk_var(&mut self, var: ast::Var) {
+        let name = coerce_ast!(var.name => Word || unreachable!());
+        let escaping = var.ret.is_some();
+        let ty = coerce_ast!(var.ty => Type || unreachable!())
+            .to_type(self.structs)
+            .unwrap();
+        let var = Var { ty, escaping };
+        self.proc_vars.insert(name, var);
+    }
+
+    fn walk_bind(&mut self, bind: ast::Bind) -> Bind {
+        let bindings = self.hir_bindings(bind.bindings);
         let body = coerce_ast!(bind.body => Body || unreachable!())
             .into_iter()
-            .map(|node| Option::<HirNode>::from(node).unwrap())
+            .filter_map(|node| self.walk_node(node))
             .collect();
         Bind { bindings, body }
     }
-}
 
-impl From<ast::Cond> for Cond {
-    fn from(cond: ast::Cond) -> Self {
-        let branches = cond.branches.into_iter().map(|b| b.into()).collect();
+    fn walk_cond(&mut self, cond: ast::Cond) -> Cond {
+        let branches = cond
+            .branches
+            .into_iter()
+            .map(|b| self.walk_cond_branch(b))
+            .collect();
         Cond { branches }
     }
-}
 
-impl From<ast::CondBranch> for CondBranch {
-    fn from(branch: ast::CondBranch) -> Self {
+    fn walk_cond_branch(&mut self, branch: ast::CondBranch) -> CondBranch {
         let pattern = match branch.pat.ast {
             AstKind::Binding(ast::Binding::Ignore) => HirNode {
                 span: branch.pat.span,
@@ -371,49 +437,43 @@ impl From<ast::CondBranch> for CondBranch {
         };
         let body = coerce_ast!(branch.body => Body || unreachable!())
             .into_iter()
-            .map(|node| Option::<HirNode>::from(node).unwrap())
+            .filter_map(|node| self.walk_node(node))
             .collect();
         CondBranch { pattern, body }
     }
-}
 
-impl From<ast::While> for While {
-    fn from(while_: ast::While) -> Self {
+    fn walk_while(&mut self, while_: ast::While) -> While {
         let cond = coerce_ast!(while_.cond => Body || unreachable!())
             .into_iter()
-            .map(|node| Option::<HirNode>::from(node).unwrap())
+            .filter_map(|node| self.walk_node(node))
             .collect();
         let body = coerce_ast!(while_.body => Body || unreachable!())
             .into_iter()
-            .map(|node| Option::<HirNode>::from(node).unwrap())
+            .filter_map(|node| self.walk_node(node))
             .collect();
         While { cond, body }
     }
-}
 
-impl From<ast::If> for If {
-    fn from(if_: ast::If) -> Self {
+    fn walk_if(&mut self, if_: ast::If) -> If {
         let truth = coerce_ast!(if_.truth => Body || unreachable!())
             .into_iter()
-            .map(|node| Option::<HirNode>::from(node).unwrap())
+            .filter_map(|node| self.walk_node(node))
             .collect();
         let lie = if_.lie.map(|lie| {
             coerce_ast!(lie.body => Body || unreachable!())
                 .into_iter()
-                .map(|node| Option::<HirNode>::from(node).unwrap())
+                .filter_map(|node| self.walk_node(node))
                 .collect()
         });
 
         If { truth, lie }
     }
-}
 
-impl From<ast::ProcSignature> for (Vec<Type>, Vec<Type>) {
-    fn from(signature: ast::ProcSignature) -> Self {
+    fn walk_proc_signature(&mut self, signature: ast::ProcSignature) -> (Vec<Type>, Vec<Type>) {
         let mut ins = Vec::with_capacity(signature.ins.len());
         for ty in signature.ins {
             if let AstKind::Type(ty) = ty.ast {
-                ins.push(ty);
+                ins.push(ty.to_type(self.structs).unwrap());
             } else {
                 unreachable!();
             }
@@ -422,7 +482,7 @@ impl From<ast::ProcSignature> for (Vec<Type>, Vec<Type>) {
             let mut proc_outs = Vec::with_capacity(outs.len());
             for ty in outs {
                 if let AstKind::Type(ty) = ty.ast {
-                    proc_outs.push(ty);
+                    proc_outs.push(ty.to_type(self.structs).unwrap());
                 } else {
                     unreachable!();
                 }

@@ -2,7 +2,7 @@
 mod test;
 
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::hash_map::Entry,
     path::{Path, PathBuf},
 };
 
@@ -11,10 +11,11 @@ use crate::{
     lexer::{KeyWord, Token},
     resolver::resolve_include,
     span::Span,
-    types::Type,
+    types::{self, Primitive, StructIndex, ValueType},
     Error, RedefinitionError,
 };
 use chumsky::{prelude::*, Stream};
+use fnv::FnvHashMap;
 use somok::Somok;
 
 #[derive(Debug, Clone)]
@@ -22,6 +23,8 @@ pub enum TopLevel {
     Proc(Proc),
     Const(Const),
     Mem(Mem),
+    Var(ToplevelVar),
+    Struct(Struct),
     Include(Include),
 }
 
@@ -31,6 +34,8 @@ impl TopLevel {
             TopLevel::Proc(i) => &i.name,
             TopLevel::Const(i) => &i.name,
             TopLevel::Mem(i) => &i.name,
+            TopLevel::Var(i) => &i.name,
+            TopLevel::Struct(i) => &i.name,
             TopLevel::Include(_) => return None,
         };
         match &name_node.ast {
@@ -44,6 +49,8 @@ impl TopLevel {
             TopLevel::Proc(i) => &i.name,
             TopLevel::Const(i) => &i.name,
             TopLevel::Mem(i) => &i.name,
+            TopLevel::Var(i) => &i.name,
+            TopLevel::Struct(i) => &i.name,
             TopLevel::Include(i) => &i.include,
         }
         .span
@@ -67,6 +74,23 @@ pub struct Mem {
     pub name: AstNode,
     pub do_: AstNode,
     pub body: AstNode,
+    pub end: AstNode,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToplevelVar {
+    pub var: AstNode,
+    pub name: AstNode,
+    pub sep: AstNode,
+    pub ty: AstNode,
+}
+
+#[derive(Debug, Clone)]
+pub struct Struct {
+    pub struct_: AstNode,
+    pub name: AstNode,
+    pub do_: AstNode,
+    pub body: Vec<AstNode>,
     pub end: AstNode,
 }
 
@@ -106,6 +130,7 @@ pub enum AstKind {
     KeyWord(KeyWord),
     Type(Type),
     Separator,
+    Accessor,
 
     Bind(Bind),
     Binding(Binding),
@@ -126,6 +151,84 @@ pub enum AstKind {
     ConstSignature(ConstSignature),
 
     Body(Vec<AstNode>),
+    StructField(StructField),
+    Var(Box<Var>),
+    FieldAccess(Box<FieldAccess>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FieldAccess {
+    pub access: AstNode,
+    pub field: AstNode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Var {
+    pub var: AstNode,
+    pub ret: Option<AstNode>,
+    pub name: AstNode,
+    pub sep: AstNode,
+    pub ty: AstNode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Type {
+    pub ptr_count: usize,
+    pub type_name: String,
+}
+
+impl Type {
+    pub fn to_primitive_type(self) -> types::Type {
+        let primitive = match &*self.type_name {
+            "bool" => Primitive::Bool,
+            "char" => Primitive::Char,
+
+            "u64" => Primitive::U64,
+            "u32" => Primitive::U32,
+            "u16" => Primitive::U16,
+            "u8" => Primitive::U8,
+
+            "i64" => Primitive::I64,
+            "i32" => Primitive::I32,
+            "i16" => Primitive::I16,
+            "i8" => Primitive::I8,
+            t => todo!(
+                "Can only parse primitive types at this time! Type: {} is not primitive",
+                t
+            ),
+        };
+        let value_type = ValueType::Primitive(primitive);
+        let ptr_depth = self.ptr_count;
+        types::Type {
+            ptr_depth,
+            value_type,
+        }
+    }
+
+    pub fn to_type(self, structs: &StructIndex) -> Option<types::Type> {
+        let value_type = match &*self.type_name {
+            "bool" => ValueType::Primitive(Primitive::Bool),
+            "char" => ValueType::Primitive(Primitive::Char),
+
+            "u64" => ValueType::Primitive(Primitive::U64),
+            "u32" => ValueType::Primitive(Primitive::U32),
+            "u16" => ValueType::Primitive(Primitive::U16),
+            "u8" => ValueType::Primitive(Primitive::U8),
+
+            "i64" => ValueType::Primitive(Primitive::I64),
+            "i32" => ValueType::Primitive(Primitive::I32),
+            "i16" => ValueType::Primitive(Primitive::I16),
+            "i8" => ValueType::Primitive(Primitive::I8),
+            "()" => ValueType::Any,
+            n => ValueType::Struct(structs.name_to_id(n)?),
+        };
+        let ptr_depth = self.ptr_count;
+        types::Type {
+            ptr_depth,
+            value_type,
+        }
+        .some()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -139,6 +242,13 @@ pub struct ProcSignature {
     pub ins: Vec<AstNode>,
     pub sep: Option<Box<AstNode>>,
     pub outs: Option<Vec<AstNode>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StructField {
+    pub name: Box<AstNode>,
+    pub sep: Box<AstNode>,
+    pub ty: Box<AstNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -208,44 +318,16 @@ pub enum Binding {
 }
 
 fn ty() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
-    let value_type = filter_map(|s, t| match &t {
-        Token::Word(ty) => match &**ty {
-            "u64" => Type::U64.okay(),
-            "u32" => Type::U32.okay(),
-            "u16" => Type::U16.okay(),
-            "u8" => Type::U8.okay(),
-
-            "i64" => Type::I64.okay(),
-            "i32" => Type::I32.okay(),
-            "i16" => Type::I16.okay(),
-            "i8" => Type::I8.okay(),
-
-            "bool" => Type::BOOL.okay(),
-            "char" => Type::CHAR.okay(),
-            _ => Simple::expected_input_found(
-                s,
-                vec![Some(Token::Word("type".to_string()))],
-                Some(t),
-            )
-            .error(),
-        },
-        _ => Simple::expected_input_found(
-            s,
-            vec![Some(Token::Word("some-type".to_string()))],
-            Some(t),
-        )
-        .error(),
-    });
-    let any = just(Token::Word("()".to_string())).to(Type::ANY);
-    let ptr_type = recursive(|p_ty| {
-        just(Token::Ptr)
-            .ignore_then(choice((p_ty, choice((value_type, any)))))
-            .map(Type::ptr_to)
-    });
-    choice((value_type, ptr_type)).map_with_span(|ty, span| AstNode {
-        span,
-        ast: AstKind::Type(ty),
-    })
+    just(Token::Ptr)
+        .repeated()
+        .then(word())
+        .map_with_span(|(ptr, ty), span| AstNode {
+            span,
+            ast: AstKind::Type(Type {
+                ptr_count: ptr.len(),
+                type_name: coerce_ast!(ty => Word || unreachable!()),
+            }),
+        })
 }
 fn literal() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
     select! { span,
@@ -325,6 +407,16 @@ fn kw_mem() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
         Token::KeyWord(kw @ KeyWord::Mem) => AstNode { span, ast: AstKind::KeyWord(kw) },
     }
 }
+fn kw_var() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
+    select! { span,
+        Token::KeyWord(kw @ KeyWord::Var) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    }
+}
+fn kw_struct() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
+    select! { span,
+        Token::KeyWord(kw @ KeyWord::Struct) => AstNode { span, ast: AstKind::KeyWord(kw) },
+    }
+}
 
 fn word() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
     select! { span,
@@ -355,6 +447,39 @@ fn binding() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
         });
 
     choice((name_type, ignore()))
+}
+
+fn var() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
+    kw_var()
+        .then(kw_ret().or_not())
+        .then(word())
+        .then(separator())
+        .then(ty())
+        .map_with_span(|((((var, ret), name), sep), ty), span| AstNode {
+            span,
+            ast: AstKind::Var(box Var {
+                var,
+                ret,
+                name,
+                sep,
+                ty,
+            }),
+        })
+}
+fn accessor() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
+    just(Token::FieldAccess).map_with_span(|_, span| AstNode {
+        span,
+        ast: AstKind::Accessor,
+    })
+}
+
+fn field_access() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
+    accessor()
+        .then(word())
+        .map_with_span(|(access, field), span| AstNode {
+            span,
+            ast: AstKind::FieldAccess(box FieldAccess { access, field }),
+        })
 }
 
 fn body() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> + Clone {
@@ -449,12 +574,23 @@ fn body() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> + Clone {
                 },
             );
 
-        choice((literal(), word(), bind, while_, if_, cond, cast, kw_ret()))
-            .repeated()
-            .map_with_span(|body, span| AstNode {
-                span,
-                ast: AstKind::Body(body),
-            })
+        choice((
+            field_access(),
+            literal(),
+            var(),
+            word(),
+            bind,
+            while_,
+            if_,
+            cond,
+            cast,
+            kw_ret(),
+        ))
+        .repeated()
+        .map_with_span(|body, span| AstNode {
+            span,
+            ast: AstKind::Body(body),
+        })
     })
 }
 
@@ -538,6 +674,44 @@ fn mem() -> impl Parser<Token, TopLevel, Error = Simple<Token, Span>> {
         })
 }
 
+fn toplevel_var() -> impl Parser<Token, TopLevel, Error = Simple<Token, Span>> {
+    kw_var()
+        .then(word())
+        .then(separator())
+        .then(ty())
+        .map(|(((var, name), sep), ty)| TopLevel::Var(ToplevelVar { var, name, sep, ty }))
+}
+
+fn struct_field() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
+    word()
+        .then(separator())
+        .then(ty())
+        .map_with_span(|((name, sep), ty), span| AstNode {
+            span,
+            ast: AstKind::StructField(StructField {
+                name: box name,
+                sep: box sep,
+                ty: box ty,
+            }),
+        })
+}
+fn struct_() -> impl Parser<Token, TopLevel, Error = Simple<Token, Span>> {
+    kw_struct()
+        .then(word())
+        .then(kw_do())
+        .then(struct_field().repeated())
+        .then(kw_end())
+        .map(|((((struct_, name), do_), body), end)| {
+            TopLevel::Struct(Struct {
+                struct_,
+                name,
+                do_,
+                body,
+                end,
+            })
+        })
+}
+
 fn include() -> impl Parser<Token, TopLevel, Error = Simple<Token, Span>> {
     kw_include()
         .then(include_path())
@@ -545,9 +719,16 @@ fn include() -> impl Parser<Token, TopLevel, Error = Simple<Token, Span>> {
 }
 
 fn toplevel() -> impl Parser<Token, Vec<TopLevel>, Error = Simple<Token, Span>> {
-    choice((include(), proc(), const_(), mem()))
-        .repeated()
-        .then_ignore(end())
+    choice((
+        include(),
+        proc(),
+        const_(),
+        mem(),
+        toplevel_var(),
+        struct_(),
+    ))
+    .repeated()
+    .then_ignore(end())
 }
 
 pub fn parse_no_include(tokens: Vec<(Token, Span)>) -> Result<Vec<TopLevel>, Error> {
@@ -559,7 +740,7 @@ pub fn parse_no_include(tokens: Vec<(Token, Span)>) -> Result<Vec<TopLevel>, Err
         .map_err(Error::Parser)
 }
 
-pub fn parse(tokens: Vec<(Token, Span)>) -> Result<HashMap<String, TopLevel>, Error> {
+pub fn parse(tokens: Vec<(Token, Span)>) -> Result<FnvHashMap<String, TopLevel>, Error> {
     let items = match toplevel().parse(Stream::from_iter(
         tokens.last().unwrap().1.clone(),
         tokens.into_iter(),
@@ -580,7 +761,7 @@ pub fn parse(tokens: Vec<(Token, Span)>) -> Result<HashMap<String, TopLevel>, Er
         }
     }
 
-    let mut res = HashMap::new();
+    let mut res = FnvHashMap::default();
     let mut errors = Vec::new();
 
     for item in items {

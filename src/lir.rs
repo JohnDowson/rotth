@@ -1,13 +1,11 @@
-use std::collections::HashMap;
-
 use crate::{
     eval::eval,
     hir::{
-        Bind, Binding, Cond, CondBranch, Const, HirKind, HirNode, If, Intrinsic, Mem, Proc,
+        self, Bind, Binding, Cond, CondBranch, Const, HirKind, HirNode, If, Intrinsic, Mem, Proc,
         TopLevel, While,
     },
     iconst::IConst,
-    types::Type,
+    types::{self, StructIndex, Type},
 };
 
 #[derive(Debug)]
@@ -28,6 +26,9 @@ pub enum Op {
     ReadU8,
     WriteU64,
     WriteU8,
+
+    PushGvar(usize),
+    PushLvar(usize),
 
     Dump,
     Print,
@@ -64,7 +65,8 @@ pub enum Op {
     Return,
     Exit,
 }
-use somok::{Either, Somok};
+use fnv::FnvHashMap;
+use somok::{Either, PartitionThree, Somok, Ternary};
 use Op::*;
 
 #[derive(Clone)]
@@ -81,21 +83,24 @@ enum ComMem {
 
 pub struct Compiler {
     label: usize,
-    mangle_table: HashMap<String, String>,
+    mangle_table: FnvHashMap<String, String>,
     proc_id: usize,
     current_name: String,
     result: Vec<Op>,
-    consts: HashMap<String, ComConst>,
+    consts: FnvHashMap<String, ComConst>,
     strings: Vec<String>,
     bindings: Vec<Vec<String>>,
-    mems: HashMap<String, ComMem>,
+    mems: FnvHashMap<String, ComMem>,
+    vars: FnvHashMap<String, types::Type>,
+    local_vars: FnvHashMap<String, hir::Var>,
+    structs: StructIndex,
 }
 
 impl Compiler {
     pub fn compile(
         mut self,
-        items: HashMap<String, (TopLevel, bool)>,
-    ) -> (Vec<Op>, Vec<String>, HashMap<String, usize>) {
+        items: FnvHashMap<String, (TopLevel, bool)>,
+    ) -> (Vec<Op>, Vec<String>, FnvHashMap<String, usize>) {
         let (procs, consts_and_mems) = items
             .into_iter()
             .partition::<Vec<_>, _>(|(_, (it, _))| matches!(it, TopLevel::Proc(_)));
@@ -115,9 +120,15 @@ impl Compiler {
             })
             .collect::<Vec<_>>();
 
-        let (consts, mems) = consts_and_mems
-            .into_iter()
-            .partition::<Vec<_>, _>(|(_, (it, _))| matches!(it, TopLevel::Const(_)));
+        let (consts, mems, vars) =
+            consts_and_mems
+                .into_iter()
+                .partition_three::<Vec<_>, _>(|(_, (it, _))| match it {
+                    TopLevel::Proc(_) => unreachable!(),
+                    TopLevel::Const(_) => Ternary::First,
+                    TopLevel::Mem(_) => Ternary::Second,
+                    TopLevel::Var(_) => Ternary::Third,
+                });
 
         self.mems = mems
             .into_iter()
@@ -132,7 +143,22 @@ impl Compiler {
                     unreachable!()
                 }
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<FnvHashMap<_, _>>();
+
+        self.vars = vars
+            .into_iter()
+            .filter_map(|(name, (mem, needed))| {
+                if let TopLevel::Var(var) = mem {
+                    if needed {
+                        (name, var.ty).some()
+                    } else {
+                        None
+                    }
+                } else {
+                    unreachable!()
+                }
+            })
+            .collect::<FnvHashMap<_, _>>();
 
         self.consts = consts
             .into_iter()
@@ -147,7 +173,7 @@ impl Compiler {
                     unreachable!()
                 }
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<FnvHashMap<_, _>>();
 
         self.emit(Call("main".to_string()));
 
@@ -179,6 +205,7 @@ impl Compiler {
         let label = name;
         self.emit(Proc(label));
 
+        self.local_vars = proc.vars;
         self.compile_body(proc.body);
 
         self.emit(Return);
@@ -317,6 +344,12 @@ impl Compiler {
                         .unwrap();
                     self.emit(UseBinding(offset))
                 }
+                HirKind::Word(w) if self.is_lvar(&w) => {
+                    //TODO!
+                }
+                HirKind::Word(w) if self.is_gvar(&w) => {
+                    //TODO!
+                }
                 HirKind::Word(w) => {
                     let mangled = self.mangle_table.get(&w).unwrap().clone();
                     self.emit(Call(mangled))
@@ -365,7 +398,13 @@ impl Compiler {
                 HirKind::If(cond) => self.compile_if(cond),
                 HirKind::While(while_) => self.compile_while(while_),
                 HirKind::Bind(bind) => self.compile_bind(bind),
-                HirKind::IgnorePattern => todo!(), // this is a noop
+                HirKind::IgnorePattern => unreachable!(), // this is a noop
+                HirKind::FieldAccess(f) => {
+                    let struct_ = &self.structs[dbg! {&f}.ty.unwrap()];
+                    let offset = struct_.fields[&f.field].offset;
+                    self.emit(Push(IConst::U64(offset as _)));
+                    self.emit(Add);
+                }
             }
         }
     }
@@ -471,7 +510,7 @@ impl Compiler {
         res
     }
 
-    pub fn new() -> Self {
+    pub fn new(structs: StructIndex) -> Self {
         Self {
             label: 0,
             mangle_table: Default::default(),
@@ -482,9 +521,12 @@ impl Compiler {
             strings: Default::default(),
             bindings: Default::default(),
             mems: Default::default(),
+            vars: Default::default(),
+            local_vars: Default::default(),
+            structs,
         }
     }
-    fn with_consts_and_strings(consts: HashMap<String, ComConst>, strings: Vec<String>) -> Self {
+    fn with_consts_and_strings(consts: FnvHashMap<String, ComConst>, strings: Vec<String>) -> Self {
         Self {
             label: 0,
             mangle_table: Default::default(),
@@ -495,6 +537,9 @@ impl Compiler {
             strings,
             bindings: Default::default(),
             mems: Default::default(),
+            vars: Default::default(),
+            local_vars: Default::default(),
+            structs: Default::default(),
         }
     }
 
@@ -522,10 +567,10 @@ impl Compiler {
     fn is_mem(&self, w: &str) -> bool {
         self.mems.contains_key(w)
     }
-}
-
-impl Default for Compiler {
-    fn default() -> Self {
-        Self::new()
+    fn is_gvar(&self, w: &str) -> bool {
+        self.vars.contains_key(w)
+    }
+    fn is_lvar(&self, w: &str) -> bool {
+        self.local_vars.contains_key(w)
     }
 }
