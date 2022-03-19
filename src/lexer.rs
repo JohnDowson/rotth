@@ -16,6 +16,8 @@ pub enum Token {
     SigSep,
     Ptr,
     FieldAccess,
+    LBracket,
+    RBracket,
 }
 
 impl std::fmt::Debug for Token {
@@ -31,6 +33,8 @@ impl std::fmt::Debug for Token {
             Self::SigSep => write!(f, ":"),
             Self::Ptr => write!(f, "&>"),
             Self::FieldAccess => write!(f, "->"),
+            Self::LBracket => write!(f, "{{"),
+            Self::RBracket => write!(f, "}}"),
         }
     }
 }
@@ -68,7 +72,7 @@ impl std::fmt::Display for KeyWord {
 
 pub fn word_parser<C: Character, E: CError<C>>(
 ) -> impl Parser<C, C::Collection, Error = E> + Copy + Clone {
-    const ALLOWED_NON_ALPHA: &[u8; 26] = b"(){}[]<>|\\/!@#$%^&*-=+_?.,";
+    const ALLOWED_NON_ALPHA: &[u8; 24] = b"()[]<>|\\/!@#$%^&*-=+_?.,";
     filter(|c: &C| {
         c.to_char().is_ascii_alphabetic() || ALLOWED_NON_ALPHA.contains(&(c.to_char() as u8))
     })
@@ -125,6 +129,9 @@ where
         })
         .map(Token::Str);
 
+    let lbracket = just('{').to(Token::LBracket);
+    let rbracket = just('}').to(Token::RBracket);
+
     let num = text::int(10).map(Token::Num);
 
     let word = word_parser().map(Token::Word);
@@ -174,6 +181,8 @@ where
         num,
         char,
         string,
+        lbracket,
+        rbracket,
         field_access,
         ptr,
         sig_sep,

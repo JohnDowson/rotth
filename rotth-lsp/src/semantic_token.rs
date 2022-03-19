@@ -36,6 +36,9 @@ pub fn semantic_token_from_ast(ast: &[TopLevel]) -> Vec<CompleteSemanticToken> {
             }
             TopLevel::Proc(p) => {
                 push_token(&p.proc, &mut semantic_tokens, SemanticTokenType::KEYWORD);
+                if let Some(generics) = &p.generics {
+                    push_tokens_recursively(generics, &mut semantic_tokens);
+                };
                 push_token(&p.name, &mut semantic_tokens, SemanticTokenType::FUNCTION);
                 let signature =
                     rotth::coerce_ast!(p.signature => REF ProcSignature || unreachable!());
@@ -187,6 +190,15 @@ fn push_tokens_recursively(node: &AstNode, tokens: &mut Vec<CompleteSemanticToke
             push_token(&a.access, tokens, SemanticTokenType::KEYWORD);
             push_token(&a.field, tokens, SemanticTokenType::PARAMETER);
         }
+        AstKind::Generics(g) => {
+            push_token(&g.left_bracket, tokens, SemanticTokenType::KEYWORD);
+            for node in &g.tys {
+                push_token(node, tokens, SemanticTokenType::TYPE);
+            }
+            push_token(&g.right_bracket, tokens, SemanticTokenType::KEYWORD);
+        }
+        AstKind::LBracket => todo!(),
+        AstKind::RBracket => todo!(),
     }
 }
 

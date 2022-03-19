@@ -113,7 +113,7 @@ fn test_include() {
 fn test_proc() {
     let tokens = lex_string(
         indoc::indoc! {r#"
-            proc foo u64 : u64 do
+            proc {T} foo u64 : u64 do
                 1 +
             end
         "#}
@@ -129,6 +129,7 @@ fn test_proc() {
         ast,
         Ok(TopLevel::Proc(Proc {
             proc: _,
+            generics: _,
             name: _,
             signature: _,
             do_: _,

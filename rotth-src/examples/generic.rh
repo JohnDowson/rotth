@@ -1,0 +1,10 @@
+proc {T} incptr &>T : &>T do
+    cast u64 1 + cast &>T
+end
+
+proc main: u64 do
+    var foo: u64
+    foo cast u64 print
+    foo incptr cast u64 print
+    0
+end

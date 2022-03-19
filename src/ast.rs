@@ -61,6 +61,7 @@ impl TopLevel {
 #[derive(Debug, Clone)]
 pub struct Proc {
     pub proc: AstNode,
+    pub generics: Option<AstNode>,
     pub name: AstNode,
     pub signature: AstNode,
     pub do_: AstNode,
@@ -147,6 +148,9 @@ pub enum AstKind {
     Literal(IConst),
     Pattern(Box<AstNode>),
 
+    LBracket,
+    RBracket,
+    Generics(Generics),
     ProcSignature(ProcSignature),
     ConstSignature(ConstSignature),
 
@@ -154,6 +158,13 @@ pub enum AstKind {
     StructField(StructField),
     Var(Box<Var>),
     FieldAccess(Box<FieldAccess>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Generics {
+    pub left_bracket: Box<AstNode>,
+    pub tys: Vec<AstNode>,
+    pub right_bracket: Box<AstNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -610,31 +621,62 @@ fn proc_signature() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> 
         })
 }
 
+fn lbracket() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
+    just(Token::LBracket).map_with_span(|_, span| AstNode {
+        span,
+        ast: AstKind::LBracket,
+    })
+}
+fn rbracket() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
+    just(Token::RBracket).map_with_span(|_, span| AstNode {
+        span,
+        ast: AstKind::RBracket,
+    })
+}
+
+fn generics() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
+    lbracket()
+        .then(ty().repeated().at_least(1))
+        .then(rbracket())
+        .map_with_span(|((left_bracket, tys), right_bracket), span| AstNode {
+            span,
+            ast: AstKind::Generics(Generics {
+                left_bracket: box left_bracket,
+                tys,
+                right_bracket: box right_bracket,
+            }),
+        })
+}
+
+fn proc() -> impl Parser<Token, TopLevel, Error = Simple<Token, Span>> {
+    kw_proc()
+        .then(generics().or_not())
+        .then(word())
+        .then(proc_signature())
+        .then(kw_do())
+        .then(body())
+        .then(kw_end())
+        .map(
+            |((((((proc, generics), name), signature), do_), body), end)| {
+                TopLevel::Proc(Proc {
+                    proc,
+                    generics,
+                    name,
+                    signature,
+                    do_,
+                    body,
+                    end,
+                })
+            },
+        )
+}
+
 fn const_signature() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
     separator()
         .then(ty().repeated().at_least(1))
         .map_with_span(|(sep, tys), span| AstNode {
             span,
             ast: AstKind::ConstSignature(ConstSignature { sep: box sep, tys }),
-        })
-}
-
-fn proc() -> impl Parser<Token, TopLevel, Error = Simple<Token, Span>> {
-    kw_proc()
-        .then(word())
-        .then(proc_signature())
-        .then(kw_do())
-        .then(body())
-        .then(kw_end())
-        .map(|(((((proc, name), signature), do_), body), end)| {
-            TopLevel::Proc(Proc {
-                proc,
-                name,
-                signature,
-                do_,
-                body,
-                end,
-            })
         })
 }
 
@@ -734,7 +776,10 @@ fn toplevel() -> impl Parser<Token, Vec<TopLevel>, Error = Simple<Token, Span>> 
 pub fn parse_no_include(tokens: Vec<(Token, Span)>) -> Result<Vec<TopLevel>, Error> {
     toplevel()
         .parse(Stream::from_iter(
-            tokens.last().unwrap().1.clone(),
+            tokens
+                .last()
+                .map(|(_, s)| s.clone())
+                .unwrap_or_else(|| Span::point("", 0)),
             tokens.into_iter(),
         ))
         .map_err(Error::Parser)
