@@ -204,7 +204,7 @@ impl<'s> Typechecker<'s> {
                     IConst::I64(_) => Type::I64,
                     IConst::Char(_) => Type::CHAR,
                     IConst::Str(_) => todo!(),
-                    IConst::Ptr(_) => Type::ptr_to(Type::ANY),
+                    IConst::Ptr(_) => todo!(),
                 },
                 HirKind::Word(const_name) if self.is_const(const_name, items) => {
                     self.typecheck_const(const_name, items)?;

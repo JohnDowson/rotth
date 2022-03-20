@@ -230,7 +230,6 @@ impl Type {
             "i32" => ValueType::Primitive(Primitive::I32),
             "i16" => ValueType::Primitive(Primitive::I16),
             "i8" => ValueType::Primitive(Primitive::I8),
-            "()" => ValueType::Any,
             n => ValueType::Struct(structs.name_to_id(n)?),
         };
         let ptr_depth = self.ptr_count;

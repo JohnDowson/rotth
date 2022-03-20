@@ -3,10 +3,9 @@ use chumsky::error::SimpleReason;
 use clap::Parser as ClapParser;
 use fnv::FnvHashMap;
 use rotth::{
-    ast::{self, parse},
-    emit,
+    ast, emit,
     eval::eval,
-    hir::Walker,
+    hir,
     lexer::lex,
     lir,
     typecheck::{ErrorKind, Typechecker},
@@ -232,7 +231,7 @@ fn compiler() -> Result<()> {
         println!("{tokens:?}");
     }
 
-    let ast = parse(tokens)?;
+    let ast = ast::parse(tokens)?;
     let (structs, ast) = ast
         .into_iter()
         .partition::<FnvHashMap<_, _>, _>(|(_, i)| matches!(i, ast::TopLevel::Struct(_)));
@@ -249,7 +248,7 @@ fn compiler() -> Result<()> {
 
     let struct_index = rotth::types::define_structs(structs);
 
-    let mut walker = Walker::new(&struct_index);
+    let mut walker = hir::Walker::new(&struct_index);
     let hir = walker.walk_ast(ast);
 
     let lowered = Instant::now();

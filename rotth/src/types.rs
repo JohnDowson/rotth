@@ -67,6 +67,14 @@ impl Type {
         value_type: ValueType::Any,
     };
 
+    pub fn type_eq(&self, other: &Self) -> bool {
+        if self.value_type == ValueType::Any || other.value_type == ValueType::Any {
+            self.ptr_depth == other.ptr_depth
+        } else {
+            self.ptr_depth == other.ptr_depth && self.value_type == other.value_type
+        }
+    }
+
     pub fn ptr_to(ty: Self) -> Self {
         let ptr_depth = ty.ptr_depth + 1;
         Self {
@@ -75,24 +83,23 @@ impl Type {
         }
     }
 
-    pub fn type_eq(&self, other: &Self) -> bool {
-        if self.value_type == ValueType::Any || other.value_type == ValueType::Any {
-            self.ptr_depth == other.ptr_depth
-        } else {
-            self.ptr_depth == other.ptr_depth && self.value_type == other.value_type
+    pub fn pointee(&self) -> Self {
+        assert!(self.is_ptr());
+        let ptr_depth = self.ptr_depth - 1;
+        Self {
+            ptr_depth,
+            value_type: self.value_type,
         }
     }
+
     pub fn is_ptr(&self) -> bool {
         self.ptr_depth > 0
     }
+
     pub fn is_ptr_to(&self, ty: Self) -> bool {
-        if self.value_type == ValueType::Any || ty.value_type == ValueType::Any {
-            self.is_ptr() && self.ptr_depth.saturating_sub(1) == ty.ptr_depth
-        } else {
-            self.is_ptr()
-                && self.ptr_depth.saturating_sub(1) == ty.ptr_depth
-                && self.value_type == ty.value_type
-        }
+        self.is_ptr()
+            && self.ptr_depth.saturating_sub(1) == ty.ptr_depth
+            && self.value_type == ty.value_type
     }
 
     pub fn size(&self, struct_index: &StructIndex) -> usize {
@@ -111,8 +118,8 @@ impl Type {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ValueType {
     Primitive(Primitive),
-    Any,
     Struct(StructId),
+    Any,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

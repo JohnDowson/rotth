@@ -187,6 +187,7 @@ impl<'s> Walker<'s> {
             proc_vars: Default::default(),
         }
     }
+
     fn intrinsic(&mut self, ast: &AstNode) -> Option<HirNode> {
         let intrinsic = match &ast.ast {
             AstKind::Cast(Cast {
@@ -196,7 +197,14 @@ impl<'s> Walker<'s> {
                         span: _,
                         ast: AstKind::Type(ty),
                     },
-            }) => Intrinsic::Cast(ty.clone().to_type(self.structs).unwrap()),
+            }) => {
+                let ty = if let Some(struct_) = ty.clone().to_type(self.structs) {
+                    struct_
+                } else {
+                    todo!()
+                };
+                Intrinsic::Cast(ty)
+            }
             AstKind::Word(ref w) => match w.as_str() {
                 "drop" => Intrinsic::Drop,
                 "dup" => Intrinsic::Dup,
@@ -336,6 +344,18 @@ impl<'s> Walker<'s> {
     }
 
     fn walk_proc(&mut self, proc: ast::Proc) -> Proc {
+        let generics = proc
+            .generics
+            .map(|g| {
+                coerce_ast!(g => Generics || unreachable!())
+                    .tys
+                    .into_iter()
+                    .map(|ty| coerce_ast!(ty => Type || unreachable!()))
+            })
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
         let (ins, outs) = match proc.signature.ast {
             AstKind::ProcSignature(signature) => self.walk_proc_signature(signature),
             _ => unreachable!(),
@@ -473,7 +493,11 @@ impl<'s> Walker<'s> {
         let mut ins = Vec::with_capacity(signature.ins.len());
         for ty in signature.ins {
             if let AstKind::Type(ty) = ty.ast {
-                ins.push(ty.to_type(self.structs).unwrap());
+                if let Some(struct_) = ty.to_type(self.structs) {
+                    ins.push(struct_);
+                } else {
+                    todo!()
+                }
             } else {
                 unreachable!();
             }
@@ -482,7 +506,11 @@ impl<'s> Walker<'s> {
             let mut proc_outs = Vec::with_capacity(outs.len());
             for ty in outs {
                 if let AstKind::Type(ty) = ty.ast {
-                    proc_outs.push(ty.to_type(self.structs).unwrap());
+                    if let Some(struct_) = ty.to_type(self.structs) {
+                        proc_outs.push(struct_);
+                    } else {
+                        todo!()
+                    }
                 } else {
                     unreachable!();
                 }
