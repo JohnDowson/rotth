@@ -67,14 +67,6 @@ impl Type {
         value_type: ValueType::Any,
     };
 
-    pub fn type_eq(&self, other: &Self) -> bool {
-        if self.value_type == ValueType::Any || other.value_type == ValueType::Any {
-            self.ptr_depth == other.ptr_depth
-        } else {
-            self.ptr_depth == other.ptr_depth && self.value_type == other.value_type
-        }
-    }
-
     pub fn ptr_to(ty: Self) -> Self {
         let ptr_depth = ty.ptr_depth + 1;
         Self {
@@ -202,6 +194,9 @@ impl StructIndex {
             fields: Default::default(),
             name,
         }
+    }
+    pub fn known(&self, name: &str) -> bool {
+        self.structs.iter().any(|s| s.name == name)
     }
     pub fn id_names(&'_ self) -> impl Iterator<Item = (StructId, &'_ str)> {
         self.structs

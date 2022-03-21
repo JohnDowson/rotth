@@ -3,7 +3,7 @@ use crate::{
     iconst::IConst,
     lexer::KeyWord,
     span::Span,
-    types::{self, StructId, StructIndex, Type},
+    types::{StructId, StructIndex},
 };
 use fnv::FnvHashMap;
 use somok::Somok;
@@ -39,18 +39,27 @@ impl TopLevel {
             None
         }
     }
+    pub fn span(&self) -> Span {
+        match self {
+            TopLevel::Proc(p) => p.span.clone(),
+            TopLevel::Const(c) => c.span.clone(),
+            TopLevel::Mem(m) => m.span.clone(),
+            TopLevel::Var(v) => v.span.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct TopLevelVar {
-    pub ty: Type,
+    pub ty: ast::Type,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct Proc {
-    pub ins: Vec<Type>,
-    pub outs: Vec<Type>,
+    pub generics: Vec<String>,
+    pub ins: Vec<HirNode>,
+    pub outs: Vec<HirNode>,
     pub body: Vec<HirNode>,
     pub span: Span,
     pub vars: FnvHashMap<String, Var>,
@@ -58,7 +67,7 @@ pub struct Proc {
 
 #[derive(Debug, Clone)]
 pub struct Const {
-    pub outs: Vec<Type>,
+    pub outs: Vec<HirNode>,
     pub body: Vec<HirNode>,
     pub span: Span,
 }
@@ -87,6 +96,7 @@ pub enum HirKind {
     IgnorePattern,
     Return,
     FieldAccess(FieldAccess),
+    Type(ast::Type),
 }
 #[derive(Debug, Clone)]
 pub struct FieldAccess {
@@ -124,7 +134,7 @@ pub struct While {
 #[derive(Debug, Clone)]
 pub enum Binding {
     Ignore,
-    Bind { name: String, ty: Type },
+    Bind { name: String, ty: Box<HirNode> },
 }
 
 #[derive(Debug, Clone)]
@@ -134,7 +144,7 @@ pub enum Intrinsic {
     Swap,
     Over,
 
-    Cast(Type),
+    Cast(Box<HirNode>),
 
     ReadU64,
     ReadU8,
@@ -171,7 +181,7 @@ pub enum Intrinsic {
 
 #[derive(Debug, Clone)]
 pub struct Var {
-    pub ty: types::Type,
+    pub ty: HirNode,
     pub escaping: bool,
 }
 
@@ -194,17 +204,13 @@ impl<'s> Walker<'s> {
                 cast: _,
                 ty:
                     box AstNode {
-                        span: _,
+                        span,
                         ast: AstKind::Type(ty),
                     },
-            }) => {
-                let ty = if let Some(struct_) = ty.clone().to_type(self.structs) {
-                    struct_
-                } else {
-                    todo!()
-                };
-                Intrinsic::Cast(ty)
-            }
+            }) => Intrinsic::Cast(box HirNode {
+                span: span.clone(),
+                hir: HirKind::Type(ty.clone()),
+            }),
             AstKind::Word(ref w) => match w.as_str() {
                 "drop" => Intrinsic::Drop,
                 "dup" => Intrinsic::Dup,
@@ -268,12 +274,15 @@ impl<'s> Walker<'s> {
                         sep: _,
                         ty:
                             box AstNode {
-                                span: _,
+                                span,
                                 ast: AstKind::Type(ty),
                             },
                     } => res.push(Binding::Bind {
                         name,
-                        ty: ty.to_type(self.structs).unwrap(),
+                        ty: box HirNode {
+                            span,
+                            hir: HirKind::Type(ty),
+                        },
                     }),
                     _ => unreachable!(),
                 }
@@ -299,9 +308,7 @@ impl<'s> Walker<'s> {
             ast::TopLevel::Const(c) => TopLevel::Const(self.walk_const(c)),
             ast::TopLevel::Mem(m) => TopLevel::Mem(self.walk_mem(m)),
             ast::TopLevel::Var(v) => {
-                let ty = coerce_ast!(v.ty => Type || unreachable!())
-                    .to_type(self.structs)
-                    .unwrap();
+                let ty = coerce_ast!(v.ty => Type || unreachable!());
                 TopLevel::Var(TopLevelVar {
                     ty,
                     span: v.name.span,
@@ -327,9 +334,12 @@ impl<'s> Walker<'s> {
             .tys
             .into_iter()
             .map(|ty| {
-                coerce_ast!(ty => Type || unreachable!())
-                    .to_type(self.structs)
-                    .unwrap()
+                let span = ty.span;
+                let ty = coerce_ast!(ty => Type || unreachable!());
+                HirNode {
+                    span,
+                    hir: HirKind::Type(ty),
+                }
             })
             .collect();
         let body = coerce_ast!(const_.body => Body || unreachable!())
@@ -350,7 +360,7 @@ impl<'s> Walker<'s> {
                 coerce_ast!(g => Generics || unreachable!())
                     .tys
                     .into_iter()
-                    .map(|ty| coerce_ast!(ty => Type || unreachable!()))
+                    .map(|ty| coerce_ast!(ty => Word || unreachable!()))
             })
             .into_iter()
             .flatten()
@@ -368,6 +378,7 @@ impl<'s> Walker<'s> {
         Proc {
             ins,
             outs,
+            generics,
             body: body.unwrap(),
             vars,
             span: proc.proc.span.merge(proc.end.span),
@@ -418,10 +429,15 @@ impl<'s> Walker<'s> {
     fn walk_var(&mut self, var: ast::Var) {
         let name = coerce_ast!(var.name => Word || unreachable!());
         let escaping = var.ret.is_some();
-        let ty = coerce_ast!(var.ty => Type || unreachable!())
-            .to_type(self.structs)
-            .unwrap();
-        let var = Var { ty, escaping };
+        let span = var.ty.span;
+        let ty = coerce_ast!(var.ty => Type || unreachable!());
+        let var = Var {
+            ty: HirNode {
+                span,
+                hir: HirKind::Type(ty),
+            },
+            escaping,
+        };
         self.proc_vars.insert(name, var);
     }
 
@@ -489,31 +505,30 @@ impl<'s> Walker<'s> {
         If { truth, lie }
     }
 
-    fn walk_proc_signature(&mut self, signature: ast::ProcSignature) -> (Vec<Type>, Vec<Type>) {
+    fn walk_proc_signature(
+        &mut self,
+        signature: ast::ProcSignature,
+    ) -> (Vec<HirNode>, Vec<HirNode>) {
         let mut ins = Vec::with_capacity(signature.ins.len());
         for ty in signature.ins {
-            if let AstKind::Type(ty) = ty.ast {
-                if let Some(struct_) = ty.to_type(self.structs) {
-                    ins.push(struct_);
-                } else {
-                    todo!()
-                }
-            } else {
-                unreachable!();
-            }
+            let span = ty.span;
+            let ty = coerce_ast!(ty => Type || unreachable!());
+            let ty = HirNode {
+                span,
+                hir: HirKind::Type(ty),
+            };
+            ins.push(ty);
         }
         let outs = if let Some(outs) = signature.outs {
             let mut proc_outs = Vec::with_capacity(outs.len());
             for ty in outs {
-                if let AstKind::Type(ty) = ty.ast {
-                    if let Some(struct_) = ty.to_type(self.structs) {
-                        proc_outs.push(struct_);
-                    } else {
-                        todo!()
-                    }
-                } else {
-                    unreachable!();
-                }
+                let span = ty.span;
+                let ty = coerce_ast!(ty => Type || unreachable!());
+                let ty = HirNode {
+                    span,
+                    hir: HirKind::Type(ty),
+                };
+                proc_outs.push(ty);
             }
             proc_outs
         } else {

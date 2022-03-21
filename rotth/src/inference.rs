@@ -57,7 +57,7 @@ impl Engine {
     /// there is a conflict between them)
     pub fn unify(&mut self, a: TypeId, b: TypeId, structs: &StructIndex) -> Result<(), String> {
         use TypeInfo::*;
-        match (self.vars[&a].clone(), self.vars[&b].clone()) {
+        match (self.vars[&a], self.vars[&b]) {
             // Follow any references
             (Ref(a), _) => self.unify(a, b, structs),
             (_, Ref(b)) => self.unify(a, b, structs),

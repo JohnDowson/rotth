@@ -635,7 +635,7 @@ fn rbracket() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
 
 fn generics() -> impl Parser<Token, AstNode, Error = Simple<Token, Span>> {
     lbracket()
-        .then(ty().repeated().at_least(1))
+        .then(word().repeated().at_least(1))
         .then(rbracket())
         .map_with_span(|((left_bracket, tys), right_bracket), span| AstNode {
             span,
@@ -770,6 +770,7 @@ fn toplevel() -> impl Parser<Token, Vec<TopLevel>, Error = Simple<Token, Span>> 
     ))
     .repeated()
     .then_ignore(end())
+    .or(end().to(vec![]))
 }
 
 pub fn parse_no_include(tokens: Vec<(Token, Span)>) -> Result<Vec<TopLevel>, Error> {

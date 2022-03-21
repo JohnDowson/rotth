@@ -3,13 +3,15 @@ use chumsky::error::SimpleReason;
 use clap::Parser as ClapParser;
 use fnv::FnvHashMap;
 use rotth::{
-    ast, emit,
-    eval::eval,
+    ast,
+    // emit,
+    // eval::eval,
     hir,
     lexer::lex,
-    lir,
-    typecheck::{ErrorKind, Typechecker},
-    Error, Result,
+    // lir,
+    typecheck::ErrorKind,
+    Error,
+    Result,
 };
 use somok::Somok;
 use std::{fs::OpenOptions, io::BufWriter, path::PathBuf, time::Instant};
@@ -185,9 +187,8 @@ fn report_errors(e: Error) {
                             .with_message("Not enough data on the stack".fg(Color::Red)),
                     ),
 
-                    ErrorKind::Undefined(w) => report.with_label(Label::new(e.span).with_message(
-                        format!("Unknown word `{}`", w.fg(Color::Yellow)).fg(Color::Red),
-                    )),
+                    ErrorKind::Undefined => report
+                        .with_label(Label::new(e.span).with_message("Unknown word".fg(Color::Red))),
                     ErrorKind::InvalidMain => report.with_label(
                         Label::new(e.span).with_message(
                             format!("Invalid type signature for `{}`", "main".fg(Color::Yellow))
@@ -261,15 +262,15 @@ fn compiler() -> Result<()> {
         println!("{hir:#?}");
     }
 
-    let procs = Typechecker::typecheck_program(hir, &struct_index)?;
+    // let procs = Typechecker::typecheck_program(hir, &struct_index)?;
 
     let typechecked = Instant::now();
     if args.time {
         println!("Typechecked in:\t{:?}", typechecked - lowered)
     }
 
-    let comp = lir::Compiler::new(struct_index);
-    let (lir, strs, mems) = comp.compile(procs);
+    // let comp = lir::Compiler::new(struct_index);
+    // let (lir, strs, mems) = comp.compile(procs);
 
     let transpiled = Instant::now();
     if args.time {
@@ -278,23 +279,23 @@ fn compiler() -> Result<()> {
 
     if args.dump_lir {
         println!("LIR:\n");
-        for (i, op) in lir.iter().enumerate() {
-            println!("{i}:\t{op:?}");
-        }
+        // for (i, op) in lir.iter().enumerate() {
+        //     println!("{i}:\t{op:?}");
+        // }
     }
     if args.compile {
-        emit::compile(
-            lir,
-            &strs,
-            &mems,
-            BufWriter::new(
-                OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .truncate(true)
-                    .open(source.with_extension("asm"))?,
-            ),
-        )?;
+        // emit::compile(
+        //     lir,
+        //     &strs,
+        //     &mems,
+        //     BufWriter::new(
+        //         OpenOptions::new()
+        //             .create(true)
+        //             .write(true)
+        //             .truncate(true)
+        //             .open(source.with_extension("asm"))?,
+        //     ),
+        // )?;
 
         let compiled = Instant::now();
         if args.time {
@@ -302,7 +303,7 @@ fn compiler() -> Result<()> {
             println!("Total:\t{:?}", compiled - start);
         }
     } else {
-        println!("exitcode: {:?}", eval(lir, &strs).unwrap());
+        // println!("exitcode: {:?}", eval(lir, &strs).unwrap());
         let evaluated = Instant::now();
         if args.time {
             println!("Evaluated in:\t{:?}", evaluated - transpiled);

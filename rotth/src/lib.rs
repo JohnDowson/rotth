@@ -36,13 +36,13 @@ macro_rules! coerce_ast {
 }
 
 pub mod ast;
-pub mod emit;
-pub mod eval;
+// pub mod emit;
+// pub mod eval;
 pub mod hir;
 pub mod iconst;
 pub mod inference;
 pub mod lexer;
-pub mod lir;
+// pub mod lir;
 pub mod resolver;
 pub mod span;
 pub mod tir;
