@@ -1,3 +1,9 @@
+use rotth_parser::types::Primitive;
+
+use crate::{
+    tir::{ConcreteType, GenId, Type, TypeId},
+    typecheck::{THeap, TypeStack},
+};
 ///! # Type inference in less than 100 lines of Rust
 ///!
 ///! - Do with it what you will
@@ -6,21 +12,29 @@
 ///! ~ zesterer
 use std::collections::HashMap;
 
-use crate::types::{StructId, StructIndex, Type, ValueType};
-
 /// A identifier to uniquely refer to our type terms
-pub type TypeId = usize;
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+pub struct TermId(usize);
+
+impl std::fmt::Debug for TermId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TermId({})", self.0)
+    }
+}
 
 /// Information about a type term
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TypeInfo {
     // No information about the type of this type term
     Unknown,
     // This type term is the same as another type term
-    Ref(TypeId),
+    Ref(TermId),
 
-    Ptr(TypeId),
+    Ptr(TermId),
 
+    Generic(GenId),
+
+    Void,
     Bool,
     Char,
 
@@ -34,33 +48,86 @@ pub enum TypeInfo {
     I16,
     I8,
 
-    Struct(StructId),
+    Struct(TypeId),
 }
 
-#[derive(Default)]
+pub fn type_to_info(engine: &mut Engine, term: &Type, generics_are_unknown: bool) -> TypeInfo {
+    let mut type_to_id = |term| {
+        let info = type_to_info(engine, term, generics_are_unknown);
+        engine.insert(info)
+    };
+    match term {
+        Type::Generic(_) if generics_are_unknown => TypeInfo::Unknown,
+        Type::Generic(g) => TypeInfo::Generic(*g),
+        Type::Concrete(c) => match c {
+            ConcreteType::Ptr(box t) => TypeInfo::Ptr(type_to_id(t)),
+            ConcreteType::Primitive(p) => match p {
+                Primitive::Void => TypeInfo::Void,
+                Primitive::Bool => TypeInfo::Bool,
+                Primitive::Char => TypeInfo::Char,
+                Primitive::U64 => TypeInfo::U64,
+                Primitive::U32 => TypeInfo::U32,
+                Primitive::U16 => TypeInfo::U16,
+                Primitive::U8 => TypeInfo::U8,
+                Primitive::I64 => TypeInfo::I64,
+                Primitive::I32 => TypeInfo::I32,
+                Primitive::I16 => TypeInfo::I16,
+                Primitive::I8 => TypeInfo::I8,
+            },
+            ConcreteType::Custom(t) => TypeInfo::Struct(*t),
+        },
+    }
+}
+
+#[derive(Default, Debug)]
 pub struct Engine {
     id_counter: usize, // Used to generate unique IDs
-    vars: HashMap<TypeId, TypeInfo>,
+    vars: HashMap<TermId, TypeInfo>,
 }
 
 impl Engine {
     /// Create a new type term with whatever we have about its type
-    pub fn insert(&mut self, info: TypeInfo) -> TypeId {
+    pub fn insert(&mut self, info: TypeInfo) -> TermId {
         // Generate a new ID for our type term
+        let id = TermId(self.id_counter);
         self.id_counter += 1;
-        let id = self.id_counter;
         self.vars.insert(id, info);
         id
     }
 
+    pub fn unify_stacks(
+        &mut self,
+        heap: &THeap,
+        mut a: TypeStack,
+        mut b: TypeStack,
+    ) -> Result<(), String> {
+        let a_ty = a.pop(heap);
+        let b_ty = b.pop(heap);
+        match (a_ty, b_ty) {
+            (None, None) => Ok(()),
+            (None, Some(_)) | (Some(_), None) => Err(String::from("Stacks differ in depth")),
+            (Some(a_ty), Some(b_ty)) => {
+                self.unify(a_ty, b_ty)?;
+                self.unify_stacks(heap, a, b)
+            }
+        }
+    }
+
     /// Make the types of two type terms equivalent (or produce an error if
     /// there is a conflict between them)
-    pub fn unify(&mut self, a: TypeId, b: TypeId, structs: &StructIndex) -> Result<(), String> {
+    pub fn unify(&mut self, a: TermId, b: TermId) -> Result<(), String> {
         use TypeInfo::*;
+        // dbg! {(a,b)};
+        // dbg! {&self.vars};
+        if a == b {
+            return Ok(());
+        }
+        // match dbg! {(self.vars[&a], self.vars[&b])} {
         match (self.vars[&a], self.vars[&b]) {
             // Follow any references
-            (Ref(a), _) => self.unify(a, b, structs),
-            (_, Ref(b)) => self.unify(a, b, structs),
+            (Ref(a), Ref(b)) if a == b => Ok(()),
+            (Ref(a), _) => self.unify(a, b),
+            (_, Ref(b)) => self.unify(a, b),
 
             // When we don't know anything about either term, assume that
             // they match and make the one we know nothing about reference the
@@ -75,6 +142,7 @@ impl Engine {
             }
 
             // Primitives are trivial to unify
+            (Void, Void) => Ok(()),
             (Bool, Bool) => Ok(()),
             (Char, Char) => Ok(()),
             (U64, U64) => Ok(()),
@@ -88,8 +156,9 @@ impl Engine {
 
             // When unifying complex types, we must check their sub-types. This
             // can be trivially implemented for tuples, sum types, etc.
+            (Generic(a_id), Generic(b_id)) if a_id == b_id => Ok(()),
             (Struct(a_id), Struct(b_id)) if a_id == b_id => Ok(()),
-            (Ptr(a), Ptr(b)) => self.unify(a, b, structs),
+            (Ptr(a), Ptr(b)) => self.unify(a, b),
 
             // If no previous attempts to unify were successful, raise an error
             (a, b) => Err(format!("Conflict between {:?} and {:?}", a, b)),
@@ -99,11 +168,14 @@ impl Engine {
     /// Attempt to reconstruct a concrete type from the given type term ID. This
     /// may fail if we don't yet have enough information to figure out what the
     /// type is.
-    pub fn reconstruct(&self, id: TypeId) -> Result<Type, String> {
+    pub fn reconstruct(&self, id: TermId) -> Result<Type, String> {
         use TypeInfo::*;
         match self.vars[&id] {
             Unknown => Err("Cannot infer".to_string()),
             Ref(id) => self.reconstruct(id),
+            Ptr(v) => Ok(Type::Concrete(ConcreteType::Ptr(box self.reconstruct(v)?))),
+            Generic(id) => Ok(Type::Generic(id)),
+            Void => Ok(Type::VOID),
             Bool => Ok(Type::BOOL),
             Char => Ok(Type::CHAR),
             U64 => Ok(Type::U64),
@@ -114,46 +186,7 @@ impl Engine {
             I32 => Ok(Type::I32),
             I16 => Ok(Type::I16),
             I8 => Ok(Type::I8),
-            Struct(id) => Ok(Type {
-                ptr_depth: 0,
-                value_type: ValueType::Struct(id),
-            }),
-            Ptr(v) => {
-                let mut depth = 1;
-                let mut next = v;
-                let ty = loop {
-                    match self.vars[&next] {
-                        Ptr(v) => {
-                            next = v;
-                            depth += 1;
-                        }
-                        ty => break ty,
-                    }
-                };
-                let ty = match ty {
-                    Unknown => return Err("Cannot infer".to_string()),
-                    Ref(id) => self.reconstruct(id)?,
-                    Bool => Type::BOOL,
-                    Char => Type::CHAR,
-                    U64 => Type::U64,
-                    U32 => Type::U32,
-                    U16 => Type::U16,
-                    U8 => Type::U8,
-                    I64 => Type::I64,
-                    I32 => Type::I32,
-                    I16 => Type::I16,
-                    I8 => Type::I8,
-                    Struct(id) => Type {
-                        ptr_depth: 0,
-                        value_type: ValueType::Struct(id),
-                    },
-                    Ptr(_) => unreachable!(),
-                };
-                Ok(Type {
-                    ptr_depth: depth,
-                    value_type: ty.value_type,
-                })
-            }
+            Struct(id) => Ok(Type::Concrete(ConcreteType::Custom(id))),
         }
     }
 }
@@ -165,19 +198,19 @@ impl Engine {
 // same type, such as in the statement `x = y;`.
 #[test]
 fn test() {
-    let structs = StructIndex::default();
     let mut engine = Engine::default();
 
-    // proc {T} incptr &>T : &>T
+    // proc [T] incptr &>T : &>T
     let var = engine.insert(TypeInfo::Unknown);
 
     let i = engine.insert(TypeInfo::Ptr(var));
     let o = engine.insert(TypeInfo::Ptr(var));
 
     // 0 cast &>u64 incptr
-    let u = engine.insert(TypeInfo::U64);
+    // let u = engine.insert(TypeInfo::U64);
+    let u = engine.insert(TypeInfo::Struct(TypeId(0)));
     let a = engine.insert(TypeInfo::Ptr(u));
-    engine.unify(a, i, &structs).unwrap();
+    engine.unify(a, i).unwrap();
 
     // ...and compute the resulting type
     panic!("Final type = {:?}", engine.reconstruct(o));

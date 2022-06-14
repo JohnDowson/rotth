@@ -1,10 +1,12 @@
 use dashmap::DashMap;
 use ropey::Rope;
-use rotth::ast::{parse_no_include, TopLevel};
-use rotth::lexer::lex_string;
+use rotth_lexer::lex;
 use rotth_lsp::completion::{completion, CompleteCompletionItem};
 use rotth_lsp::semantic_token::{semantic_token_from_ast, CompleteSemanticToken, LEGEND_TYPE};
-use somok::Somok;
+use rotth_parser::ast::{parse, TopLevel};
+use rotth_parser::ParserError;
+use somok::{Leaksome, Somok};
+use spanner::Spanned;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncReadExt;
@@ -21,13 +23,13 @@ struct TextDocument {
 #[derive(Debug)]
 struct Backend {
     client: Client,
-    ast_map: DashMap<PathBuf, Vec<TopLevel>>,
+    ast_map: DashMap<PathBuf, Vec<Spanned<TopLevel>>>,
     include_map: DashMap<PathBuf, HashSet<PathBuf>>,
     semantic_token_map: DashMap<PathBuf, Vec<CompleteSemanticToken>>,
     document_map: DashMap<PathBuf, Rope>,
 }
 
-impl Backend {
+impl<'s> Backend {
     async fn parse_file(
         &self,
         parent: Option<&Path>,
@@ -58,14 +60,14 @@ impl Backend {
         let includes: Vec<(PathBuf, PathBuf)> = ast
             .iter()
             .filter_map(|i| {
-                if let TopLevel::Include(inc) = &i {
-                    let parent = i.span().file;
-                    let path = parent.parent().unwrap().join(inc.path());
+                if let TopLevel::Include(inc) = &**i {
+                    let parent = i.span.file.to_owned();
+                    let path = parent.parent().unwrap().join(&*inc.path);
                     self.include_map
-                        .entry(parent)
+                        .entry(parent.clone())
                         .or_insert_with(Default::default)
-                        .insert(path);
-                    (i.span().file, inc.path().to_owned()).some()
+                        .insert(path.clone());
+                    (parent, path).some()
                 } else {
                     None
                 }
@@ -76,43 +78,36 @@ impl Backend {
         includes.okay()
     }
 
-    async fn parse_text(&self, params: TextDocument) -> Option<Vec<TopLevel>> {
+    async fn parse_text(&self, params: TextDocument) -> Option<Vec<Spanned<TopLevel>>> {
         let rope = ropey::Rope::from_str(&params.text);
         self.document_map
             .insert(params.uri.to_file_path().unwrap(), rope.clone());
+        let path = &*params.uri.to_file_path().unwrap().into_boxed_path().leak();
 
-        let tokens = match lex_string(params.text, params.uri.to_file_path().unwrap()) {
-            Ok(tokens) => tokens,
-            Err(_e) => {
-                // self.client
-                //     .log_message(MessageType::ERROR, format!("{:?}", e))
-                //     .await;
-                return None;
-            } // TODO!
-        };
-        let ast = match parse_no_include(tokens) {
+        let tokens = lex(&params.text, path);
+        let ast = match parse(tokens) {
             Ok(ast) => ast,
-            Err(e) => {
-                let _diagnostics = match e {
-                    rotth::Error::Parser(errors) => errors
-                        .into_iter()
-                        .filter_map(|item| {
-                            let (message, span) = match item.reason() {
+            Err(ParserError(es)) => {
+                let diagnostics = es
+                    .into_iter()
+                    .filter_map(|error| {
+                        let (message, span) = match error {
+                            rotth_parser::Error::Parser(e) => match e.reason() {
                                 chumsky::error::SimpleReason::Unclosed { span, delimiter } => {
-                                    (format!("Unclosed delimiter {}", delimiter), span.clone())
+                                    (format!("Unclosed delimiter {}", delimiter), *span)
                                 }
                                 chumsky::error::SimpleReason::Unexpected => (
                                     format!(
                                         "{}, expected {}",
-                                        if item.found().is_some() {
+                                        if e.found().is_some() {
                                             "Unexpected token in input"
                                         } else {
                                             "Unexpected end of input"
                                         },
-                                        if item.expected().len() == 0 {
+                                        if e.expected().len() == 0 {
                                             "something else".to_string()
                                         } else {
-                                            item.expected()
+                                            e.expected()
                                                 .map(|expected| match expected {
                                                     Some(expected) => expected.to_string(),
                                                     None => "end of input".to_string(),
@@ -121,57 +116,38 @@ impl Backend {
                                                 .join(", ")
                                         }
                                     ),
-                                    item.span(),
+                                    e.span(),
                                 ),
                                 chumsky::error::SimpleReason::Custom(msg) => {
-                                    (msg.to_string(), item.span())
+                                    (msg.to_string(), e.span())
                                 }
-                            };
+                            },
+                            rotth_parser::Error::Redefinition(e) => {
+                                ("This item is redefined elsewhere".into(), e.redefined_item)
+                            }
+                            rotth_parser::Error::UnresolvedInclude(_) => todo!(),
+                        };
 
-                            || -> Option<Diagnostic> {
-                                let start_position = offset_to_position(span.start, &rope)?;
-                                let end_position = offset_to_position(span.end, &rope)?;
-                                Some(Diagnostic::new_simple(
-                                    Range::new(start_position, end_position),
-                                    message,
-                                ))
-                            }()
-                        })
-                        .collect::<Vec<_>>(),
-                    rotth::Error::Redefinition(errors) => errors
-                        .into_iter()
-                        .filter_map(|item| {
-                            let (message, span) = (
-                                "This word redifines another word defined elsewhere".to_string(),
-                                item.redefining_item,
-                            );
+                        || -> Option<Diagnostic> {
+                            let start_position = offset_to_position(span.start, &rope)?;
+                            let end_position = offset_to_position(span.end, &rope)?;
+                            Some(Diagnostic::new_simple(
+                                Range::new(start_position, end_position),
+                                message,
+                            ))
+                        }()
+                    })
+                    .collect::<Vec<_>>();
 
-                            || -> Option<Diagnostic> {
-                                let start_position = offset_to_position(span.start, &rope)?;
-                                let end_position = offset_to_position(span.end, &rope)?;
-                                Some(Diagnostic::new_simple(
-                                    Range::new(start_position, end_position),
-                                    message,
-                                ))
-                            }()
-                        })
-                        .collect::<Vec<_>>(),
-                    _e => {
-                        // self.client
-                        //     .log_message(MessageType::INFO, format!("{:?}", todo))
-                        //     .await;
-                        return None;
-                    }
-                };
                 // todo: unbreak diagnostics
-                // self.client
-                //     .publish_diagnostics(params.uri.clone(), diagnostics, None)
-                //     .await;
+                self.client
+                    .publish_diagnostics(params.uri.clone(), diagnostics, None)
+                    .await;
                 return None;
             } // TODO!
         };
 
-        ast.some()
+        ast.0.some()
     }
 
     async fn on_change(&self, params: TextDocument) {
@@ -189,14 +165,14 @@ impl Backend {
         let mut includes = ast
             .iter()
             .filter_map(|i| {
-                if let TopLevel::Include(inc) = i {
-                    let parent = i.span().file;
-                    let path = parent.parent().unwrap().join(inc.path());
+                if let TopLevel::Include(inc) = &**i {
+                    let parent = i.span.file.to_owned();
+                    let path = parent.parent().unwrap().join(&*inc.path);
                     self.include_map
-                        .entry(parent)
+                        .entry(parent.clone())
                         .or_insert_with(Default::default)
-                        .insert(path);
-                    (i.span().file, inc.path().to_owned()).some()
+                        .insert(path.clone());
+                    (parent, path).some()
                 } else {
                     None
                 }
@@ -299,9 +275,9 @@ impl LanguageServer for Backend {
                     CompleteCompletionItem::Const(name) | CompleteCompletionItem::Mem(name) => {
                         ret.push(CompletionItem {
                             label: name.clone(),
-                            insert_text: Some(name.clone()),
                             kind: Some(CompletionItemKind::CONSTANT),
-                            detail: Some(name),
+                            detail: Some(name.clone()),
+                            insert_text: Some(name),
                             ..Default::default()
                         });
                     }
@@ -402,20 +378,18 @@ impl LanguageServer for Backend {
 
         let item = self.ast_map.iter().find_map(|r| {
             for item in r.value() {
-                if let Some(name) = item.name() {
-                    if name == word {
-                        return item.clone().some();
-                    }
+                if item.name().unwrap() == word {
+                    return item.clone().some();
                 }
             }
             None
         });
 
         let definition = item.and_then(|item| {
-            let span = &item.span();
+            let span = &item.span;
             let uri = Url::from_file_path(&span.file).unwrap();
 
-            let rope = &*self.document_map.get(&span.file)?;
+            let rope = &*self.document_map.get(span.file)?;
 
             let start_position = offset_to_position(span.start, rope)?;
             let end_position = offset_to_position(span.end, rope)?;

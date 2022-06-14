@@ -1,12 +1,15 @@
-use crate::{
-    eval::eval,
-    hir::{
-        self, Bind, Binding, Cond, CondBranch, Const, HirKind, HirNode, If, Intrinsic, Mem, Proc,
-        TopLevel, While,
-    },
-    iconst::IConst,
-    types::{self, StructIndex, Type},
+use fnv::FnvHashMap;
+use rotth_parser::{
+    ast::ItemPathBuf,
+    hir::{self, Binding, Hir, Intrinsic, While},
 };
+use somok::{Either, Somok, Ternary};
+use Op::*;
+
+use crate::tir::{TirNode, TopLevel, TypecheckedProgram};
+
+#[derive(Debug, Clone)]
+pub enum IConst {}
 
 #[derive(Debug)]
 pub enum Op {
@@ -69,20 +72,17 @@ pub enum Op {
     Return,
     Exit,
 }
-use fnv::FnvHashMap;
-use somok::{Either, PartitionThree, Somok, Ternary};
-use Op::*;
 
 #[derive(Clone)]
 enum ComConst {
     Compiled(Vec<IConst>),
-    NotCompiled(Const),
+    NotCompiled(Vec<TirNode>),
 }
 
 #[derive(Clone)]
 enum ComMem {
     Compiled(usize),
-    NotCompiled(Mem),
+    NotCompiled(Vec<TirNode>),
 }
 
 pub struct Compiler {
@@ -95,19 +95,20 @@ pub struct Compiler {
     strings: Vec<String>,
     bindings: Vec<Vec<String>>,
     mems: FnvHashMap<String, ComMem>,
-    vars: FnvHashMap<String, types::Type>,
-    local_vars: FnvHashMap<String, (usize, hir::Var)>,
+    // vars: FnvHashMap<String, types::Type>,
+    // local_vars: FnvHashMap<String, (usize, hir::Var<'p>)>,
     local_vars_size: usize,
     escaping_size: usize,
-    structs: StructIndex,
+    // structs: StructIndex,
 }
 
 impl Compiler {
     pub fn compile(
         mut self,
-        items: FnvHashMap<String, TopLevel>,
+        program: TypecheckedProgram,
     ) -> (Vec<Op>, Vec<String>, FnvHashMap<String, usize>) {
-        let (procs, consts_mems_gvars) = items
+        let (procs, consts_mems_gvars) = program
+            .items
             .into_iter()
             .partition::<Vec<_>, _>(|(_, it)| matches!(it, TopLevel::Proc(_)));
         let procs = procs
@@ -322,11 +323,11 @@ impl Compiler {
         self.mems.insert(name.clone(), ComMem::Compiled(size));
     }
 
-    fn compile_body(&mut self, body: Vec<HirNode>) {
+    fn compile_body(&mut self, body: Vec<TirNode>) {
         for node in body {
             match node.hir {
-                HirKind::Cond(cond) => self.compile_cond(cond),
-                HirKind::Return => {
+                Hir::Cond(cond) => self.compile_cond(cond),
+                Hir::Return => {
                     let num_bindings = self.bindings.iter().flatten().count();
                     for _ in 0..num_bindings {
                         self.emit(Unbind)
@@ -335,7 +336,7 @@ impl Compiler {
                     self.emit(FreeLocals(i));
                     self.emit(Return)
                 }
-                HirKind::Literal(c) => match c {
+                Hir::Literal(c) => match c {
                     IConst::Str(s) => {
                         let i = self.strings.len();
                         self.strings.push(s);
@@ -343,17 +344,17 @@ impl Compiler {
                     }
                     _ => self.emit(Push(c)),
                 },
-                HirKind::Word(w) if self.is_const(&w) => {
+                Hir::Path(w) if self.is_const(&w) => {
                     let c = self.compile_const(w);
                     for c in c {
                         self.emit(Push(c))
                     }
                 }
-                HirKind::Word(w) if self.is_mem(&w) => {
+                Hir::Path(w) if self.is_mem(&w) => {
                     self.compile_mem(&w);
                     self.emit(PushMem(w))
                 }
-                HirKind::Word(w) if self.is_binding(&w) => {
+                Hir::Path(w) if self.is_binding(&w) => {
                     let offset = self
                         .bindings
                         .iter()
@@ -363,20 +364,16 @@ impl Compiler {
                         .unwrap();
                     self.emit(UseBinding(offset))
                 }
-                HirKind::Word(w) if self.is_lvar(&w) => {
+                Hir::Path(w) if self.is_lvar(&w) => {
                     let &(offset, ref var) = &self.local_vars[&w];
-                    if var.escaping {
-                        self.emit(PushEscaping(offset))
-                    } else {
-                        self.emit(PushLvar(offset))
-                    }
+                    self.emit(PushLvar(offset))
                 }
-                HirKind::Word(w) if self.is_gvar(&w) => self.emit(PushMem(w)),
-                HirKind::Word(w) => {
+                Hir::Path(w) if self.is_gvar(&w) => self.emit(PushMem(w)),
+                Hir::Path(w) => {
                     let mangled = self.mangle_table.get(&w).unwrap().clone();
                     self.emit(Call(mangled))
                 }
-                HirKind::Intrinsic(i) => match i {
+                Hir::Intrinsic(i) => match i {
                     Intrinsic::Drop => self.emit(Drop),
                     Intrinsic::Dup => self.emit(Dup),
                     Intrinsic::Swap => self.emit(Swap),
@@ -417,11 +414,11 @@ impl Compiler {
 
                     Intrinsic::CompStop => return,
                 },
-                HirKind::If(cond) => self.compile_if(cond),
-                HirKind::While(while_) => self.compile_while(while_),
-                HirKind::Bind(bind) => self.compile_bind(bind),
-                HirKind::IgnorePattern => unreachable!(), // this is a noop
-                HirKind::FieldAccess(f) => {
+                Hir::If(cond) => self.compile_if(cond),
+                Hir::While(while_) => self.compile_while(while_),
+                Hir::Bind(bind) => self.compile_bind(bind),
+                Hir::IgnorePattern => unreachable!(), // this is a noop
+                Hir::FieldAccess(f) => {
                     let struct_ = &self.structs[f.ty.unwrap()];
                     let offset = struct_.fields[&f.field].offset;
                     self.emit(Push(IConst::U64(offset as _)));
@@ -431,7 +428,7 @@ impl Compiler {
         }
     }
 
-    fn compile_bind(&mut self, bind: Bind) {
+    fn compile_bind(&mut self, bind: hir::Bind) {
         let mut new_bindings = Vec::new();
         for binding in bind.bindings.iter().rev() {
             match binding {
@@ -495,13 +492,13 @@ impl Compiler {
 
             self.emit(Dup);
             match pattern.hir {
-                HirKind::Literal(c) => self.emit(Push(c)),
-                HirKind::Word(w) if self.is_const(&w) => {
+                Hir::Literal(c) => self.emit(Push(c)),
+                Hir::Word(w) if self.is_const(&w) => {
                     let c = self.compile_const(w)[0].clone();
                     self.emit(Push(c))
                 }
-                HirKind::Word(w) => unreachable!("Impossible non-constant: {}", w),
-                HirKind::IgnorePattern => self.emit(Dup), // todo: this is hacky
+                Hir::Word(w) => unreachable!("Impossible non-constant: {}", w),
+                Hir::IgnorePattern => self.emit(Dup), // todo: this is hacky
                 _ => unreachable!(),
             }
             self.emit(Eq);
@@ -562,21 +559,6 @@ impl Compiler {
             escaping_size: Default::default(),
             structs: Default::default(),
         }
-    }
-
-    fn mangle_name(&mut self, name: String) -> String {
-        let name_mangled = if name != "main" {
-            format!(
-                "proc{}_{}",
-                self.proc_id,
-                name.replace(|p: char| !p.is_ascii_alphabetic(), "")
-            )
-        } else {
-            name.clone()
-        };
-        self.mangle_table.insert(name, name_mangled.clone());
-        self.proc_id += 1;
-        name_mangled
     }
 
     fn is_const(&self, w: &str) -> bool {

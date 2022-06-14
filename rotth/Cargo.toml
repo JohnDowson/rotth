@@ -7,10 +7,14 @@ edition = "2021"
 
 [dependencies]
 ariadne = "0.1.5"
-chumsky = { git = "https://github.com/zesterer/chumsky.git" }
 somok = "1.5.0"
 clap = { version = "3", features = ["derive"] }
 simplearena = { path = "../simplearena" }
 indoc = "1.0.4"
-thiserror = "1.0.30"
-fnv = "1.0.7"
+fnv = "1.0"
+rotth-lexer = { path = "../rotth-lexer" }
+rotth-parser = { path = "../rotth-parser" }
+spanner = { path = "../spanner" }
+chumsky = { git = "https://github.com/zesterer/chumsky.git" }
+thiserror = "1.0"
+smol_str = "0.1"

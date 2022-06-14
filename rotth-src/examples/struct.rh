@@ -16,7 +16,7 @@ proc main: u64 do
 end
 
 proc returns-string: &>String do
-    var return str: String
+    var str: String
     "foobar"
     bind n: u64 s: &>char do
         n str -> len !u64

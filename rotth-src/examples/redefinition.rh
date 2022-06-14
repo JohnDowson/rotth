@@ -4,4 +4,5 @@ proc main: u64 do
 end
 
 proc puts do
+    std::puts
 end

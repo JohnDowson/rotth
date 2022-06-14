@@ -1,4 +1,4 @@
-proc {T} incptr &>T : &>T do
+proc [T] incptr &>T : &>T do
     cast u64 1 + cast &>T
 end
 

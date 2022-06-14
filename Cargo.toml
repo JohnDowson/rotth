@@ -1,2 +1,2 @@
 [workspace]
-members = ["rotth", "rotth-lsp", "simplearena"]
+members = ["rotth", "rotth-lexer", "rotth-lsp", "spanner", "simplearena"]

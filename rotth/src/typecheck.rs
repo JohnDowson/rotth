@@ -1,8 +1,22 @@
 use simplearena::{Heap, Ref};
 use somok::Somok;
+use spanner::Span;
 use std::collections::VecDeque;
 
-use crate::{span::Span, tir, types::Type, Error};
+use crate::{
+    inference::{TermId, TypeInfo},
+    Error,
+};
+
+pub fn error<T>(span: Span, kind: ErrorKind, message: impl ToString) -> Result<T, Error> {
+    Error::Typecheck(TypecheckError::new(span, kind, message)).error()
+}
+
+impl From<TypecheckError> for Error {
+    fn from(e: TypecheckError) -> Self {
+        Self::Typecheck(e)
+    }
+}
 
 #[derive(Debug)]
 pub struct TypecheckError {
@@ -23,9 +37,11 @@ impl TypecheckError {
 #[derive(Debug)]
 pub enum ErrorKind {
     TypeMismatch {
-        expected: Vec<tir::Type>,
-        actual: Vec<tir::Type>,
+        expected: Vec<TypeInfo>,
+        actual: Vec<TypeInfo>,
     },
+    UnificationError,
+    UnsupportedOperation,
     NotEnoughData,
     Undefined,
     InvalidMain,
@@ -34,11 +50,6 @@ pub enum ErrorKind {
     Unexpected,
     CallInConst,
 }
-pub fn error<T>(span: Span, kind: ErrorKind, message: impl ToString) -> Result<T> {
-    Error::Typecheck(TypecheckError::new(span, kind, message)).error()
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Clone, Default)]
 pub struct TypeStack {
@@ -46,7 +57,7 @@ pub struct TypeStack {
 }
 
 impl TypeStack {
-    pub fn push(&mut self, heap: &mut THeap, ty: tir::Type) {
+    pub fn push(&mut self, heap: &mut THeap, ty: TermId) {
         let frame = TypeFrame {
             ty,
             prev: self.top.clone(),
@@ -54,51 +65,31 @@ impl TypeStack {
         self.top = heap.alloc(frame).some();
     }
 
-    pub fn pop(&mut self, heap: &THeap) -> Option<tir::Type> {
+    pub fn pop(&mut self, heap: &THeap) -> Option<TermId> {
         if let Some(top) = self.top.clone() {
             let top = top.deref(heap).unwrap();
             let prev = top.prev.clone();
             self.top = prev;
-            top.ty.clone().some()
+            top.ty.some()
         } else {
             None
         }
     }
 
-    pub fn eq(&self, other: &Self, heap: &THeap) -> bool {
-        let (mut next_left, mut next_right) = (&self.top, &other.top);
-        loop {
-            match (next_left, next_right) {
-                (Some(lhs), Some(rhs)) => {
-                    let lhs = if let Some(lhs) = lhs.deref(heap) {
-                        lhs
-                    } else {
-                        return false;
-                    };
-                    let rhs = if let Some(rhs) = rhs.deref(heap) {
-                        rhs
-                    } else {
-                        return false;
-                    };
-                    if lhs.ty != rhs.ty {
-                        break false;
-                    }
-                    next_left = &lhs.prev;
-                    next_right = &rhs.prev;
-                    continue;
-                }
-                (None, None) => break true,
-                _ => break false,
-            }
+    pub fn from_iter(tys: impl Iterator<Item = TermId>, heap: &mut THeap) -> Self {
+        let mut stack = Self::default();
+        for ty in tys {
+            stack.push(heap, ty)
         }
+        stack
     }
 
-    pub fn into_vec(self, heap: &THeap) -> Vec<tir::Type> {
+    pub fn into_vec(self, heap: &THeap) -> Vec<TermId> {
         let mut res = VecDeque::new();
         let mut next = self.top;
         while let Some(top) = next {
             let top = top.deref(heap).unwrap();
-            res.push_front(top.ty.clone());
+            res.push_front(top.ty);
             next = top.prev.clone()
         }
         res.into()
@@ -107,7 +98,7 @@ impl TypeStack {
 
 #[derive(Debug, Clone)]
 pub struct TypeFrame {
-    ty: tir::Type,
+    ty: TermId,
     prev: Option<TRef>,
 }
 

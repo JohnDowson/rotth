@@ -1,0 +1,8 @@
+proc [T] inc T : T do
+    cast u64 1 + cast T
+end
+
+proc main: u64 do
+    1 inc cast u64 print
+    0
+end
