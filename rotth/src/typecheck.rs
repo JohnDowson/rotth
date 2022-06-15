@@ -8,7 +8,7 @@ use crate::{
     Error,
 };
 
-pub fn error<T>(span: Span, kind: ErrorKind, message: impl ToString) -> Result<T, Error> {
+pub fn error<T, M: ToString>(span: Span, kind: ErrorKind, message: M) -> Result<T, Error> {
     Error::Typecheck(TypecheckError::new(span, kind, message)).error()
 }
 
@@ -40,7 +40,7 @@ pub enum ErrorKind {
         expected: Vec<TypeInfo>,
         actual: Vec<TypeInfo>,
     },
-    UnificationError,
+    UnificationError(String),
     UnsupportedOperation,
     NotEnoughData,
     Undefined,

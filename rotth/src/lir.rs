@@ -1,21 +1,32 @@
 use fnv::FnvHashMap;
 use rotth_parser::{
-    ast::ItemPathBuf,
-    hir::{self, Binding, Hir, Intrinsic, While},
+    ast::{ItemPath, ItemPathBuf, Literal},
+    hir::{Binding, Intrinsic},
+    types::{Primitive, StructIndex},
 };
-use somok::{Either, Somok, Ternary};
+use somok::{Either, Somok};
 use Op::*;
 
-use crate::tir::{TirNode, TopLevel, TypecheckedProgram};
+use crate::{
+    ctir::ConcreteProgram,
+    eval::eval,
+    tir::{self, Cond, CondBranch, If, KConst, KMem, KProc, Type, TypedIr, TypedNode, Var, While},
+};
 
-#[derive(Debug, Clone)]
-pub enum IConst {}
+#[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Mangled(String);
+
+impl std::fmt::Display for Mangled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 #[derive(Debug)]
 pub enum Op {
-    Push(IConst),
+    Push(Literal),
     PushStr(usize),
-    PushMem(String),
+    PushMem(Mangled),
     Drop,
     Dup,
     Swap,
@@ -63,182 +74,132 @@ pub enum Op {
     Gt,
     Ge,
 
-    Proc(String),
-    Label(String),
-    Jump(String),
-    JumpF(String),
-    JumpT(String),
-    Call(String),
+    Proc(Mangled),
+    Label(Mangled),
+    Jump(Mangled),
+    JumpF(Mangled),
+    JumpT(Mangled),
+    Call(Mangled),
     Return,
     Exit,
 }
 
 #[derive(Clone)]
-enum ComConst {
-    Compiled(Vec<IConst>),
-    NotCompiled(Vec<TirNode>),
+pub enum ComConst {
+    Compiled(Vec<Literal>),
+    NotCompiled(KConst<Type>),
 }
 
 #[derive(Clone)]
-enum ComMem {
+pub enum ComMem {
     Compiled(usize),
-    NotCompiled(Vec<TirNode>),
+    NotCompiled(KMem<Type>),
 }
 
+#[derive(Default)]
 pub struct Compiler {
     label: usize,
-    mangle_table: FnvHashMap<String, String>,
+    mangle_table: FnvHashMap<ItemPathBuf, Mangled>,
+    unmangle_table: FnvHashMap<Mangled, ItemPathBuf>,
     proc_id: usize,
-    current_name: String,
+    current_name: Mangled,
     result: Vec<Op>,
-    consts: FnvHashMap<String, ComConst>,
+    consts: FnvHashMap<ItemPathBuf, ComConst>,
     strings: Vec<String>,
-    bindings: Vec<Vec<String>>,
-    mems: FnvHashMap<String, ComMem>,
-    // vars: FnvHashMap<String, types::Type>,
-    // local_vars: FnvHashMap<String, (usize, hir::Var<'p>)>,
+    bindings: Vec<Vec<ItemPathBuf>>,
+    mems: FnvHashMap<ItemPathBuf, ComMem>,
+    _vars: FnvHashMap<ItemPathBuf, Type>,
+    local_vars: FnvHashMap<ItemPathBuf, (usize, Var)>,
     local_vars_size: usize,
-    escaping_size: usize,
-    // structs: StructIndex,
+    _escaping_size: usize,
+    _structs: StructIndex,
 }
 
 impl Compiler {
-    pub fn compile(
-        mut self,
-        program: TypecheckedProgram,
-    ) -> (Vec<Op>, Vec<String>, FnvHashMap<String, usize>) {
-        let (procs, consts_mems_gvars) = program
-            .items
-            .into_iter()
-            .partition::<Vec<_>, _>(|(_, it)| matches!(it, TopLevel::Proc(_)));
-        let procs = procs
-            .into_iter()
-            .map(|(name, proc)| {
-                if let TopLevel::Proc(proc) = proc {
-                    let mangled = self.mangle_name(name);
-                    (mangled, proc)
-                } else {
-                    unreachable!()
-                }
-            })
-            .collect::<Vec<_>>();
+    pub fn compile(program: ConcreteProgram) -> (Vec<Op>, Vec<String>, FnvHashMap<Mangled, usize>) {
+        let mut this = Self::default();
 
-        let (consts, mems, vars) =
-            consts_mems_gvars
-                .into_iter()
-                .partition_three::<Vec<_>, _>(|(_, it)| match it {
-                    TopLevel::Proc(_) => unreachable!(),
-                    TopLevel::Const(_) => Ternary::First,
-                    TopLevel::Mem(_) => Ternary::Second,
-                    TopLevel::Var(_) => Ternary::Third,
-                });
+        this.emit(Call(Mangled("main".into())));
+        this.emit(Exit);
 
-        self.mems = mems
-            .into_iter()
-            .map(|(name, mem)| {
-                if let TopLevel::Mem(mem) = mem {
-                    (name, ComMem::NotCompiled(mem))
-                } else {
-                    unreachable!()
-                }
-            })
-            .collect::<FnvHashMap<_, _>>();
-
-        self.vars = vars
-            .into_iter()
-            .map(|(name, mem)| {
-                if let TopLevel::Var(var) = mem {
-                    (name, var.ty)
-                } else {
-                    unreachable!()
-                }
-            })
-            .collect::<FnvHashMap<_, _>>();
-
-        self.consts = consts
-            .into_iter()
-            .map(|(name, const_)| {
-                if let TopLevel::Const(const_) = const_ {
-                    (name, ComConst::NotCompiled(const_))
-                } else {
-                    unreachable!()
-                }
-            })
-            .collect::<FnvHashMap<_, _>>();
-
-        self.emit(Call("main".to_string()));
-
-        self.emit(Exit);
-        for (name, proc) in procs {
-            self.compile_proc(name, proc)
+        for (name, const_) in program.consts {
+            let mangled = this.mangle(&name);
+            this.mangle_table.insert(name.clone(), mangled.clone());
+            this.unmangle_table.insert(mangled.clone(), name.clone());
+            this.consts.insert(name, ComConst::NotCompiled(const_));
         }
 
-        let vars = self
-            .vars
+        for (name, mem) in program.mems {
+            let mangled = this.mangle(&name);
+            this.mangle_table.insert(name.clone(), mangled.clone());
+            this.unmangle_table.insert(mangled.clone(), name.clone());
+            this.mems.insert(name, ComMem::NotCompiled(mem));
+        }
+
+        let procs = program
+            .procs
             .into_iter()
-            .map(|(nm, ty)| (nm, ty.size(&self.structs)));
-        (
-            self.result,
-            self.strings,
-            self.mems
-                .into_iter()
-                .map(|(nm, sz)| {
-                    (nm, {
-                        match sz {
-                            ComMem::Compiled(sz) => sz,
-                            ComMem::NotCompiled(_) => unreachable!(),
-                        }
-                    })
-                })
-                .chain(vars)
-                .collect(),
-        )
+            .map(|(name, proc)| {
+                let mangled = this.mangle(&name);
+                this.mangle_table.insert(name.clone(), mangled.clone());
+                this.unmangle_table.insert(mangled.clone(), name);
+                (mangled, proc)
+            })
+            .collect::<Vec<_>>();
+        for (mangled, proc) in procs {
+            this.compile_proc(mangled, proc)
+        }
+
+        let mems = this
+            .mems
+            .into_iter()
+            .map(|(n, m)| match m {
+                ComMem::Compiled(c) => (this.mangle_table.get(&n).unwrap().clone(), c),
+                _ => todo!(),
+            })
+            .collect();
+
+        (this.result, this.strings, mems)
     }
 
-    fn compile_proc(&mut self, name: String, proc: Proc) {
+    fn compile_proc(&mut self, name: Mangled, proc: KProc<TypedNode<Type>>) {
         self.label = 0;
+        self.inc_proc_id();
         self.current_name = name.clone();
         let label = name;
         self.emit(Proc(label));
 
         let mut i = 0;
-        let (local, escaping) = proc
-            .vars
-            .into_iter()
-            .partition::<Vec<_>, _>(|(_, v)| v.escaping);
-        for (name, var) in local {
-            let offset = var.ty.size(&self.structs);
+        for (name, var) in proc.vars {
+            let offset = 0; //var.ty.size(&self.structs);
             self.local_vars.insert(name, (i, var));
             i += offset
         }
         self.local_vars_size = i;
-        self.emit(ReserveLocals(i));
-
-        for (name, var) in escaping {
-            let offset = var.ty.size(&self.structs);
-            self.local_vars.insert(name, (i, var));
-            self.escaping_size += offset
+        if i > 0 {
+            self.emit(ReserveLocals(i));
         }
-        self.emit(ReserveEscaping(i));
 
         self.compile_body(proc.body);
 
         self.local_vars = Default::default();
 
-        self.emit(FreeLocals(i));
+        if i > 0 {
+            self.emit(FreeLocals(i));
+        }
         self.emit(Return);
     }
 
-    fn compile_const(&mut self, name: String) -> Vec<IConst> {
-        let const_ = match self.consts.get(&name) {
-            Some(ComConst::Compiled(i)) => return i.clone(),
+    fn compile_const(&mut self, name: &ItemPath) -> Vec<Literal> {
+        let const_ = match self.consts.get(name) {
+            Some(ComConst::Compiled(c)) => return c.clone(),
             Some(ComConst::NotCompiled(c)) => c.clone(),
-            None => unreachable!(),
+            None => todo!(),
         };
-        let Const {
+        let KConst {
             outs,
-            body,
             span: _,
+            body,
         } = const_;
         let mut com = Self::with_consts_and_strings(self.consts.clone(), self.strings.clone());
         com.compile_body(body.clone());
@@ -246,20 +207,27 @@ impl Compiler {
         self.strings = com.strings;
         let ops = com.result;
         let mut const_ = Vec::new();
-        match eval(ops, &self.strings) {
+        match eval(ops, &self.strings, false) {
             Ok(Either::Right(bytes)) => {
-                for (&ty, bytes) in outs.iter().zip(bytes) {
+                for (ty, bytes) in outs.iter().zip(bytes) {
                     match ty {
-                        Type::BOOL => const_.push(IConst::Bool(bytes == 1)),
-                        Type::U64 => const_.push(IConst::U64(bytes)),
-                        Type::I64 => const_.push(IConst::I64(bytes as i64)),
-                        Type::CHAR => const_.push(IConst::Char(bytes as u8 as char)),
-                        ty => unreachable!("{:?}", ty),
+                        Type::Generic(_) => unreachable!(),
+                        Type::Concrete(ty) => match ty {
+                            tir::ConcreteType::Ptr(_) => todo!(),
+                            tir::ConcreteType::Primitive(ty) => match ty {
+                                Primitive::Bool => const_.push(Literal::Bool(bytes == 1)),
+                                Primitive::U64 => const_.push(Literal::Num(bytes)),
+                                Primitive::Char => const_.push(Literal::Char(bytes as u8 as char)),
+                                _ => todo!(),
+                            },
+                            tir::ConcreteType::Custom(_) => todo!(),
+                        },
                     }
                 }
             }
             Err(req) => {
-                self.compile_const(req);
+                let c_name = self.unmangle_table.get(&req).unwrap().clone();
+                self.compile_const(&c_name);
                 let mut com =
                     Self::with_consts_and_strings(self.consts.clone(), self.strings.clone());
                 com.compile_body(body);
@@ -267,15 +235,23 @@ impl Compiler {
                 let ops = com.result;
                 self.consts = com.consts;
                 self.strings = com.strings;
-                match eval(ops, &self.strings) {
+                match eval(ops, &self.strings, false) {
                     Ok(Either::Right(bytes)) => {
-                        for (&ty, bytes) in outs.iter().zip(bytes) {
+                        for (ty, bytes) in outs.iter().zip(bytes) {
                             match ty {
-                                Type::BOOL => const_.push(IConst::Bool(bytes == 1)),
-                                Type::U64 => const_.push(IConst::U64(bytes)),
-                                Type::I64 => const_.push(IConst::I64(bytes as i64)),
-                                Type::CHAR => const_.push(IConst::Char(bytes as u8 as char)),
-                                ty => unreachable!("{:?}", ty),
+                                Type::Generic(_) => unreachable!(),
+                                Type::Concrete(ty) => match ty {
+                                    tir::ConcreteType::Ptr(_) => todo!(),
+                                    tir::ConcreteType::Primitive(ty) => match ty {
+                                        Primitive::Bool => const_.push(Literal::Bool(bytes == 1)),
+                                        Primitive::U64 => const_.push(Literal::Num(bytes)),
+                                        Primitive::Char => {
+                                            const_.push(Literal::Char(bytes as u8 as char))
+                                        }
+                                        _ => todo!(),
+                                    },
+                                    tir::ConcreteType::Custom(_) => todo!(),
+                                },
                             }
                         }
                     }
@@ -285,27 +261,29 @@ impl Compiler {
             Ok(Either::Left(_)) => unreachable!(),
         };
 
-        self.consts.insert(name, ComConst::Compiled(const_.clone()));
+        self.consts
+            .insert(name.to_owned(), ComConst::Compiled(const_.clone()));
         const_
     }
 
-    fn compile_mem(&mut self, name: &String) {
+    fn compile_mem(&mut self, name: &ItemPath) {
         let mem = match self.mems.get(name) {
             Some(ComMem::Compiled(_)) => return,
             Some(ComMem::NotCompiled(c)) => c.clone(),
             None => unreachable!(),
         };
-        let Mem { body, span: _ } = mem;
+        let KMem { body, span: _ } = mem;
         let mut com = Self::with_consts_and_strings(self.consts.clone(), self.strings.clone());
         com.compile_body(body.clone());
         self.consts = com.consts;
         self.strings = com.strings;
         let ops = com.result;
         let size;
-        match eval(ops, &self.strings) {
+        match eval(ops, &self.strings, false) {
             Ok(Either::Right(bytes)) => size = bytes[0] as usize,
             Err(req) => {
-                self.compile_const(req);
+                let m_name = self.unmangle_table.get(&req).unwrap().clone();
+                self.compile_const(&m_name);
                 let mut com =
                     Self::with_consts_and_strings(self.consts.clone(), self.strings.clone());
                 com.compile_body(body);
@@ -313,21 +291,21 @@ impl Compiler {
                 let ops = com.result;
                 self.consts = com.consts;
                 self.strings = com.strings;
-                match eval(ops, &self.strings) {
+                match eval(ops, &self.strings, false) {
                     Ok(Either::Right(bytes)) => size = bytes[0] as usize,
                     _ => unreachable!(),
                 }
             }
             Ok(Either::Left(_)) => unreachable!(),
         };
-        self.mems.insert(name.clone(), ComMem::Compiled(size));
+        self.mems.insert(name.to_owned(), ComMem::Compiled(size));
     }
 
-    fn compile_body(&mut self, body: Vec<TirNode>) {
+    fn compile_body(&mut self, body: Vec<TypedNode<Type>>) {
         for node in body {
-            match node.hir {
-                Hir::Cond(cond) => self.compile_cond(cond),
-                Hir::Return => {
+            match node.node {
+                TypedIr::Cond(cond) => self.compile_cond(cond),
+                TypedIr::Return => {
                     let num_bindings = self.bindings.iter().flatten().count();
                     for _ in 0..num_bindings {
                         self.emit(Unbind)
@@ -336,25 +314,31 @@ impl Compiler {
                     self.emit(FreeLocals(i));
                     self.emit(Return)
                 }
-                Hir::Literal(c) => match c {
-                    IConst::Str(s) => {
+                TypedIr::Literal(c) => match c {
+                    Literal::String(s) => {
                         let i = self.strings.len();
                         self.strings.push(s);
                         self.emit(PushStr(i));
                     }
                     _ => self.emit(Push(c)),
                 },
-                Hir::Path(w) if self.is_const(&w) => {
-                    let c = self.compile_const(w);
+                TypedIr::ConstUse(w) => {
+                    let c = self.compile_const(&w);
                     for c in c {
                         self.emit(Push(c))
                     }
                 }
-                Hir::Path(w) if self.is_mem(&w) => {
+                TypedIr::MemUse(w) => {
                     self.compile_mem(&w);
-                    self.emit(PushMem(w))
+                    let mangled = self.mangle_table.get(&w).unwrap().clone();
+                    self.emit(PushMem(mangled))
                 }
-                Hir::Path(w) if self.is_binding(&w) => {
+                TypedIr::VarUse(_w) => {
+                    todo!();
+                    // let mangled = self.mangle_table.get(&_w).unwrap().clone();
+                    // self.emit(PushMem(mangled))
+                }
+                TypedIr::BindingUse(w) => {
                     let offset = self
                         .bindings
                         .iter()
@@ -364,16 +348,16 @@ impl Compiler {
                         .unwrap();
                     self.emit(UseBinding(offset))
                 }
-                Hir::Path(w) if self.is_lvar(&w) => {
-                    let &(offset, ref var) = &self.local_vars[&w];
-                    self.emit(PushLvar(offset))
-                }
-                Hir::Path(w) if self.is_gvar(&w) => self.emit(PushMem(w)),
-                Hir::Path(w) => {
+                // TypedIr::Path(w) if self.is_lvar(&w) => {
+                //     let &(offset, ref var) = &self.local_vars[&w];
+                //     self.emit(PushLvar(offset))
+                // }
+                // TypedIr::Path(w) if self.is_gvar(&w) => self.emit(PushMem(w)),
+                TypedIr::Call(w) => {
                     let mangled = self.mangle_table.get(&w).unwrap().clone();
                     self.emit(Call(mangled))
                 }
-                Hir::Intrinsic(i) => match i {
+                TypedIr::Intrinsic(i) => match i {
                     Intrinsic::Drop => self.emit(Drop),
                     Intrinsic::Dup => self.emit(Dup),
                     Intrinsic::Swap => self.emit(Swap),
@@ -414,24 +398,25 @@ impl Compiler {
 
                     Intrinsic::CompStop => return,
                 },
-                Hir::If(cond) => self.compile_if(cond),
-                Hir::While(while_) => self.compile_while(while_),
-                Hir::Bind(bind) => self.compile_bind(bind),
-                Hir::IgnorePattern => unreachable!(), // this is a noop
-                Hir::FieldAccess(f) => {
-                    let struct_ = &self.structs[f.ty.unwrap()];
-                    let offset = struct_.fields[&f.field].offset;
-                    self.emit(Push(IConst::U64(offset as _)));
+                TypedIr::If(cond) => self.compile_if(cond),
+                TypedIr::While(while_) => self.compile_while(while_),
+                TypedIr::Bind(bind) => self.compile_bind(bind),
+                TypedIr::IgnorePattern => unreachable!(), // this is a noop
+                TypedIr::FieldAccess(_f) => {
+                    // let struct_ = &self.structs;
+                    // let offset = struct_.fields[&f.field].offset;
+                    let offset = 0;
+                    self.emit(Push(Literal::Num(offset as _)));
                     self.emit(Add);
                 }
             }
         }
     }
 
-    fn compile_bind(&mut self, bind: hir::Bind) {
+    fn compile_bind(&mut self, bind: tir::Bind<Type>) {
         let mut new_bindings = Vec::new();
         for binding in bind.bindings.iter().rev() {
-            match binding {
+            match &binding.inner {
                 Binding::Ignore => self.emit(Drop),
                 Binding::Bind { name, ty: _ } => {
                     new_bindings.push(name.clone());
@@ -442,7 +427,7 @@ impl Compiler {
         self.bindings.push(new_bindings);
         self.compile_body(bind.body);
         for binding in bind.bindings.into_iter().rev() {
-            match binding {
+            match binding.inner {
                 Binding::Ignore => (),
                 Binding::Bind { name: _, ty: _ } => self.emit(Unbind),
             }
@@ -450,7 +435,7 @@ impl Compiler {
         self.bindings.pop();
     }
 
-    fn compile_while(&mut self, while_: While) {
+    fn compile_while(&mut self, while_: While<Type>) {
         let cond_label = self.gen_label();
         let end_label = self.gen_label();
         self.emit(Label(cond_label.clone()));
@@ -461,7 +446,7 @@ impl Compiler {
         self.emit(Label(end_label))
     }
 
-    fn compile_if(&mut self, if_: If) {
+    fn compile_if(&mut self, if_: If<Type>) {
         let lie_label = self.gen_label();
         let mut end_label = None;
         self.emit(JumpF(lie_label.clone()));
@@ -480,7 +465,7 @@ impl Compiler {
         }
     }
 
-    fn compile_cond(&mut self, cond: Cond) {
+    fn compile_cond(&mut self, cond: Cond<Type>) {
         let phi_label = self.gen_label();
         let num_branches = cond.branches.len() - 1;
         let mut this_branch_label = self.gen_label();
@@ -491,14 +476,13 @@ impl Compiler {
             }
 
             self.emit(Dup);
-            match pattern.hir {
-                Hir::Literal(c) => self.emit(Push(c)),
-                Hir::Word(w) if self.is_const(&w) => {
-                    let c = self.compile_const(w)[0].clone();
+            match pattern.node {
+                TypedIr::Literal(c) => self.emit(Push(c)),
+                TypedIr::ConstUse(w) => {
+                    let c = self.compile_const(&w)[0].clone();
                     self.emit(Push(c))
                 }
-                Hir::Word(w) => unreachable!("Impossible non-constant: {}", w),
-                Hir::IgnorePattern => self.emit(Dup), // todo: this is hacky
+                TypedIr::IgnorePattern => self.emit(Dup), // todo: this is hacky
                 _ => unreachable!(),
             }
             self.emit(Eq);
@@ -518,62 +502,46 @@ impl Compiler {
         self.result.push(op)
     }
 
-    fn gen_label(&mut self) -> String {
-        let res = format!(".{}_{}", self.current_name, self.label);
+    fn gen_label(&mut self) -> Mangled {
+        let res = Mangled(format!(".{}_{}", self.current_name, self.label));
         self.label += 1;
         res
     }
 
-    pub fn new(structs: StructIndex) -> Self {
-        Self {
-            label: 0,
-            mangle_table: Default::default(),
-            proc_id: 0,
-            current_name: "".to_string(),
-            result: Default::default(),
-            consts: Default::default(),
-            strings: Default::default(),
-            bindings: Default::default(),
-            mems: Default::default(),
-            vars: Default::default(),
-            local_vars: Default::default(),
-            local_vars_size: Default::default(),
-            escaping_size: Default::default(),
-            structs,
-        }
+    fn inc_proc_id(&mut self) {
+        self.proc_id += 1;
     }
-    fn with_consts_and_strings(consts: FnvHashMap<String, ComConst>, strings: Vec<String>) -> Self {
+
+    fn with_consts_and_strings(
+        consts: FnvHashMap<ItemPathBuf, ComConst>,
+        strings: Vec<String>,
+    ) -> Self {
         Self {
             label: 0,
             mangle_table: Default::default(),
+            unmangle_table: Default::default(),
             proc_id: 0,
-            current_name: "".to_string(),
+            current_name: Default::default(),
             result: Default::default(),
             consts,
             strings,
             bindings: Default::default(),
             mems: Default::default(),
-            vars: Default::default(),
+            _vars: Default::default(),
             local_vars: Default::default(),
             local_vars_size: Default::default(),
-            escaping_size: Default::default(),
-            structs: Default::default(),
+            _escaping_size: Default::default(),
+            _structs: Default::default(),
         }
     }
 
-    fn is_const(&self, w: &str) -> bool {
-        self.consts.contains_key(w)
-    }
-    fn is_binding(&self, w: &str) -> bool {
-        self.bindings.iter().flatten().any(|n| n == w)
-    }
-    fn is_mem(&self, w: &str) -> bool {
-        self.mems.contains_key(w)
-    }
-    fn is_gvar(&self, w: &str) -> bool {
-        self.vars.contains_key(w)
-    }
-    fn is_lvar(&self, w: &str) -> bool {
-        self.local_vars.contains_key(w)
+    fn mangle(&self, name: &ItemPath) -> Mangled {
+        let joiner = "__".into();
+        let name = name
+            .iter()
+            .intersperse(&joiner)
+            .map(|s| s.replace(|c| r"-+{}[]&^%/\".contains(c), &format!("{}", self.proc_id)))
+            .collect::<String>();
+        Mangled(name)
     }
 }

@@ -1,24 +1,7 @@
-; include "includee.rh"
-
-; struct Vec do
-;     len: u64
-;     buf: &>char
+; proc [T] ptr+ &>T u64 : &>T do
+;     swap cast u64 + cast &>T
 ; end
 
-; proc foo &>Vec : u64 do
-;     -> len @u64
-; end
-
-; proc bur do
-;     true if 1 else 2 end
-; end
-
-const BAR: u64 do 60 9 + end
-
-proc foo: u64 do
-    BAR bar
-end
-
-proc [T B] bar T : B do
-    cast B
+proc main: u64 do
+    60 9 +
 end

@@ -1,10 +1,10 @@
 use ariadne::{Color, FileCache, Fmt, Label, Report, ReportKind, Span};
 use chumsky::error::SimpleReason;
 use clap::Parser;
-use rotth::{tir, typecheck, Error};
+use rotth::{ctir, emit, eval::eval, lir, tir, typecheck, Error};
 use rotth_parser::hir::Walker;
 use somok::Somok;
-use std::{path::PathBuf, time::Instant};
+use std::{fs::OpenOptions, io::BufWriter, path::PathBuf, time::Instant};
 
 #[derive(Parser)]
 struct Args {
@@ -157,13 +157,18 @@ fn report_errors(e: Error) {
                 typecheck::ErrorKind::CallInConst => {
                     report.with_label(Label::new(e.span).with_message("Procedure call here"))
                 }
-                typecheck::ErrorKind::UnificationError => report.with_label(
-                    Label::new(e.span).with_message("Unification error".fg(Color::Red)),
-                ),
+                typecheck::ErrorKind::UnificationError(msg) => {
+                    report.with_label(Label::new(e.span).with_message(format!(
+                        "{}: {}",
+                        "Unification error".fg(Color::Red),
+                        msg
+                    )))
+                }
             };
 
             report.finish().print(&mut sources).unwrap();
         }
+        Error::Concrete(e) => todo!("{e:?}"),
     }
 }
 
@@ -231,47 +236,60 @@ fn compiler() -> Result<(), Error> {
         println!("{tir:#?}");
     }
 
-    // // let comp = lir::Compiler::new(struct_index);
-    // // let (lir, strs, mems) = comp.compile(procs);
+    let ctir = ctir::Walker::walk(tir)?;
 
-    // let transpiled = Instant::now();
-    // if args.time {
-    //     println!("Transpiled in:\t{:?}", transpiled - typechecked);
-    // }
+    let instantiated = Instant::now();
+    if args.time {
+        println!("Concretized in:\t{:?}", instantiated - typechecked)
+    }
 
-    // if args.dump_lir {
-    //     println!("LIR:\n");
-    //     // for (i, op) in lir.iter().enumerate() {
-    //     //     println!("{i}:\t{op:?}");
-    //     // }
-    // }
-    // if args.compile {
-    //     // emit::compile(
-    //     //     lir,
-    //     //     &strs,
-    //     //     &mems,
-    //     //     BufWriter::new(
-    //     //         OpenOptions::new()
-    //     //             .create(true)
-    //     //             .write(true)
-    //     //             .truncate(true)
-    //     //             .open(source.with_extension("asm"))?,
-    //     //     ),
-    //     // )?;
+    if args.dump_tir {
+        println!("CTIR:");
+        println!("{ctir:#?}");
+    }
 
-    //     let compiled = Instant::now();
-    //     if args.time {
-    //         println!("Compiled in:\t{:?}", compiled - transpiled);
-    //         println!("Total:\t{:?}", compiled - start);
-    //     }
-    // } else {
-    //     // println!("exitcode: {:?}", eval(lir, &strs).unwrap());
-    //     let evaluated = Instant::now();
-    //     if args.time {
-    //         println!("Evaluated in:\t{:?}", evaluated - transpiled);
-    //         println!("Total:\t{:?}", evaluated - start);
-    //     }
-    // }
+    let (lir, strings, mems) = lir::Compiler::compile(ctir);
+
+    let transpiled = Instant::now();
+    if args.time {
+        println!("Transpiled in:\t{:?}", transpiled - typechecked);
+    }
+
+    if args.dump_lir {
+        println!("LIR:");
+        for (i, op) in lir.iter().enumerate() {
+            println!("{i}:\t{op:?}");
+        }
+        println!();
+    }
+
+    if args.compile {
+        emit::compile(
+            lir,
+            &strings,
+            &mems,
+            BufWriter::new(
+                OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(source.with_extension("asm"))?,
+            ),
+        )?;
+
+        let compiled = Instant::now();
+        if args.time {
+            println!("Compiled in:\t{:?}", compiled - transpiled);
+            println!("Total:\t{:?}", compiled - start);
+        }
+    } else {
+        println!("exitcode: {:?}", eval(lir, &[], false).unwrap());
+        let evaluated = Instant::now();
+        if args.time {
+            println!("Evaluated in:\t{:?}", evaluated - transpiled);
+            println!("Total:\t{:?}", evaluated - start);
+        }
+    }
 
     ().okay()
 }

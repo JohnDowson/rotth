@@ -187,6 +187,7 @@ pub struct Include {
 
 #[derive(Clone)]
 pub enum Expr {
+    CompStop,
     Keyword(Keyword),
     Type(Type),
 
@@ -211,6 +212,7 @@ pub enum Expr {
 impl Debug for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Expr::CompStop => write!(f, "&?&"),
             Expr::Keyword(arg0) => arg0.fmt(f),
             Expr::Type(arg0) => arg0.fmt(f),
             Expr::Bind(arg0) => arg0.fmt(f),
@@ -361,6 +363,12 @@ impl PartialEq<&ItemPath> for ItemPathBuf {
     }
 }
 
+impl PartialEq<ItemPath> for ItemPathBuf {
+    fn eq(&self, other: &ItemPath) -> bool {
+        self.segments == other.segments
+    }
+}
+
 impl PartialEq<ItemPathBuf> for ItemPath {
     fn eq(&self, other: &ItemPathBuf) -> bool {
         self.segments == other.segments
@@ -443,6 +451,14 @@ impl<T: Into<SmolStr>> From<Vec<T>> for ItemPathBuf {
     }
 }
 
+impl From<SmolStr> for ItemPathBuf {
+    fn from(segment: SmolStr) -> Self {
+        Self {
+            segments: vec![segment],
+        }
+    }
+}
+
 impl Borrow<ItemPath> for ItemPathBuf {
     fn borrow(&self) -> &ItemPath {
         self.deref()
@@ -486,7 +502,9 @@ impl Debug for ItemPathBuf {
     }
 }
 
+#[derive(Clone)]
 pub enum ResolvedItem {
+    Ref(ItemPathBuf),
     Proc(Proc),
     Const(Const),
     Mem(Mem),
@@ -498,6 +516,7 @@ pub enum ResolvedItem {
 impl Debug for ResolvedItem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Ref(arg0) => f.debug_tuple("Ref").field(arg0).finish(),
             Self::Proc(arg0) => arg0.fmt(f),
             Self::Const(arg0) => arg0.fmt(f),
             Self::Mem(arg0) => arg0.fmt(f),
@@ -508,35 +527,36 @@ impl Debug for ResolvedItem {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResolvedFile {
     pub path: ItemPathBuf,
     pub ast: FnvHashMap<SmolStr, Spanned<ResolvedItem>>,
 }
 
-impl ResolvedFile {
-    pub fn find(&self, path: &ItemPath) -> Option<&Spanned<ResolvedItem>> {
-        let mut segments = path.iter();
-        let segment = segments.next();
-        let item = segment.and_then(|s| self.ast.get(s));
-        if let Some(path) = path.drop_first() {
-            match item {
-                Some(i) => match &**i {
-                    ResolvedItem::Proc(_) => return None,
-                    ResolvedItem::Const(_) => return None,
-                    ResolvedItem::Mem(_) => return None,
-                    ResolvedItem::Var(_) => return None,
-                    ResolvedItem::Struct(_) => return None,
-                    ResolvedItem::Module(f) => return f.find(path),
-                },
-                None => return None,
-            }
-        }
-        item
-    }
-}
+// impl ResolvedFile {
+//     fn find(&self, path: &ItemPath) -> Option<&Spanned<ResolvedItem>> {
+//         let mut segments = path.iter();
+//         let segment = segments.next();
+//         let item = segment.and_then(|s| self.ast.get(s));
+//         if let Some(path) = path.drop_first() {
+//             match item {
+//                 Some(i) => match &**i {
+//                     ResolvedItem::Ref(_) => return None,
+//                     ResolvedItem::Proc(_) => return None,
+//                     ResolvedItem::Const(_) => return None,
+//                     ResolvedItem::Mem(_) => return None,
+//                     ResolvedItem::Var(_) => return None,
+//                     ResolvedItem::Struct(_) => return None,
+//                     ResolvedItem::Module(f) => return f.find(path),
+//                 },
+//                 None => return None,
+//             }
+//         }
+//         item
+//     }
+// }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResolvedStruct {
     pub name: Spanned<Word>,
     pub fields: FnvHashMap<SmolStr, Spanned<NameTypePair>>,
@@ -572,7 +592,7 @@ fn resolve_includes_from(path: ItemPathBuf, root: File) -> Result<ResolvedFile, 
             },
             TopLevel::Include(Include {
                 include: _,
-                qualifiers: _,
+                qualifiers,
                 path: file_path,
             }) => {
                 let file_span = file_path.span;
@@ -601,8 +621,21 @@ fn resolve_includes_from(path: ItemPathBuf, root: File) -> Result<ResolvedFile, 
                     }
                 };
                 let tokens = lex(&src, file_path);
+
                 let module_ast = parse(tokens)?;
                 let resolved = resolve_includes_from(path.child(file_name), module_ast)?;
+                for qualifier in qualifiers {
+                    let span = qualifier.span;
+                    let item = qualifier.map(|Word(w)| w).inner;
+                    let item_path = resolved.path.child(item.clone());
+                    ast.insert(
+                        item,
+                        Spanned {
+                            span,
+                            inner: ResolvedItem::Ref(item_path),
+                        },
+                    );
+                }
                 ResolvedItem::Module(box resolved)
             }
         };

@@ -11,13 +11,13 @@ proc main: u64 do
     0 while dup ALPHABET < do
         bind c: char i: u64 do
             c cast u64 i + cast u8
-            foo i ptr+
+            foo i std::core::ptr+
             !u8
             c i
         end
         1 +
     end
     drop drop
-    ALPHABET foo cast &>char puts
+    ALPHABET foo cast &>char std::puts
     0
 end

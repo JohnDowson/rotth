@@ -1,7 +1,7 @@
-include "../std.rh"
+include puts "../std.rh"
 
 proc main: u64 do
     "hello\n"
-    dup 'f' swap !u8 puts
+    dup 'f' cast u8 swap !u8 puts
     0
 end

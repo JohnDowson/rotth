@@ -1,13 +1,14 @@
-use crate::{iconst::IConst, lir::Op};
+use crate::lir::{Mangled, Op};
 use fnv::FnvHashMap;
 use indoc::indoc;
+use rotth_parser::ast::Literal;
 use somok::Somok;
 use std::io::{BufWriter, Write};
 
 pub fn compile<S: Write>(
     ops: Vec<Op>,
     strings: &[String],
-    mems: &FnvHashMap<String, usize>,
+    mems: &FnvHashMap<Mangled, usize>,
     mut sink: BufWriter<S>,
 ) -> std::io::Result<()> {
     use Op::*;
@@ -53,7 +54,7 @@ pub fn compile<S: Write>(
                 i
             )?,
             Push(c) => match c {
-                IConst::Bool(b) => write!(
+                Literal::Bool(b) => write!(
                     sink,
                     indoc! {"
                         ; {:?}
@@ -62,7 +63,7 @@ pub fn compile<S: Write>(
                         "},
                     op, *b as u64
                 )?,
-                IConst::Char(c) => write!(
+                Literal::Char(c) => write!(
                     sink,
                     indoc! {"
                         ; {:?}
@@ -71,7 +72,7 @@ pub fn compile<S: Write>(
                         "},
                     op, *c as u64
                 )?,
-                IConst::U64(u) => write!(
+                Literal::Num(u) => write!(
                     sink,
                     indoc! {"
                         ; {:?}
@@ -80,25 +81,34 @@ pub fn compile<S: Write>(
                         "},
                     op, u
                 )?,
-                IConst::I64(i) => write!(
-                    sink,
-                    indoc! {"
-                        ; {:?}
-                            mov rax, {}
-                            push rax
-                        "},
-                    op, i
-                )?,
-                IConst::Ptr(p) => write!(
-                    sink,
-                    indoc! {"
-                        ; {:?}
-                            mov rax, {}
-                            push rax
-                        "},
-                    op, p
-                )?,
-                IConst::Str(_s) => unreachable!(),
+                // Literal::U64(u) => write!(
+                //     sink,
+                //     indoc! {"
+                //         ; {:?}
+                //             mov rax, {}
+                //             push rax
+                //         "},
+                //     op, u
+                // )?,
+                // Literal::I64(i) => write!(
+                //     sink,
+                //     indoc! {"
+                //         ; {:?}
+                //             mov rax, {}
+                //             push rax
+                //         "},
+                //     op, i
+                // )?,
+                // Literal::Ptr(p) => write!(
+                //     sink,
+                //     indoc! {"
+                //         ; {:?}
+                //             mov rax, {}
+                //             push rax
+                //         "},
+                //     op, p
+                // )?,
+                Literal::String(_s) => unreachable!(),
             },
             Dup => write!(
                 sink,

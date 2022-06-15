@@ -3,5 +3,6 @@ proc foo do
 end
 
 proc main: u64 do
-    foo 1
+    ; foo
+    1
 end

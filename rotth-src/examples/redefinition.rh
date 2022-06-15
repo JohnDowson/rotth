@@ -1,8 +1,8 @@
-include "../std.rh"
+include puts "../std.rh"
 
 proc main: u64 do
 end
 
 proc puts do
-    std::puts
+    puts
 end

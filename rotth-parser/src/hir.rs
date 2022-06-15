@@ -13,6 +13,7 @@ use spanner::{Span, Spanned};
 
 #[derive(Debug, Clone)]
 pub enum TopLevel {
+    Ref(ItemPathBuf),
     Proc(Proc),
     Const(Const),
     Mem(Mem),
@@ -44,6 +45,7 @@ impl TopLevel {
     }
     pub fn span(&self) -> Span {
         match self {
+            TopLevel::Ref(_) => todo!(),
             TopLevel::Proc(p) => p.span,
             TopLevel::Const(c) => c.span,
             TopLevel::Mem(m) => m.span,
@@ -54,7 +56,7 @@ impl TopLevel {
 
 #[derive(Debug, Clone)]
 pub struct Var {
-    pub ty: Type,
+    pub ty: Spanned<Type>,
     pub span: Span,
 }
 
@@ -65,7 +67,7 @@ pub struct Proc {
     pub outs: Vec<Spanned<Type>>,
     pub body: Vec<Spanned<Hir>>,
     pub span: Span,
-    pub vars: FnvHashMap<SmolStr, Var>,
+    pub vars: FnvHashMap<ItemPathBuf, Var>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,10 +100,30 @@ pub enum Hir {
 pub struct FieldAccess {
     pub field: SmolStr,
 }
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct If {
     pub truth: Vec<Spanned<Hir>>,
     pub lie: Option<Vec<Spanned<Hir>>>,
+}
+
+impl std::fmt::Debug for If {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if f.alternate() {
+            writeln!(f, "If {{")?;
+            writeln!(f, "\t{:#?}", &self.truth)?;
+            if let Some(lie) = &self.lie {
+                writeln!(f, "\t{:#?}", lie)?;
+            }
+            writeln!(f, "}}")
+        } else {
+            write!(f, "If {{")?;
+            write!(f, "\t{:?}", &self.truth)?;
+            if let Some(lie) = &self.lie {
+                write!(f, "\t{:?}", lie)?;
+            }
+            write!(f, "}}")
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -129,7 +151,7 @@ pub struct While {
 #[derive(Debug, Clone)]
 pub enum Binding {
     Ignore,
-    Bind { name: SmolStr, ty: Option<Type> },
+    Bind { name: ItemPathBuf, ty: Option<Type> },
 }
 
 #[derive(Debug, Clone)]
@@ -176,7 +198,7 @@ pub enum Intrinsic {
 
 #[derive(Default)]
 pub struct Walker {
-    proc_vars: FnvHashMap<SmolStr, Var>,
+    proc_vars: FnvHashMap<ItemPathBuf, Var>,
     current_path: ItemPathBuf,
     items: FnvHashMap<ItemPathBuf, TopLevel>,
     types: StructIndex,
@@ -207,6 +229,13 @@ impl Walker {
                 }
                 .some()
             }
+            Expr::CompStop => {
+                return Spanned {
+                    span: ast.span,
+                    inner: Hir::Intrinsic(Intrinsic::CompStop),
+                }
+                .some()
+            }
             Expr::Path(p) => p.only()?,
             Expr::Word(Word(w)) => w.as_str(),
             _ => return None,
@@ -222,7 +251,6 @@ impl Walker {
             "!u64" => Intrinsic::WriteU64,
             "!u8" => Intrinsic::WriteU8,
 
-            "&?&" => Intrinsic::CompStop,
             "&?" => Intrinsic::Dump,
             "print" => Intrinsic::Print,
 
@@ -270,6 +298,7 @@ impl Walker {
             .ast
             .into_iter()
             .partition_three::<FnvHashMap<_, _>, _>(|(_, item)| match &**item {
+                ResolvedItem::Ref(_) => Ternary::First,
                 ResolvedItem::Proc(_) => Ternary::First,
                 ResolvedItem::Const(_) => Ternary::First,
                 ResolvedItem::Mem(_) => Ternary::First,
@@ -338,16 +367,14 @@ impl Walker {
 
     fn walk_toplevel(&mut self, item: ResolvedItem) -> TopLevel {
         match item {
+            ResolvedItem::Ref(p) => TopLevel::Ref(p),
             ResolvedItem::Proc(p) => TopLevel::Proc(self.walk_proc(p)),
             ResolvedItem::Const(c) => TopLevel::Const(self.walk_const(c)),
             ResolvedItem::Mem(m) => TopLevel::Mem(self.walk_mem(m)),
-            ResolvedItem::Var(v) => {
-                let ty = v.ty.inner;
-                TopLevel::Var(Var {
-                    ty,
-                    span: v.name.span,
-                })
-            }
+            ResolvedItem::Var(v) => TopLevel::Var(Var {
+                ty: v.ty,
+                span: v.name.span,
+            }),
             ResolvedItem::Struct(_) => unreachable!(),
             ResolvedItem::Module(_) => unreachable!(),
         }
@@ -428,7 +455,7 @@ impl Walker {
             Expr::If(if_) => Hir::If(self.walk_if(if_)),
             Expr::Cond(box cond) => Hir::Cond(self.walk_cond(cond)),
             Expr::Cast(_) => unreachable!(),
-            Expr::Word(Word(w)) => Hir::Path(self.current_path.child(dbg!(w))),
+            Expr::Word(Word(w)) => Hir::Path(self.current_path.child(w)),
             Expr::Literal(l) => Hir::Literal(l),
             Expr::Keyword(Keyword::Return) => Hir::Return,
             Expr::Var(var) => {
@@ -451,8 +478,8 @@ impl Walker {
     }
 
     fn walk_var(&mut self, var: ast::Var) {
-        let name = var.name.map(|Word(w)| w);
-        let ty = var.ty.inner;
+        let name = var.name.map(|Word(w)| self.current_path.child(w));
+        let ty = var.ty;
         let var = Var {
             ty,
             span: name.span,
@@ -467,9 +494,12 @@ impl Walker {
             .map(|b| {
                 b.map(|b| match b {
                     Either::Left(Word(w)) if w == "_" => Binding::Ignore,
-                    Either::Left(Word(w)) => Binding::Bind { name: w, ty: None },
+                    Either::Left(Word(w)) => Binding::Bind {
+                        name: self.current_path.child(w),
+                        ty: None,
+                    },
                     Either::Right(r) => Binding::Bind {
-                        name: r.name.map(|Word(n)| n).inner,
+                        name: r.name.map(|Word(w)| self.current_path.child(w)).inner,
                         ty: Some(r.ty.inner),
                     },
                 })

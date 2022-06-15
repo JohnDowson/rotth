@@ -1,8 +1,13 @@
-use crate::{iconst::IConst, lir::Op};
+use crate::lir::{Mangled, Op};
+use rotth_parser::ast::Literal;
 use somok::{Either, Somok};
 use std::collections::HashMap;
 
-pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<Either<u64, Vec<u64>>, String> {
+pub fn eval(
+    ops: Vec<Op>,
+    _strings: &[String],
+    debug: bool,
+) -> Result<Either<u64, Vec<u64>>, Mangled> {
     let labels = ops
         .iter()
         .enumerate()
@@ -13,31 +18,31 @@ pub fn eval(ops: Vec<Op>, strings: &[String]) -> Result<Either<u64, Vec<u64>>, S
                 None
             }
         })
-        .collect::<HashMap<String, usize>>();
+        .collect::<HashMap<Mangled, usize>>();
 
     let mut call_stack = Vec::new();
     let mut stack = Vec::new();
     let mut i = 0;
 
     while let Some(op) = ops.get(i) {
-        #[cfg(debug_assertions)]
-        println!("{}:\t{:?}", i, op);
+        if debug {
+            println!("{}:\t{:?}", i, op);
+        }
         match op {
             Op::PushMem(_i) => {
                 todo!("Support memories in eval")
             }
-            Op::PushStr(i) => {
-                let len = strings[*i].len() as u64;
-                stack.push(len);
-                stack.push(strings[*i].as_ptr() as u64);
+            Op::PushStr(_i) => {
+                todo!();
+                // let len = strings[*i].len() as u64;
+                // stack.push(len);
+                // stack.push(strings[*i].as_ptr() as u64);
             }
             Op::Push(c) => match c {
-                IConst::Bool(b) => stack.push(*b as u64),
-                IConst::U64(u) => stack.push(*u),
-                IConst::I64(i) => stack.push(*i as u64),
-                IConst::Ptr(p) => stack.push(*p),
-                IConst::Char(c) => stack.push(*c as u64),
-                IConst::Str(_s) => unreachable!(),
+                Literal::Bool(b) => stack.push(*b as u64),
+                Literal::Num(u) => stack.push(*u),
+                Literal::Char(c) => stack.push(*c as u64),
+                Literal::String(_) => todo!(),
             },
             Op::Drop => {
                 stack.pop();

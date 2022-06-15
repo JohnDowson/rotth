@@ -1,0 +1,10 @@
+proc main: u64 do
+    0 1 2
+    bind a b c do
+        b b
+        bind d e do
+            d print
+        end
+        c
+    end
+end

@@ -397,7 +397,13 @@ pub(super) fn expr<'d>(
             inner: Expr::Keyword(inner),
         });
 
+        let comp_stop = just(Token::CompStop).map_with_span(|_, span| Spanned {
+            span,
+            inner: Expr::CompStop,
+        });
+
         choice((
+            comp_stop,
             literal_expr(),
             var_expr(),
             path_expr(),

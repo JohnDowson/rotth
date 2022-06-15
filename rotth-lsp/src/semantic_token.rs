@@ -121,6 +121,7 @@ pub fn semantic_token_from_ast(ast: &[Spanned<TopLevel>]) -> Vec<CompleteSemanti
 fn push_expr_tokens(node: &Spanned<Expr>, tokens: &mut Vec<CompleteSemanticToken>) {
     match &node.inner {
         Expr::Keyword(_) => push_token(node, tokens, SemanticTokenType::KEYWORD),
+        Expr::CompStop => push_token(node, tokens, SemanticTokenType::KEYWORD),
         Expr::Type(_) => push_token(node, tokens, SemanticTokenType::TYPE),
         Expr::Bind(b) => {
             push_token(&b.bind, tokens, SemanticTokenType::KEYWORD);

@@ -23,6 +23,8 @@ fn to_smol_str(l: &'_ mut Lexer<'_, Token>) -> SmolStr {
 pub enum Token {
     #[token("&>")]
     Ptr,
+    #[token("&?&")]
+    CompStop,
     #[regex("false|true", to_bool)]
     Bool(bool),
     #[regex(
@@ -99,6 +101,7 @@ impl std::fmt::Debug for Token {
             Token::SigSep => write!(f, ":"),
             Token::PathSep => write!(f, "::"),
             Token::Ptr => write!(f, "&>"),
+            Token::CompStop => write!(f, "&?&"),
             Token::FieldAccess => write!(f, "->"),
             Token::LBracket => write!(f, "{{"),
             Token::RBracket => write!(f, "}}"),

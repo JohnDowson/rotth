@@ -1,4 +1,0 @@
-; struct String do
-;     len: u64
-;     buf: &>char
-; end
