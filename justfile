@@ -6,6 +6,11 @@ compiler := (root + "/rotth-src/rotth")
 default:
   @just --list
 
+assemble FILE:
+    nasm -g -F dwarf -f elf64 {{root}}/print.asm -o {{root}}/print.o
+    nasm -g -F dwarf -f elf64 {{FILE}}.asm -o {{FILE}}.o
+    ld -o {{FILE}} {{FILE}}.o {{root}}/print.o
+
 build FILE:
     cargo run --bin rotth -- --compile -- {{rotthdir}}/{{FILE}}.rh
     nasm -g -F dwarf -f elf64 {{root}}/print.asm -o {{root}}/print.o

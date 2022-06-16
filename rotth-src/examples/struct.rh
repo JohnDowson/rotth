@@ -1,4 +1,4 @@
-include puts "../std.rh"
+include puts putu from "../std.rh"
 
 struct String do
     len: u64
@@ -8,7 +8,7 @@ end
 proc main: u64 do
     returns-string
     bind str: &>String do
-        str -> len @u64
+        str -> len @u64 dup putu "\n" puts
         str -> buf cast &>u64 @u64 cast &>char
         puts
     end

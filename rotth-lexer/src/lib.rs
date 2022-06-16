@@ -51,6 +51,8 @@ pub enum Token {
 
     #[token("include")]
     KwInclude,
+    #[token("from")]
+    KwFrom,
     #[token("return")]
     KwReturn,
     #[token("cond")]
@@ -106,6 +108,7 @@ impl std::fmt::Debug for Token {
             Token::LBracket => write!(f, "{{"),
             Token::RBracket => write!(f, "}}"),
             Token::KwInclude => write!(f, "include"),
+            Token::KwFrom => write!(f, "from"),
             Token::KwReturn => write!(f, "return"),
             Token::KwCond => write!(f, "cond"),
             Token::KwIf => write!(f, "if"),

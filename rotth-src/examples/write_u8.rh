@@ -1,4 +1,4 @@
-include puts "../std.rh"
+include puts from "../std.rh"
 
 proc main: u64 do
     "hello\n"

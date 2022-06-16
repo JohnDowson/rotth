@@ -21,6 +21,15 @@ impl<T: Debug> Debug for Spanned<T> {
 }
 
 impl<T> Spanned<T> {
+    pub fn map_ref<F, B>(&self, f: F) -> Spanned<B>
+    where
+        F: FnOnce(&T) -> B,
+    {
+        Spanned {
+            span: self.span,
+            inner: f(&self.inner),
+        }
+    }
     pub fn map<F, B>(self, f: F) -> Spanned<B>
     where
         F: FnOnce(T) -> B,

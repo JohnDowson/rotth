@@ -1,0 +1,6 @@
+include "foo.rh"
+
+struct Har do
+    a: u64
+    b: u8
+end

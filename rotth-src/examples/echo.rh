@@ -1,12 +1,12 @@
-include exit cstrlen puts "../std.rh"
+include exit cstrlen puts core::ptr+ from "../std.rh"
 proc main: u64 do
     argc 2 < if 1 exit
     else
-        argv 8 std::core::ptr+
+        argv 8 ptr+
         argc 1 - while dup 0 > do
             over cast &>u64  @u64 cast &>char
             dup cstrlen swap puts " " puts
-            1 - swap 8 std::core::ptr+ swap
+            1 - swap 8 ptr+ swap
         end drop drop
         "\n" puts
     end

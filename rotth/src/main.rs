@@ -2,7 +2,7 @@ use ariadne::{Color, FileCache, Fmt, Label, Report, ReportKind, Span};
 use chumsky::error::SimpleReason;
 use clap::Parser;
 use rotth::{ctir, emit, eval::eval, lir, tir, typecheck, Error};
-use rotth_parser::hir::Walker;
+use rotth_parser::hir;
 use somok::Somok;
 use std::{fs::OpenOptions, io::BufWriter, path::PathBuf, time::Instant};
 
@@ -14,8 +14,10 @@ struct Args {
     dump_ast: bool,
     #[clap(short = 'i', long)]
     dump_hir: bool,
-    #[clap(short = 'c', long)]
+    #[clap(short = 'r', long)]
     dump_tir: bool,
+    #[clap(short = 'c', long)]
+    dump_ctir: bool,
     #[clap(short = 'l', long)]
     dump_lir: bool,
     #[clap(short = 't', long)]
@@ -209,10 +211,7 @@ fn compiler() -> Result<(), Error> {
         println!("{ast:#?}");
     }
 
-    // let struct_index = rotth::types::define_structs(structs);
-
-    let walker = Walker::new();
-    let (hir, structs) = walker.walk_ast(ast);
+    let (hir, structs) = hir::Walker::walk_ast(ast);
 
     let lowered = Instant::now();
     if args.time {
@@ -238,12 +237,12 @@ fn compiler() -> Result<(), Error> {
 
     let ctir = ctir::Walker::walk(tir)?;
 
-    let instantiated = Instant::now();
+    let concretized = Instant::now();
     if args.time {
-        println!("Concretized in:\t{:?}", instantiated - typechecked)
+        println!("Concretized in:\t{:?}", concretized - typechecked)
     }
 
-    if args.dump_tir {
+    if args.dump_ctir {
         println!("CTIR:");
         println!("{ctir:#?}");
     }

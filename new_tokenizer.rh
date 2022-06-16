@@ -1,7 +1,27 @@
-; proc [T] ptr+ &>T u64 : &>T do
-;     swap cast u64 + cast &>T
+include foo::baz::a Har from "bar.rh"
+
+; struct Har do
+;     a: u64
+;     b: u8
 ; end
 
+
+proc hartaker &>Har : u64 do
+    drop 0
+end
+
 proc main: u64 do
-    60 9 +
+    a cast &>Har hartaker print 0
+end
+
+proc c1: u64 do
+    a cast &>Har hartaker print 0
+end
+
+proc c2: u64 do
+    a cast &>Har hartaker print 0
+end
+
+proc c3: u64 do
+    a cast &>Har hartaker print 0
 end

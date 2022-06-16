@@ -30,6 +30,12 @@ pub fn semantic_token_from_ast(ast: &[Spanned<TopLevel>]) -> Vec<CompleteSemanti
         match &**item {
             TopLevel::Include(i) => {
                 push_token(&i.include, &mut semantic_tokens, SemanticTokenType::KEYWORD);
+                if let Some(Qualifiers { items, from }) = &i.qualifiers {
+                    for item in items {
+                        push_token(item, &mut semantic_tokens, SemanticTokenType::FUNCTION);
+                    }
+                    push_token(from, &mut semantic_tokens, SemanticTokenType::KEYWORD);
+                }
                 push_token(&i.path, &mut semantic_tokens, SemanticTokenType::STRING);
             }
             TopLevel::Proc(p) => {

@@ -10,7 +10,7 @@ use crate::types::{Primitive, Type};
 use super::{
     Bind, Cast, Cond, CondBranch, Const, ConstSignature, Else, Expr, FieldAccess, File, Generics,
     If, Include, ItemPathBuf, Keyword, Literal, Mem, NameTypePair, Proc, ProcSignature,
-    Punctuation, Struct, TopLevel, Var, While, Word,
+    Punctuation, Qualifiers, Struct, TopLevel, Var, While, Word,
 };
 
 pub(super) fn ty() -> impl Parser<Token, Spanned<Type>, Error = Simple<Token, Span>> + Clone {
@@ -118,6 +118,13 @@ pub(super) fn kw_include(
 ) -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone {
     select! {
         Token::KwInclude, span => Spanned { span, inner: Keyword::Include },
+    }
+}
+
+pub(super) fn kw_from() -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone
+{
+    select! {
+        Token::KwFrom, span => Spanned { span, inner: Keyword::From },
     }
 }
 
@@ -577,13 +584,17 @@ pub(super) fn struct_() -> impl Parser<Token, Spanned<TopLevel>, Error = Simple<
 pub(super) fn include() -> impl Parser<Token, Spanned<TopLevel>, Error = Simple<Token, Span>> + Clone
 {
     kw_include()
-        .then(word().repeated())
+        .then(path().repeated().then(kw_from()).or_not())
         .then(include_path())
         .map_with_span(|((include, qualifiers), path), span| Spanned {
             span,
             inner: TopLevel::Include(Include {
                 include,
-                qualifiers,
+                qualifiers: if let Some((items, from)) = qualifiers {
+                    Some(Qualifiers { items, from })
+                } else {
+                    None
+                },
                 path,
             }),
         })

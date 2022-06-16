@@ -96,7 +96,8 @@ pub struct FieldAccess<T> {
 #[derive(Clone)]
 pub enum TypedIr<T> {
     MemUse(ItemPathBuf),
-    VarUse(ItemPathBuf),
+    GVarUse(ItemPathBuf),
+    LVarUse(ItemPathBuf),
     BindingUse(ItemPathBuf),
     ConstUse(ItemPathBuf),
     Call(ItemPathBuf),
@@ -114,7 +115,8 @@ pub enum TypedIr<T> {
 impl<T: std::fmt::Debug> std::fmt::Debug for TypedIr<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::VarUse(arg0) => f.debug_tuple("VarUse").field(arg0).finish(),
+            Self::GVarUse(arg0) => f.debug_tuple("GVarUse").field(arg0).finish(),
+            Self::LVarUse(arg0) => f.debug_tuple("LVarUse").field(arg0).finish(),
             Self::MemUse(arg0) => f.debug_tuple("MemUse").field(arg0).finish(),
             Self::BindingUse(arg0) => f.debug_tuple("BindingUse").field(arg0).finish(),
             Self::ConstUse(arg0) => f.debug_tuple("ConstUse").field(arg0).finish(),
@@ -196,7 +198,7 @@ impl std::fmt::Debug for ConcreteType {
 #[derive(Debug, Clone)]
 pub struct KProc<T> {
     pub generics: FnvHashMap<SmolStr, GenId>,
-    pub vars: FnvHashMap<ItemPathBuf, Var>,
+    pub vars: FnvHashMap<ItemPathBuf, Var<Type>>,
     pub span: Span,
     pub ins: Vec<Type>,
     pub outs: Vec<Type>,
@@ -215,8 +217,8 @@ pub struct KMem<T> {
 }
 #[derive(Debug, Clone)]
 
-pub struct Var {
-    pub ty: Type,
+pub struct Var<T> {
+    pub ty: T,
 }
 
 #[derive(Debug)]
@@ -237,7 +239,7 @@ pub enum Ref {
 #[derive(Debug)]
 pub struct Walker {
     known_procs: FnvHashMap<ItemPathBuf, Rc<KProc<Spanned<Hir>>>>,
-    _known_gvars: FnvHashMap<ItemPathBuf, Var>,
+    known_gvars: FnvHashMap<ItemPathBuf, Var<Type>>,
     known_mems: FnvHashMap<ItemPathBuf, Rc<KMem<TermId>>>,
     known_structs: FnvHashMap<ItemPathBuf, Rc<KStruct>>,
     checked_consts: FnvHashMap<ItemPathBuf, Rc<KConst<TermId>>>,
@@ -255,7 +257,8 @@ pub struct TypecheckedProgram {
     pub procs: FnvHashMap<ItemPathBuf, KProc<TypedNode<TermId>>>,
     pub consts: FnvHashMap<ItemPathBuf, KConst<TermId>>,
     pub mems: FnvHashMap<ItemPathBuf, KMem<TermId>>,
-    pub types: FnvHashMap<ItemPathBuf, KStruct>,
+    pub vars: FnvHashMap<ItemPathBuf, Var<Type>>,
+    pub structs: FnvHashMap<ItemPathBuf, KStruct>,
     pub engine: Engine,
 }
 
@@ -267,7 +270,7 @@ impl Walker {
         let mut this = Walker {
             checked_consts: Default::default(),
             known_procs: Default::default(),
-            _known_gvars: Default::default(),
+            known_gvars: Default::default(),
             known_mems: Default::default(),
             known_structs: Default::default(),
             structs,
@@ -310,6 +313,7 @@ impl Walker {
             checked_procs,
             engine,
             known_mems,
+            known_gvars,
             ..
         } = this;
 
@@ -323,10 +327,11 @@ impl Walker {
                 .into_iter()
                 .map(|(a, b)| (a, Rc::try_unwrap(b).unwrap()))
                 .collect(),
-            types: known_structs
+            structs: known_structs
                 .into_iter()
                 .map(|(a, b)| (a, Rc::try_unwrap(b).unwrap()))
                 .collect(),
+            vars: known_gvars,
             engine,
         }
         .okay()
@@ -469,6 +474,7 @@ impl Walker {
         if self.checked_consts.contains_key(&path) {
             return Ok(());
         }
+
         let outs = const_
             .outs
             .iter()
@@ -667,7 +673,7 @@ impl Walker {
         ins: &mut TypeStack,
         heap: &mut THeap,
         body: &[Spanned<Hir>],
-        vars: &FnvHashMap<ItemPathBuf, Var>,
+        vars: &FnvHashMap<ItemPathBuf, Var<Type>>,
         bindings_in_scope: Option<&FnvHashMap<ItemPathBuf, TermId>>,
         generics: Option<&FnvHashMap<SmolStr, GenId>>,
         expected_outs: Option<&TypeStack>,
@@ -697,7 +703,7 @@ impl Walker {
                     ins.push(heap, ty);
                     TypedNode {
                         span: node.span,
-                        node: TypedIr::VarUse(path.clone()),
+                        node: TypedIr::LVarUse(path.clone()),
                         ins: vec![],
                         outs: vec![ty],
                     }
@@ -1580,7 +1586,19 @@ impl Walker {
                                 self.engine.insert(TypeInfo::Unknown),
                                 TypedIr::IgnorePattern,
                             ),
-                            _ => todo!(),
+                            Hir::Path(const_name) if self.is_const(const_name) => {
+                                let const_ = self.checked_consts.get(const_name).cloned().unwrap();
+                                let mut ts = TypeStack::default();
+                                let r = self.typecheck_const_use(
+                                    &mut ts,
+                                    heap,
+                                    const_,
+                                    const_name,
+                                    pattern.span,
+                                );
+                                (r.outs[0], TypedIr::ConstUse(const_name.clone()))
+                            }
+                            _ => todo!("Illegal?? pattern"),
                         };
                         let tir_pattern = TypedNode {
                             span: pattern.span,
@@ -1808,6 +1826,22 @@ impl Walker {
             types::Type::Custom(ty) => {
                 if let Some(ty) = self.known_structs.get(ty) {
                     Type::Concrete(ConcreteType::Custom(ty.id))
+                } else if let Some(Ref::Struct(ty)) = self.item_refs.get(ty) {
+                    let ty = Spanned {
+                        span,
+                        inner: types::Type::Custom(ty.clone()),
+                    };
+                    self.abstract_to_concrete_type(&ty, generics)?
+                } else if let Some(r) = self.unresloved_item_refs.get(ty) {
+                    if let Ref::Struct(ty) = self.resolve(r.clone()) {
+                        let ty = Spanned {
+                            span,
+                            inner: types::Type::Custom(ty),
+                        };
+                        self.abstract_to_concrete_type(&ty, generics)?
+                    } else {
+                        todo!("This is a error yo")
+                    }
                 } else if let Some(ty) = self.structs.get(ty).cloned() {
                     let mut fields = FnvHashMap::default();
                     for (n, ty) in ty.fields {

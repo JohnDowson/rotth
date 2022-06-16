@@ -33,7 +33,7 @@ pub fn eval(
                 todo!("Support memories in eval")
             }
             Op::PushStr(_i) => {
-                todo!();
+                todo!("Support strings in eval");
                 // let len = strings[*i].len() as u64;
                 // stack.push(len);
                 // stack.push(strings[*i].as_ptr() as u64);

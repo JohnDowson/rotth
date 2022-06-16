@@ -32,8 +32,8 @@ impl std::fmt::Debug for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Type::Ptr(box ty) => {
-                let inner = ty.fmt(f)?;
-                write!(f, "&>{:?}", inner)
+                write!(f, "&>")?;
+                ty.fmt(f)
             }
             Type::Primitive(p) => p.fmt(f),
             Type::Custom(s) => s.fmt(f),

@@ -1,8 +1,9 @@
-proc foo do
-    foo
+proc foo u64 do
+    dup 10 = if drop return end
+    dup print 1 + foo
 end
 
 proc main: u64 do
-    ; foo
-    1
+    0 foo
+    0
 end

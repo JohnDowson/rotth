@@ -3,8 +3,8 @@ proc main: u64 do
     bind a b c do
         b b
         bind d e do
-            d print
+            a drop
         end
         c
-    end
+    end drop 0
 end

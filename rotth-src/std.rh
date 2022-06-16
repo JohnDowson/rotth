@@ -1,4 +1,4 @@
-include SYS_write SYS_read SYS_exit "./syscalls.rh"
+include SYS_write SYS_read SYS_exit from "./syscalls.rh"
 include "./core.rh"
 
 const STDIN: u64 do 0 end
@@ -57,6 +57,12 @@ end
 
 proc putb bool do
     if "true" else "false" end puts
+end
+
+proc putc char do
+    cast u8 PUTU_BUF !u8
+    1 PUTU_BUF cast &>char puts
+    ZERO_PUTU_BUF
 end
 
 proc putu u64 do

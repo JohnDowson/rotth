@@ -2,15 +2,18 @@ use fnv::FnvHashMap;
 use rotth_parser::{
     ast::{ItemPath, ItemPathBuf, Literal},
     hir::{Binding, Intrinsic},
-    types::{Primitive, StructIndex},
+    types::Primitive,
 };
 use somok::{Either, Somok};
 use Op::*;
 
 use crate::{
-    ctir::ConcreteProgram,
+    ctir::{CStruct, ConcreteProgram},
     eval::eval,
-    tir::{self, Cond, CondBranch, If, KConst, KMem, KProc, Type, TypedIr, TypedNode, Var, While},
+    tir::{
+        self, Cond, CondBranch, FieldAccess, If, KConst, KMem, KProc, Type, TypeId, TypedIr,
+        TypedNode, Var, While,
+    },
 };
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -96,7 +99,12 @@ pub enum ComMem {
     NotCompiled(KMem<Type>),
 }
 
-#[derive(Default)]
+#[derive(Clone)]
+pub enum ComVar {
+    Compiled(usize),
+    NotCompiled(Var<Type>),
+}
+
 pub struct Compiler {
     label: usize,
     mangle_table: FnvHashMap<ItemPathBuf, Mangled>,
@@ -108,16 +116,16 @@ pub struct Compiler {
     strings: Vec<String>,
     bindings: Vec<Vec<ItemPathBuf>>,
     mems: FnvHashMap<ItemPathBuf, ComMem>,
-    _vars: FnvHashMap<ItemPathBuf, Type>,
-    local_vars: FnvHashMap<ItemPathBuf, (usize, Var)>,
+    vars: FnvHashMap<ItemPathBuf, ComVar>,
+    local_vars: FnvHashMap<ItemPathBuf, (usize, Var<Type>)>,
     local_vars_size: usize,
     _escaping_size: usize,
-    _structs: StructIndex,
+    structs: FnvHashMap<TypeId, CStruct>,
 }
 
 impl Compiler {
     pub fn compile(program: ConcreteProgram) -> (Vec<Op>, Vec<String>, FnvHashMap<Mangled, usize>) {
-        let mut this = Self::default();
+        let mut this = Self::new(program.structs);
 
         this.emit(Call(Mangled("main".into())));
         this.emit(Exit);
@@ -134,6 +142,13 @@ impl Compiler {
             this.mangle_table.insert(name.clone(), mangled.clone());
             this.unmangle_table.insert(mangled.clone(), name.clone());
             this.mems.insert(name, ComMem::NotCompiled(mem));
+        }
+
+        for (name, var) in program.vars {
+            let mangled = this.mangle(&name);
+            this.mangle_table.insert(name.clone(), mangled.clone());
+            this.unmangle_table.insert(mangled.clone(), name.clone());
+            this.vars.insert(name, ComVar::NotCompiled(var));
         }
 
         let procs = program
@@ -333,10 +348,13 @@ impl Compiler {
                     let mangled = self.mangle_table.get(&w).unwrap().clone();
                     self.emit(PushMem(mangled))
                 }
-                TypedIr::VarUse(_w) => {
-                    todo!();
-                    // let mangled = self.mangle_table.get(&_w).unwrap().clone();
-                    // self.emit(PushMem(mangled))
+                TypedIr::GVarUse(var_name) => {
+                    let mangled = self.mangle_table.get(&var_name).unwrap().clone();
+                    self.emit(PushMem(mangled))
+                }
+                TypedIr::LVarUse(var_name) => {
+                    let lvar = self.local_vars.get(&var_name).unwrap().0;
+                    self.emit(Op::PushLvar(lvar))
                 }
                 TypedIr::BindingUse(w) => {
                     let offset = self
@@ -402,10 +420,13 @@ impl Compiler {
                 TypedIr::While(while_) => self.compile_while(while_),
                 TypedIr::Bind(bind) => self.compile_bind(bind),
                 TypedIr::IgnorePattern => unreachable!(), // this is a noop
-                TypedIr::FieldAccess(_f) => {
-                    // let struct_ = &self.structs;
-                    // let offset = struct_.fields[&f.field].offset;
-                    let offset = 0;
+                TypedIr::FieldAccess(FieldAccess { ty, field }) => {
+                    let ty = if let Type::Concrete(tir::ConcreteType::Custom(ty)) = ty {
+                        &self.structs[&ty]
+                    } else {
+                        todo!("{ty:?}")
+                    };
+                    let offset = ty.fields[&field].offset;
                     self.emit(Push(Literal::Num(offset as _)));
                     self.emit(Add);
                 }
@@ -527,11 +548,31 @@ impl Compiler {
             strings,
             bindings: Default::default(),
             mems: Default::default(),
-            _vars: Default::default(),
+            vars: Default::default(),
             local_vars: Default::default(),
             local_vars_size: Default::default(),
             _escaping_size: Default::default(),
-            _structs: Default::default(),
+            structs: Default::default(),
+        }
+    }
+
+    fn new(structs: FnvHashMap<TypeId, CStruct>) -> Self {
+        Self {
+            label: 0,
+            mangle_table: Default::default(),
+            unmangle_table: Default::default(),
+            proc_id: 0,
+            current_name: Default::default(),
+            result: Default::default(),
+            consts: Default::default(),
+            strings: Default::default(),
+            bindings: Default::default(),
+            mems: Default::default(),
+            vars: Default::default(),
+            local_vars: Default::default(),
+            local_vars_size: Default::default(),
+            _escaping_size: Default::default(),
+            structs,
         }
     }
 
@@ -540,7 +581,7 @@ impl Compiler {
         let name = name
             .iter()
             .intersperse(&joiner)
-            .map(|s| s.replace(|c| r"-+{}[]&^%/\".contains(c), &format!("{}", self.proc_id)))
+            .map(|s| s.replace(|c: char| !c.is_alphanumeric(), &format!("{}", self.proc_id)))
             .collect::<String>();
         Mangled(name)
     }

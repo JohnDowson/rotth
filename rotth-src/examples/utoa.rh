@@ -1,4 +1,4 @@
-include putu puts "../std.rh"
+include putu puts from "../std.rh"
 
 proc main: u64 do
     69 putu "\n" puts

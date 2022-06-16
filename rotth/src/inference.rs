@@ -208,12 +208,9 @@ impl Engine {
     /// there is a conflict between them)
     pub fn unify(&mut self, a: TermId, b: TermId) -> Result<(), String> {
         use TypeInfo::*;
-        // dbg! {(a,b)};
-        // dbg! {&self.vars};
         if a == b {
             return Ok(());
         }
-        // match dbg! {(self.vars[&a], self.vars[&b])} {
         match (self.vars[a.0], self.vars[b.0]) {
             // Follow any references
             (Ref(a), Ref(b)) if a == b => Ok(()),

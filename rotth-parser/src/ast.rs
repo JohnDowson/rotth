@@ -11,6 +11,7 @@ use std::{
     fmt::Debug,
     ops::{Deref, DerefMut},
     path::PathBuf,
+    rc::Rc,
 };
 
 use crate::{types::Type, Error, ParserError, Redefinition};
@@ -128,6 +129,7 @@ pub struct Proc {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Keyword {
     Include,
+    From,
     Return,
     Cond,
     If,
@@ -181,8 +183,14 @@ pub struct Const {
 #[derive(Debug, Clone)]
 pub struct Include {
     pub include: Spanned<Keyword>,
-    pub qualifiers: Vec<Spanned<Word>>,
+    pub qualifiers: Option<Qualifiers>,
     pub path: Spanned<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Qualifiers {
+    pub items: Vec<Spanned<ItemPathBuf>>,
+    pub from: Spanned<Keyword>,
 }
 
 #[derive(Clone)]
@@ -384,6 +392,10 @@ impl ItemPath {
         self.segments.first().map(SmolStr::as_str)
     }
 
+    pub fn last(&self) -> Option<SmolStr> {
+        self.segments.last().cloned()
+    }
+
     pub fn drop_first(&self) -> Option<&Self> {
         self.segments
             .split_first()
@@ -416,10 +428,13 @@ impl ItemPath {
 
 #[macro_export]
 macro_rules! path {
-    ( $( $s:tt )::* ) => {{
+    ( $( $s:tt )::+ ) => {{
         let mut path = ItemPathBuf::new();
         $(path.push(stringify!($s));)*
         path
+    }};
+    () => {{
+        ItemPathBuf::new()
     }};
 }
 
@@ -504,13 +519,13 @@ impl Debug for ItemPathBuf {
 
 #[derive(Clone)]
 pub enum ResolvedItem {
-    Ref(ItemPathBuf),
-    Proc(Proc),
-    Const(Const),
-    Mem(Mem),
-    Var(Var),
-    Struct(ResolvedStruct),
-    Module(Box<ResolvedFile>),
+    Ref(Rc<ItemPathBuf>),
+    Proc(Rc<Proc>),
+    Const(Rc<Const>),
+    Mem(Rc<Mem>),
+    Var(Rc<Var>),
+    Struct(Rc<ResolvedStruct>),
+    Module(Rc<ResolvedFile>),
 }
 
 impl Debug for ResolvedItem {
@@ -533,28 +548,28 @@ pub struct ResolvedFile {
     pub ast: FnvHashMap<SmolStr, Spanned<ResolvedItem>>,
 }
 
-// impl ResolvedFile {
-//     fn find(&self, path: &ItemPath) -> Option<&Spanned<ResolvedItem>> {
-//         let mut segments = path.iter();
-//         let segment = segments.next();
-//         let item = segment.and_then(|s| self.ast.get(s));
-//         if let Some(path) = path.drop_first() {
-//             match item {
-//                 Some(i) => match &**i {
-//                     ResolvedItem::Ref(_) => return None,
-//                     ResolvedItem::Proc(_) => return None,
-//                     ResolvedItem::Const(_) => return None,
-//                     ResolvedItem::Mem(_) => return None,
-//                     ResolvedItem::Var(_) => return None,
-//                     ResolvedItem::Struct(_) => return None,
-//                     ResolvedItem::Module(f) => return f.find(path),
-//                 },
-//                 None => return None,
-//             }
-//         }
-//         item
-//     }
-// }
+impl ResolvedFile {
+    pub fn find(&self, path: &ItemPath) -> Option<Spanned<ResolvedItem>> {
+        let mut segments = path.iter();
+        let segment = segments.next();
+        let item = segment.and_then(|s| self.ast.get(s));
+        if let Some(path) = path.drop_first() {
+            match item {
+                Some(i) => match &**i {
+                    ResolvedItem::Ref(_) => return None,
+                    ResolvedItem::Proc(_) => return None,
+                    ResolvedItem::Const(_) => return None,
+                    ResolvedItem::Mem(_) => return None,
+                    ResolvedItem::Var(_) => return None,
+                    ResolvedItem::Struct(_) => return None,
+                    ResolvedItem::Module(f) => return f.find(path),
+                },
+                None => return None,
+            }
+        }
+        item.cloned()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ResolvedStruct {
@@ -579,12 +594,12 @@ fn resolve_includes_from(path: ItemPathBuf, root: File) -> Result<ResolvedFile, 
             }
         };
         let resolved_item = match item.inner {
-            TopLevel::Proc(p) => ResolvedItem::Proc(p),
-            TopLevel::Const(c) => ResolvedItem::Const(c),
-            TopLevel::Mem(m) => ResolvedItem::Mem(m),
-            TopLevel::Var(v) => ResolvedItem::Var(v),
+            TopLevel::Proc(p) => ResolvedItem::Proc(Rc::new(p)),
+            TopLevel::Const(c) => ResolvedItem::Const(Rc::new(c)),
+            TopLevel::Mem(m) => ResolvedItem::Mem(Rc::new(m)),
+            TopLevel::Var(v) => ResolvedItem::Var(Rc::new(v)),
             TopLevel::Struct(s) => match make_struct(s) {
-                Ok(s) => ResolvedItem::Struct(s),
+                Ok(s) => ResolvedItem::Struct(Rc::new(s)),
                 Err(mut es) => {
                     errors.append(&mut es);
                     continue;
@@ -624,19 +639,30 @@ fn resolve_includes_from(path: ItemPathBuf, root: File) -> Result<ResolvedFile, 
 
                 let module_ast = parse(tokens)?;
                 let resolved = resolve_includes_from(path.child(file_name), module_ast)?;
-                for qualifier in qualifiers {
-                    let span = qualifier.span;
-                    let item = qualifier.map(|Word(w)| w).inner;
-                    let item_path = resolved.path.child(item.clone());
-                    ast.insert(
-                        item,
-                        Spanned {
-                            span,
-                            inner: ResolvedItem::Ref(item_path),
-                        },
-                    );
+                if let Some(Qualifiers { items, from: _ }) = qualifiers {
+                    for qualifier in items {
+                        let span = qualifier.span;
+                        let item = qualifier.inner;
+                        let item_path = resolved.path.join(&item);
+
+                        let i = resolved.find(&item);
+                        match i {
+                            Some(Spanned { span: _, inner: _ }) => {
+                                ast.insert(
+                                    item.last().unwrap(),
+                                    Spanned {
+                                        span,
+                                        inner: ResolvedItem::Ref(Rc::new(item_path)),
+                                    },
+                                );
+                            }
+                            None => {
+                                todo!("Reject importing nonexistant items")
+                            }
+                        }
+                    }
                 }
-                ResolvedItem::Module(box resolved)
+                ResolvedItem::Module(Rc::new(resolved))
             }
         };
 

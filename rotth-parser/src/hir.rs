@@ -1,14 +1,16 @@
+use std::rc::Rc;
+
 use crate::{
     ast::Keyword,
     ast::{
-        self, Cast, Expr, ItemPathBuf, Literal, ProcSignature, ResolvedFile, ResolvedItem,
-        ResolvedStruct, Word,
+        self, Cast, Expr, ItemPath, ItemPathBuf, Literal, ProcSignature, ResolvedFile,
+        ResolvedItem, ResolvedStruct, Word,
     },
     types::{StructIndex, Type},
 };
 use fnv::FnvHashMap;
 use smol_str::SmolStr;
-use somok::{Either, PartitionThree, Somok, Ternary};
+use somok::{Either, Somok};
 use spanner::{Span, Spanned};
 
 #[derive(Debug, Clone)]
@@ -196,19 +198,20 @@ pub enum Intrinsic {
     Ge,
 }
 
-#[derive(Default)]
 pub struct Walker {
     proc_vars: FnvHashMap<ItemPathBuf, Var>,
     current_path: ItemPathBuf,
+    ast: Rc<ResolvedFile>,
     items: FnvHashMap<ItemPathBuf, TopLevel>,
     types: StructIndex,
 }
 
 impl Walker {
-    pub fn new() -> Self {
+    fn new(ast: Rc<ResolvedFile>) -> Self {
         Self {
             proc_vars: Default::default(),
             current_path: Default::default(),
+            ast,
             items: Default::default(),
             types: Default::default(),
         }
@@ -285,73 +288,47 @@ impl Walker {
         .some()
     }
 
-    pub fn walk_ast(
-        mut self,
-        ast: ResolvedFile,
-    ) -> (FnvHashMap<ItemPathBuf, TopLevel>, StructIndex) {
-        self.walk_module(ast);
-        (self.items, self.types)
+    pub fn walk_ast(ast: ResolvedFile) -> (FnvHashMap<ItemPathBuf, TopLevel>, StructIndex) {
+        let ast = Rc::new(ast);
+        let mut this = Self::new(ast.clone());
+        this.walk_module(ast);
+        (this.items, this.types)
     }
 
-    fn walk_module(&mut self, module: ResolvedFile) {
-        let (items, structs, modules) = module
-            .ast
-            .into_iter()
-            .partition_three::<FnvHashMap<_, _>, _>(|(_, item)| match &**item {
-                ResolvedItem::Ref(_) => Ternary::First,
-                ResolvedItem::Proc(_) => Ternary::First,
-                ResolvedItem::Const(_) => Ternary::First,
-                ResolvedItem::Mem(_) => Ternary::First,
-                ResolvedItem::Var(_) => Ternary::First,
-                ResolvedItem::Struct(_) => Ternary::Second,
-                ResolvedItem::Module(_) => Ternary::Third,
-            });
-        let modules = modules
-            .into_iter()
-            .map(|(n, m)| {
-                (
-                    n,
-                    match m.inner {
-                        ResolvedItem::Module(box m) => m,
-                        _ => unreachable!(),
-                    },
-                )
-            })
-            .collect::<FnvHashMap<_, _>>();
-        let structs = structs
-            .into_iter()
-            .map(|(n, m)| {
-                (
-                    n,
-                    match m.inner {
-                        ResolvedItem::Struct(s) => s,
-                        _ => unreachable!(),
-                    },
-                )
-            })
-            .collect::<FnvHashMap<_, _>>();
-        for (_, module) in modules {
-            self.walk_module(module);
+    fn walk_module(&mut self, module: Rc<ResolvedFile>) {
+        let mp = self.current_path.clone();
+        self.current_path = module.path.clone();
+        for (
+            name,
+            Spanned {
+                span: _,
+                inner: item,
+            },
+        ) in &module.ast
+        {
+            self.walk_toplevel(name.clone(), item.clone());
         }
-        self.current_path = module.path;
-        for (_, struct_) in structs {
-            self.walk_struct(struct_);
-        }
-        for (name, item) in items {
-            let item = self.walk_toplevel(item.inner);
-            let name = self.current_path.child(name);
-            self.items.insert(name, item);
-        }
+        self.current_path = mp;
     }
 
-    fn walk_struct(&mut self, struct_: ResolvedStruct) {
-        let ResolvedStruct { name, fields } = struct_;
-        let Word(name) = name.inner;
+    fn walk_struct(&mut self, name: SmolStr) {
+        let path = self.current_path.child(name);
+        let struct_ = if let Some(Spanned {
+            span: _,
+            inner: ResolvedItem::Struct(s),
+        }) = self.ast.find(&path)
+        {
+            s
+        } else {
+            unreachable!()
+        };
+        let ResolvedStruct { name, fields } = &*struct_;
+        let Word(name) = name.inner.clone();
         let name = self.current_path.child(name);
         let mut builder = self.types.new_struct(name);
         for (name, ty) in fields {
             let span = ty.ty.span;
-            let ty = ty.inner.ty.inner;
+            let ty = ty.inner.ty.inner.clone();
             let ty = match ty {
                 ty @ Type::Primitive(_) | ty @ Type::Ptr(_) => ty,
                 Type::Custom(type_name) => {
@@ -360,114 +337,183 @@ impl Walker {
                 }
             };
             let ty = Spanned { span, inner: ty };
-            builder.field(name, ty);
+            builder.field(name.clone(), ty);
         }
         builder.finish();
     }
 
-    fn walk_toplevel(&mut self, item: ResolvedItem) -> TopLevel {
-        match item {
-            ResolvedItem::Ref(p) => TopLevel::Ref(p),
-            ResolvedItem::Proc(p) => TopLevel::Proc(self.walk_proc(p)),
-            ResolvedItem::Const(c) => TopLevel::Const(self.walk_const(c)),
-            ResolvedItem::Mem(m) => TopLevel::Mem(self.walk_mem(m)),
-            ResolvedItem::Var(v) => TopLevel::Var(Var {
-                ty: v.ty,
-                span: v.name.span,
-            }),
-            ResolvedItem::Struct(_) => unreachable!(),
-            ResolvedItem::Module(_) => unreachable!(),
+    fn walk_ref(&mut self, name: SmolStr, referee: &ItemPath) {
+        let path = self.current_path.child(name);
+        match self.ast.find(referee) {
+            Some(Spanned {
+                span: _,
+                inner: item,
+            }) => match item {
+                ResolvedItem::Ref(_) => todo!(),
+                ResolvedItem::Module(m) => {
+                    for name in m.ast.keys() {
+                        let referee = referee.child(name.clone());
+                        self.items
+                            .insert(path.child(name.clone()), TopLevel::Ref(referee));
+                    }
+                }
+                _ => {
+                    self.items.insert(path, TopLevel::Ref(referee.to_owned()));
+                }
+            },
+            None => unreachable!(),
         }
     }
 
-    fn walk_mem(&mut self, mem: ast::Mem) -> Mem {
+    fn walk_toplevel(&mut self, name: SmolStr, item: ResolvedItem) {
+        match item {
+            ResolvedItem::Ref(path) => self.walk_ref(name, &*path),
+            ResolvedItem::Proc(_) => self.walk_proc(name),
+            ResolvedItem::Const(_) => self.walk_const(name),
+            ResolvedItem::Mem(_) => self.walk_mem(name),
+            ResolvedItem::Var(v) => {
+                self.items.insert(
+                    self.current_path.child(name),
+                    TopLevel::Var(Var {
+                        ty: v.ty.clone(),
+                        span: v.name.span,
+                    }),
+                );
+            }
+            ResolvedItem::Struct(_) => self.walk_struct(name),
+            ResolvedItem::Module(module) => self.walk_module(module),
+        }
+    }
+
+    fn walk_mem(&mut self, name: SmolStr) {
+        let path = self.current_path.child(name.clone());
+        let mem = if let Some(Spanned {
+            span: _,
+            inner: ResolvedItem::Mem(m),
+        }) = self.ast.find(&path)
+        {
+            m
+        } else {
+            unreachable!()
+        };
         let body = mem
             .body
-            .into_iter()
+            .iter()
             .map(|ast| self.walk_node(ast).unwrap())
             .collect::<Vec<_>>();
-        Mem {
-            body,
-            span: mem.mem.span.merge(mem.end.span),
-        }
+        self.items.insert(
+            self.current_path.child(name),
+            TopLevel::Mem(Mem {
+                body,
+                span: mem.mem.span.merge(mem.end.span),
+            }),
+        );
     }
 
-    fn walk_const(&mut self, const_: ast::Const) -> Const {
-        let outs = const_.signature.inner.tys;
+    fn walk_const(&mut self, name: SmolStr) {
+        let path = self.current_path.child(name.clone());
+        let const_ = if let Some(Spanned {
+            span: _,
+            inner: ResolvedItem::Const(c),
+        }) = self.ast.find(&path)
+        {
+            c
+        } else {
+            unreachable!()
+        };
+        let outs = const_.signature.inner.tys.clone();
         let body = const_
             .body
-            .into_iter()
+            .iter()
             .map(|ast| self.walk_node(ast).unwrap())
             .collect::<Vec<_>>();
-        Const {
-            outs,
-            body,
-            span: const_.const_.span.merge(const_.end.span),
-        }
+        self.items.insert(
+            self.current_path.child(name),
+            TopLevel::Const(Const {
+                outs,
+                body,
+                span: const_.const_.span.merge(const_.end.span),
+            }),
+        );
     }
 
-    fn walk_proc(&mut self, proc: ast::Proc) -> Proc {
+    fn walk_proc(&mut self, name: SmolStr) {
+        let path = self.current_path.child(name.clone());
+        let proc = if let Some(Spanned {
+            span: _,
+            inner: ResolvedItem::Proc(p),
+        }) = self.ast.find(&path)
+        {
+            p
+        } else {
+            unreachable!()
+        };
+
         let generics = proc
             .generics
+            .as_ref()
             .map(|g| {
-                g.inner.tys.into_iter().map(|ty| {
-                    let Word(ty) = ty.inner;
-                    ty
+                g.inner.tys.iter().map(|ty| {
+                    let Word(ty) = &ty.inner;
+                    ty.clone()
                 })
             })
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
 
-        let ProcSignature { ins, sep: _, outs } = proc.signature.inner;
+        let ProcSignature { ins, sep: _, outs } = proc.signature.inner.clone();
         let ins = ins.into_iter().collect();
         let outs = outs
             .map(|i| i.into_iter().collect())
             .unwrap_or_else(Vec::new);
 
-        let body = self.walk_body(proc.body);
+        let body = self.walk_body(&proc.body);
         let mut vars = Default::default();
         std::mem::swap(&mut vars, &mut self.proc_vars);
 
-        Proc {
-            ins,
-            outs,
-            generics,
-            body,
-            vars,
-            span: proc.proc.span.merge(proc.end.span),
-        }
+        self.items.insert(
+            self.current_path.child(name),
+            TopLevel::Proc(Proc {
+                ins,
+                outs,
+                generics,
+                body,
+                vars,
+                span: proc.proc.span.merge(proc.end.span),
+            }),
+        );
     }
 
-    fn walk_body(&mut self, body: Vec<Spanned<Expr>>) -> Vec<Spanned<Hir>> {
-        body.into_iter()
+    fn walk_body(&mut self, body: &[Spanned<Expr>]) -> Vec<Spanned<Hir>> {
+        body.iter()
             .filter_map(|ast| self.walk_node(ast))
             .collect::<Vec<_>>()
     }
 
-    fn walk_node(&mut self, node: Spanned<Expr>) -> Option<Spanned<Hir>> {
-        if let Some(node) = self.intrinsic(&node) {
+    fn walk_node(&mut self, node: &Spanned<Expr>) -> Option<Spanned<Hir>> {
+        if let Some(node) = self.intrinsic(node) {
             return node.some();
         }
-        let hir = match node.inner {
+        let hir = match &node.inner {
             Expr::Bind(bind) => Hir::Bind(self.walk_bind(bind)),
             Expr::While(while_) => Hir::While(self.walk_while(while_)),
             Expr::If(if_) => Hir::If(self.walk_if(if_)),
             Expr::Cond(box cond) => Hir::Cond(self.walk_cond(cond)),
             Expr::Cast(_) => unreachable!(),
-            Expr::Word(Word(w)) => Hir::Path(self.current_path.child(w)),
-            Expr::Literal(l) => Hir::Literal(l),
+            Expr::Word(Word(w)) => Hir::Path(self.current_path.child(w.clone())),
+            Expr::Literal(l) => Hir::Literal(l.clone()),
             Expr::Keyword(Keyword::Return) => Hir::Return,
             Expr::Var(var) => {
                 self.walk_var(var);
                 return None;
             }
             Expr::FieldAccess(box access) => {
-                let Word(field) = access.field.inner;
+                let Word(field) = access.field.inner.clone();
                 let access = FieldAccess { field };
                 Hir::FieldAccess(access)
             }
-            Expr::Path(p) => Hir::Path(self.current_path.join(&p)),
+            Expr::Path(p) => Hir::Path(self.current_path.join(p)),
             expr => unreachable!("{:?}", expr),
         };
         Spanned {
@@ -477,9 +523,11 @@ impl Walker {
         .some()
     }
 
-    fn walk_var(&mut self, var: ast::Var) {
-        let name = var.name.map(|Word(w)| self.current_path.child(w));
-        let ty = var.ty;
+    fn walk_var(&mut self, var: &ast::Var) {
+        let name = var
+            .name
+            .map_ref(|Word(w)| self.current_path.child(w.clone()));
+        let ty = var.ty.clone();
         let var = Var {
             ty,
             span: name.span,
@@ -487,56 +535,59 @@ impl Walker {
         self.proc_vars.insert(name.inner, var);
     }
 
-    fn walk_bind(&mut self, bind: ast::Bind) -> Bind {
+    fn walk_bind(&mut self, bind: &ast::Bind) -> Bind {
         let bindings = bind
             .bindings
-            .into_iter()
+            .iter()
             .map(|b| {
-                b.map(|b| match b {
+                b.map_ref(|b| match b {
                     Either::Left(Word(w)) if w == "_" => Binding::Ignore,
                     Either::Left(Word(w)) => Binding::Bind {
-                        name: self.current_path.child(w),
+                        name: self.current_path.child(w.clone()),
                         ty: None,
                     },
                     Either::Right(r) => Binding::Bind {
-                        name: r.name.map(|Word(w)| self.current_path.child(w)).inner,
-                        ty: Some(r.ty.inner),
+                        name: r
+                            .name
+                            .map_ref(|Word(w)| self.current_path.child(w.clone()))
+                            .inner,
+                        ty: Some(r.ty.inner.clone()),
                     },
                 })
             })
             .collect();
         let body = bind
             .body
-            .into_iter()
+            .iter()
             .filter_map(|node| self.walk_node(node))
             .collect();
         Bind { bindings, body }
     }
 
-    fn walk_cond(&mut self, cond: ast::Cond) -> Cond {
+    fn walk_cond(&mut self, cond: &ast::Cond) -> Cond {
         let branches = cond
             .branches
-            .into_iter()
-            .map(|b| b.map(|b| self.walk_cond_branch(b)).inner)
+            .iter()
+            .map(|b| b.map_ref(|b| self.walk_cond_branch(b)).inner)
             .collect();
         Cond { branches }
     }
 
-    fn walk_cond_branch(&mut self, branch: ast::CondBranch) -> CondBranch {
-        let pattern = match branch.pat.inner {
+    fn walk_cond_branch(&mut self, branch: &ast::CondBranch) -> CondBranch {
+        let pattern = match &branch.pat.inner {
             Expr::Word(Word(w)) if w == "_" => Spanned {
                 span: branch.pat.span,
                 inner: Hir::IgnorePattern,
             },
             Expr::Path(p) => {
-                let path = self.current_path.join(&p);
+                let path = self.current_path.join(p);
                 Spanned {
                     span: branch.pat.span,
                     inner: Hir::Path(path),
                 }
             }
             Expr::Word(Word(w)) => {
-                let path = self.current_path.child(w);
+                let path = self.current_path.child(w.clone());
                 Spanned {
                     span: branch.pat.span,
                     inner: Hir::Path(path),
@@ -544,41 +595,41 @@ impl Walker {
             }
             Expr::Literal(l) => Spanned {
                 span: branch.pat.span,
-                inner: Hir::Literal(l),
+                inner: Hir::Literal(l.clone()),
             },
             e => unreachable!("{:?}", e),
         };
         let body = branch
             .body
-            .into_iter()
+            .iter()
             .filter_map(|node| self.walk_node(node))
             .collect();
         CondBranch { pattern, body }
     }
 
-    fn walk_while(&mut self, while_: ast::While) -> While {
+    fn walk_while(&mut self, while_: &ast::While) -> While {
         let cond = while_
             .cond
-            .into_iter()
+            .iter()
             .filter_map(|node| self.walk_node(node))
             .collect();
         let body = while_
             .body
-            .into_iter()
+            .iter()
             .filter_map(|node| self.walk_node(node))
             .collect();
         While { cond, body }
     }
 
-    fn walk_if(&mut self, if_: ast::If) -> If {
+    fn walk_if(&mut self, if_: &ast::If) -> If {
         let truth = if_
             .truth
-            .into_iter()
+            .iter()
             .filter_map(|node| self.walk_node(node))
             .collect();
-        let lie = if_.lie.map(|lie| {
+        let lie = if_.lie.as_ref().map(|lie| {
             lie.body
-                .into_iter()
+                .iter()
                 .filter_map(|node| self.walk_node(node))
                 .collect()
         });

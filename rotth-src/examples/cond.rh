@@ -1,4 +1,4 @@
-include getch "../std.rh"
+include getch puts from "../std.rh"
 
 const QUIT: char do 'q' end
 

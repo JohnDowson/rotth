@@ -1,7 +1,12 @@
+include puts putc putu from "../std.rh"
+
 proc [T] inc T : T do
+    cast u64 1 + cast T
 end
 
 proc main: u64 do
-    1 inc print
+    1 inc   putu
+    "\n"    puts
+    'a' inc putc
     0
 end
