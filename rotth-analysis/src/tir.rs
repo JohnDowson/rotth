@@ -10,9 +10,10 @@ use spanner::{Span, Spanned};
 use std::rc::Rc;
 
 use crate::{
+    error,
     inference::{type_to_info, Engine, ReifiedType, TermId, TypeInfo},
-    typecheck::{self, error, ErrorKind, THeap, TypeStack},
-    Error,
+    typecheck::{self, THeap, TypeStack},
+    Error, ErrorKind,
 };
 
 #[derive(Debug, Clone)]
@@ -622,13 +623,19 @@ impl Walker {
                 .map(|term| self.engine.anonymize_generics(*term, &generics))
                 .rev()
                 .collect::<Vec<_>>();
+            let snap = ins.clone();
+            let estack = TypeStack::from_iter(expected_ins.iter().copied(), heap);
             for expected_ty in &expected_ins {
                 if let Some(actual_t) = ins.pop(heap) {
                     if let Err(msg) = self.engine.unify(*expected_ty, actual_t) {
                         return error(
                             span,
                             ErrorKind::UnificationError(msg),
-                            "Expected proc invocation inputs do not match actual stack",
+                            format!(
+                                "Expected proc invocation inputs do not match actual stack:\nExpected: {:?}\nActual: {:?}",
+                                self.engine.debug_stack(estack, heap),
+                                self.engine.debug_stack(snap, heap)
+                            ),
                         );
                     }
                 } else {
@@ -643,7 +650,6 @@ impl Walker {
                 .outs
                 .iter()
                 .map(|term| self.engine.anonymize_generics(*term, &generics))
-                .rev()
                 .collect::<Vec<_>>();
             for out_t in &outs {
                 ins.push(heap, *out_t);
@@ -1872,16 +1878,16 @@ impl Walker {
                     if let Some(id) = generics.and_then(|gs| gs.get(g)) {
                         Type::Generic(*id)
                     } else {
-                        return typecheck::error(
+                        return error(
                             span,
-                            typecheck::ErrorKind::Undefined,
+                            ErrorKind::Undefined,
                             "This type name is not found in the current scope",
                         );
                     }
                 } else {
-                    return typecheck::error(
+                    return error(
                         span,
-                        typecheck::ErrorKind::Undefined,
+                        ErrorKind::Undefined,
                         "This type name is not found in the current scope",
                     );
                 }

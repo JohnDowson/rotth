@@ -1,27 +1,29 @@
 use fnv::FnvHashMap;
-use rotth_parser::path;
+use rotth_parser::{path, types::Primitive};
 use smol_str::SmolStr;
-use somok::Somok;
 use std::fmt::Write;
 
 use crate::{
+    concrete_error, error,
     inference::{ReifiedType, TermId},
     tir::{
         Bind, ConcreteType, Cond, CondBranch, FieldAccess, GenId, If, KConst, KMem, Type,
         TypecheckedProgram, TypedIr, TypedNode, Var, While,
     },
-    typecheck::{self, error, ErrorKind},
-    Error,
+    Error, ErrorKind,
 };
 use rotth_parser::ast::ItemPathBuf;
 
 #[derive(Debug)]
 pub enum ConcreteError {
     MainWithInputs,
+    IncorrectMainOutputs,
     GenericMain,
     NoEntry,
     IncompleteProcedure(ItemPathBuf),
     IncompleteConst(ItemPathBuf),
+    IncompleteMem(ItemPathBuf),
+    IncompleteVar(ItemPathBuf),
 }
 
 #[derive(Debug)]
@@ -85,10 +87,30 @@ impl Walker {
     pub fn walk(program: TypecheckedProgram) -> Result<ConcreteProgram, Error> {
         if let Some(main) = program.procs.get(&path!(main)) {
             if !main.generics.is_empty() {
-                return Error::from(ConcreteError::GenericMain).error();
+                return error(
+                    main.span,
+                    ErrorKind::Concrete(ConcreteError::GenericMain),
+                    "Main cannot be a generic proc",
+                );
             }
             if !main.ins.is_empty() {
-                return Error::from(ConcreteError::MainWithInputs).error();
+                return error(
+                    main.span,
+                    ErrorKind::Concrete(ConcreteError::MainWithInputs),
+                    "Main cannot have any inputs",
+                );
+            }
+            if main.outs.len() != 1
+                && matches!(
+                    program.engine.reify(&Default::default(), main.outs[0]),
+                    Ok(ReifiedType::Primitive(Primitive::U64))
+                )
+            {
+                return error(
+                    main.span,
+                    ErrorKind::Concrete(ConcreteError::IncorrectMainOutputs),
+                    "Main must be have one output of type u64",
+                );
             }
             let mut this = Self::default();
 
@@ -101,7 +123,11 @@ impl Walker {
                     if let Some(i) = i {
                         Ok((p, i))
                     } else {
-                        Err(ConcreteError::IncompleteProcedure(p))
+                        concrete_error(
+                            None,
+                            ConcreteError::IncompleteProcedure(p),
+                            "Main can not be a generic proc",
+                        )
                     }
                 })
                 .collect::<Result<_, _>>()?;
@@ -112,7 +138,11 @@ impl Walker {
                     if let Some(i) = i {
                         Ok((p, i))
                     } else {
-                        Err(ConcreteError::IncompleteConst(p))
+                        concrete_error(
+                            None,
+                            ConcreteError::IncompleteConst(p),
+                            "Main can not be a generic proc",
+                        )
                     }
                 })
                 .collect::<Result<_, _>>()?;
@@ -123,7 +153,11 @@ impl Walker {
                     if let Some(i) = i {
                         Ok((p, i))
                     } else {
-                        Err(ConcreteError::IncompleteConst(p))
+                        concrete_error(
+                            None,
+                            ConcreteError::IncompleteMem(p),
+                            "Main can not be a generic proc",
+                        )
                     }
                 })
                 .collect::<Result<_, _>>()?;
@@ -135,7 +169,11 @@ impl Walker {
                     if let Some(i) = i {
                         Ok((p, i))
                     } else {
-                        Err(ConcreteError::IncompleteConst(p))
+                        concrete_error(
+                            None,
+                            ConcreteError::IncompleteVar(p),
+                            "Main can not be a generic proc",
+                        )
                     }
                 })
                 .collect::<Result<_, _>>()?;
@@ -148,7 +186,11 @@ impl Walker {
                 // structs: this.structs,
             })
         } else {
-            Error::from(ConcreteError::NoEntry).error()
+            concrete_error(
+                None,
+                ConcreteError::NoEntry,
+                "Main can not be a generic proc",
+            )
         }
     }
 
@@ -158,7 +200,7 @@ impl Walker {
         path: &ItemPathBuf,
         gensubs: &FnvHashMap<GenId, ReifiedType>,
     ) -> Result<CProc, Error> {
-        let proc = program.procs.get(dbg! {path}).unwrap();
+        let proc = program.procs.get(path).unwrap();
         let body = self.walk_body(program, &proc.body, &proc.vars, gensubs)?;
 
         let vars = proc
@@ -387,9 +429,9 @@ impl Walker {
                     .iter()
                     .map(|t| match program.engine.reify(gensubs, *t) {
                         Ok(t) => Ok(t),
-                        Err(e) => typecheck::error(
+                        Err(e) => error(
                             node.span,
-                            typecheck::ErrorKind::UnificationError(e),
+                            ErrorKind::UnificationError(e),
                             format!("Failure resolving term {t:?}"),
                         ),
                     });
@@ -399,9 +441,9 @@ impl Walker {
                     .iter()
                     .map(|t| match program.engine.reify(gensubs, *t) {
                         Ok(t) => Ok(t),
-                        Err(e) => typecheck::error(
+                        Err(e) => error(
                             node.span,
-                            typecheck::ErrorKind::UnificationError(e),
+                            ErrorKind::UnificationError(e),
                             format!("Failure resolving term {t:?}"),
                         ),
                     });

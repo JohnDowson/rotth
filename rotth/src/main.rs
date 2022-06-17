@@ -1,7 +1,8 @@
 use ariadne::{Color, FileCache, Fmt, Label, Report, ReportKind, Span};
 use chumsky::error::SimpleReason;
 use clap::Parser;
-use rotth::{ctir, emit, eval::eval, lir, tir, typecheck, Error};
+use rotth::{emit, eval::eval, lir, Error};
+use rotth_analysis::{ctir, tir};
 use rotth_parser::hir;
 use somok::Somok;
 use std::{fs::OpenOptions, io::BufWriter, path::PathBuf, time::Instant};
@@ -117,12 +118,18 @@ fn report_errors(e: Error) {
             }
         }
         Error::Typecheck(e) => {
-            let report = Report::build(ReportKind::Error, e.span.source(), e.span.start)
-                .with_message(e.message);
+            let span = if let Some(span) = e.span {
+                span
+            } else {
+                dbg!(e);
+                return;
+            };
+            let report =
+                Report::build(ReportKind::Error, span.source(), span.start).with_message(e.message);
 
             let report = match e.kind {
-                typecheck::ErrorKind::TypeMismatch { expected, actual } => report.with_label(
-                    Label::new(e.span).with_message(
+                rotth_analysis::ErrorKind::TypeMismatch { expected, actual } => report.with_label(
+                    Label::new(span).with_message(
                         format!(
                             "Unexpected types: {} where {} expected",
                             format!("{:?}", actual).fg(Color::Green),
@@ -131,40 +138,94 @@ fn report_errors(e: Error) {
                         .fg(Color::Red),
                     ),
                 ),
-                typecheck::ErrorKind::NotEnoughData => report.with_label(
-                    Label::new(e.span).with_message("Not enough data on the stack".fg(Color::Red)),
+                rotth_analysis::ErrorKind::NotEnoughData => report.with_label(
+                    Label::new(span).with_message("Not enough data on the stack".fg(Color::Red)),
                 ),
-                typecheck::ErrorKind::UnsupportedOperation => report.with_label(
-                    Label::new(e.span).with_message("Not enough data on the stack".fg(Color::Red)),
+                rotth_analysis::ErrorKind::UnsupportedOperation => report.with_label(
+                    Label::new(span).with_message("Not enough data on the stack".fg(Color::Red)),
                 ),
-                typecheck::ErrorKind::Undefined => report
-                    .with_label(Label::new(e.span).with_message("Unknown word".fg(Color::Red))),
-                typecheck::ErrorKind::InvalidMain => report.with_label(
-                    Label::new(e.span).with_message(
+                rotth_analysis::ErrorKind::Undefined => {
+                    report.with_label(Label::new(span).with_message("Unknown word".fg(Color::Red)))
+                }
+                rotth_analysis::ErrorKind::InvalidMain => report.with_label(
+                    Label::new(span).with_message(
                         format!("Invalid type signature for `{}`", "main".fg(Color::Yellow))
                             .fg(Color::Red),
                     ),
                 ),
-                typecheck::ErrorKind::InvalidWhile => {
-                    report.with_label(Label::new(e.span).with_message(
+                rotth_analysis::ErrorKind::InvalidWhile => {
+                    report.with_label(Label::new(span).with_message(
                         "While body must not alter types on the stack".fg(Color::Red),
                     ))
                 }
-                typecheck::ErrorKind::CompStop => {
-                    report.with_label(Label::new(e.span).with_message("Compilation stopped here"))
+                rotth_analysis::ErrorKind::CompStop => {
+                    report.with_label(Label::new(span).with_message("Compilation stopped here"))
                 }
-                typecheck::ErrorKind::Unexpected => {
-                    report.with_label(Label::new(e.span).with_message("Unexpected word"))
+                rotth_analysis::ErrorKind::Unexpected => {
+                    report.with_label(Label::new(span).with_message("Unexpected word"))
                 }
-                typecheck::ErrorKind::CallInConst => {
-                    report.with_label(Label::new(e.span).with_message("Procedure call here"))
+                rotth_analysis::ErrorKind::CallInConst => {
+                    report.with_label(Label::new(span).with_message("Procedure call here"))
                 }
-                typecheck::ErrorKind::UnificationError(msg) => {
-                    report.with_label(Label::new(e.span).with_message(format!(
+                rotth_analysis::ErrorKind::UnificationError(msg) => {
+                    report.with_label(Label::new(span).with_message(format!(
                         "{}: {}",
                         "Unification error".fg(Color::Red),
                         msg
                     )))
+                }
+                rotth_analysis::ErrorKind::Concrete(c) => {
+                    match c {
+                        rotth_analysis::ctir::ConcreteError::IncorrectMainOutputs => report
+                            .with_label(Label::new(span).with_message(format!(
+                                "{}: `main` proc must have a single u64 output",
+                                "IncorrectMainOutputs".fg(Color::Red)
+                            ))),
+                        rotth_analysis::ctir::ConcreteError::MainWithInputs => {
+                            report.with_label(Label::new(span).with_message(format!(
+                                "{}: `main` proc can't take inputs",
+                                "MainWithInputs".fg(Color::Red)
+                            )))
+                        }
+                        rotth_analysis::ctir::ConcreteError::GenericMain => {
+                            report.with_label(Label::new(span).with_message(format!(
+                                "{}: `main` proc can't be generic",
+                                "GenericMain".fg(Color::Red)
+                            )))
+                        }
+                        rotth_analysis::ctir::ConcreteError::NoEntry => {
+                            report.with_label(Label::new(span).with_message(format!(
+                                "{}: Entry point not found in this file",
+                                "NoEntry".fg(Color::Red)
+                            )))
+                        }
+                        rotth_analysis::ctir::ConcreteError::IncompleteProcedure(p) => report
+                            .with_label(Label::new(span).with_message(format!(
+                                "{}: encountered incomplete item {:?}",
+                                "IncompleteProcedure".fg(Color::Red),
+                                p
+                            ))),
+                        rotth_analysis::ctir::ConcreteError::IncompleteConst(p) => report
+                            .with_label(Label::new(span).with_message(format!(
+                                "{}: encountered incomplete item {:?}",
+                                "IncompleteConst".fg(Color::Red),
+                                p
+                            ))),
+                        rotth_analysis::ctir::ConcreteError::IncompleteMem(p) => {
+                            report.with_label(Label::new(span).with_message(format!(
+                                "{}: encountered incomplete item {:?}",
+                                "IncompleteMem".fg(Color::Red),
+                                p
+                            )))
+                        }
+                        rotth_analysis::ctir::ConcreteError::IncompleteVar(p) => {
+                            report.with_label(Label::new(span).with_message(format!(
+                                "{}: encountered incomplete item {:?}",
+                                "IncompleteVar".fg(Color::Red),
+                                p
+                            )))
+                        }
+                    }
                 }
             };
 

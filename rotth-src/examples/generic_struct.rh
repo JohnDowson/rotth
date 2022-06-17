@@ -12,8 +12,7 @@ proc main: u64 do
     FOO -> buf
     bind buf: &>&>u64 do
         FOO_BUF cast u64
-        buf cast &>u64 @u64 cast &>u64
-        !u64
+        buf !u64
     end
     0
 end

@@ -1,55 +1,8 @@
 use simplearena::{Heap, Ref};
 use somok::Somok;
-use spanner::Span;
 use std::collections::VecDeque;
 
-use crate::{
-    inference::{TermId, TypeInfo},
-    Error,
-};
-
-pub fn error<T, M: ToString>(span: Span, kind: ErrorKind, message: M) -> Result<T, Error> {
-    Error::Typecheck(TypecheckError::new(span, kind, message)).error()
-}
-
-impl From<TypecheckError> for Error {
-    fn from(e: TypecheckError) -> Self {
-        Self::Typecheck(e)
-    }
-}
-
-#[derive(Debug)]
-pub struct TypecheckError {
-    pub span: Span,
-    pub kind: ErrorKind,
-    pub message: String,
-}
-impl TypecheckError {
-    fn new(span: Span, kind: ErrorKind, message: impl ToString) -> TypecheckError {
-        TypecheckError {
-            span,
-            kind,
-            message: message.to_string(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum ErrorKind {
-    TypeMismatch {
-        expected: Vec<TypeInfo>,
-        actual: Vec<TypeInfo>,
-    },
-    UnificationError(String),
-    UnsupportedOperation,
-    NotEnoughData,
-    Undefined,
-    InvalidMain,
-    InvalidWhile,
-    CompStop,
-    Unexpected,
-    CallInConst,
-}
+use crate::inference::TermId;
 
 #[derive(Clone, Default)]
 pub struct TypeStack {

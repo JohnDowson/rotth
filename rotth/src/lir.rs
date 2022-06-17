@@ -1,4 +1,10 @@
+use crate::eval::eval;
 use fnv::FnvHashMap;
+use rotth_analysis::{
+    ctir::{CProc, ConcreteProgram},
+    inference::ReifiedType,
+    tir::{self, Cond, CondBranch, FieldAccess, If, KConst, KMem, Type, TypedIr, TypedNode, While},
+};
 use rotth_parser::{
     ast::{ItemPath, ItemPathBuf, Literal},
     hir::{Binding, Intrinsic},
@@ -6,13 +12,6 @@ use rotth_parser::{
 };
 use somok::{Either, Somok};
 use Op::*;
-
-use crate::{
-    ctir::{CProc, ConcreteProgram},
-    eval::eval,
-    inference::ReifiedType,
-    tir::{self, Cond, CondBranch, FieldAccess, If, KConst, KMem, Type, TypedIr, TypedNode, While},
-};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Mangled(String);

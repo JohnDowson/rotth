@@ -5,18 +5,14 @@
 #![feature(type_alias_impl_trait)]
 #![feature(array_windows)]
 
-pub mod ctir;
 pub mod emit;
 pub mod eval;
-pub mod inference;
 pub mod lir;
-pub mod tir;
-pub mod typecheck;
 
-use ctir::ConcreteError;
+use rotth_analysis::ctir::ConcreteError;
+use rotth_analysis::Error as TypecheckError;
 use rotth_parser::ParserError;
 use thiserror::Error;
-use typecheck::TypecheckError;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -31,14 +27,14 @@ pub enum Error {
     #[error("Concretisation error {0:?}")]
     Concrete(ConcreteError),
 }
-impl From<ConcreteError> for Error {
-    fn from(e: ConcreteError) -> Self {
-        Self::Concrete(e)
-    }
-}
 
 impl From<ParserError> for Error {
     fn from(e: ParserError) -> Self {
         Self::Parser(e)
+    }
+}
+impl From<TypecheckError> for Error {
+    fn from(e: TypecheckError) -> Self {
+        Self::Typecheck(e)
     }
 }

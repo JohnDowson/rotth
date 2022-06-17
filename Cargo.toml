@@ -1,2 +1,10 @@
 [workspace]
-members = ["rotth", "rotth-lexer", "rotth-lsp", "spanner", "simplearena"]
+members = [
+  "rotth",
+  "rotth-lexer",
+  "rotth-parser",
+  "rotth-analysis",
+  "rotth-lsp",
+  "spanner",
+  "simplearena",
+]

@@ -593,6 +593,21 @@ dependencies = [
  "clap",
  "fnv",
  "indoc",
+ "rotth-analysis",
+ "rotth-lexer",
+ "rotth-parser",
+ "simplearena",
+ "smol_str",
+ "somok",
+ "spanner",
+ "thiserror",
+]
+
+[[package]]
+name = "rotth-analysis"
+version = "0.1.0"
+dependencies = [
+ "fnv",
  "rotth-lexer",
  "rotth-parser",
  "simplearena",

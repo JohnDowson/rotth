@@ -1,8 +1,8 @@
-use std::rc::Rc;
-
 use fnv::FnvHashMap;
 use rotth_parser::{ast::ItemPathBuf, types::Primitive};
 use smol_str::SmolStr;
+use std::fmt::Write;
+use std::rc::Rc;
 
 use crate::{
     ctir::{CStruct, Field},
@@ -216,49 +216,49 @@ pub struct Engine {
     vars: Vec<TypeInfo>,
 }
 
+fn write_info(
+    info: &TypeInfo,
+    vars: &[TypeInfo],
+    structs: &FnvHashMap<TypeId, StructInfo>,
+    f: &mut impl Write,
+) -> std::fmt::Result {
+    match info {
+        TypeInfo::Unknown => write!(f, "Unknown"),
+        TypeInfo::Ref(id) => {
+            write!(f, "Ref({:?})", id.0)
+        }
+        TypeInfo::Ptr(id) => {
+            write!(f, "&>")?;
+            write_info(&vars[id.0], vars, structs, f)
+        }
+        TypeInfo::Generic(g) => {
+            write!(f, "{:?}", g)
+        }
+        TypeInfo::Void => write!(f, "void"),
+        TypeInfo::Bool => write!(f, "bool"),
+        TypeInfo::Char => write!(f, "char"),
+        TypeInfo::U64 => write!(f, "u64"),
+        TypeInfo::U32 => write!(f, "u32"),
+        TypeInfo::U16 => write!(f, "u16"),
+        TypeInfo::U8 => write!(f, "u8"),
+        TypeInfo::I64 => write!(f, "i64"),
+        TypeInfo::I32 => write!(f, "i32"),
+        TypeInfo::I16 => write!(f, "i16"),
+        TypeInfo::I8 => write!(f, "i8"),
+        TypeInfo::Struct(s) => {
+            writeln!(f, "struct {:?}: {{", s)?;
+            for (n, t) in &structs[s].fields {
+                write!(f, "\t\t{n}: ")?;
+                write_info(&vars[t.0], vars, structs, f)?;
+                writeln!(f)?;
+            }
+            write!(f, "\t}}")
+        }
+    }
+}
+
 impl std::fmt::Debug for Engine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fn write_info(
-            info: &TypeInfo,
-            vars: &[TypeInfo],
-            structs: &FnvHashMap<TypeId, StructInfo>,
-            f: &mut std::fmt::Formatter<'_>,
-        ) -> std::fmt::Result {
-            match info {
-                TypeInfo::Unknown => write!(f, "Unknown"),
-                TypeInfo::Ref(id) => {
-                    write!(f, "Ref({:?})", id.0)
-                }
-                TypeInfo::Ptr(id) => {
-                    write!(f, "&>")?;
-                    write_info(&vars[id.0], vars, structs, f)
-                }
-                TypeInfo::Generic(g) => {
-                    write!(f, "{:?}", g)
-                }
-                TypeInfo::Void => write!(f, "void"),
-                TypeInfo::Bool => write!(f, "bool"),
-                TypeInfo::Char => write!(f, "char"),
-                TypeInfo::U64 => write!(f, "u64"),
-                TypeInfo::U32 => write!(f, "u32"),
-                TypeInfo::U16 => write!(f, "u16"),
-                TypeInfo::U8 => write!(f, "u8"),
-                TypeInfo::I64 => write!(f, "i64"),
-                TypeInfo::I32 => write!(f, "i32"),
-                TypeInfo::I16 => write!(f, "i16"),
-                TypeInfo::I8 => write!(f, "i8"),
-                TypeInfo::Struct(s) => {
-                    writeln!(f, "struct {:?}: {{", s)?;
-                    for (n, t) in &structs[s].fields {
-                        write!(f, "\t\t{n}: ")?;
-                        write_info(&vars[t.0], vars, structs, f)?;
-                        writeln!(f)?;
-                    }
-                    write!(f, "\t}}")
-                }
-            }
-        }
-
         if f.alternate() {
             writeln!(f, "Engine {{")?;
         } else {
@@ -513,6 +513,15 @@ impl Engine {
             }
             _ => term,
         }
+    }
+
+    pub fn debug_stack(&self, stack: TypeStack, heap: &THeap) -> String {
+        let mut b = String::new();
+        for t in stack.into_vec(heap).into_iter() {
+            write_info(&self.vars[t.0], &self.vars, &self.structs, &mut b).unwrap();
+            write!(&mut b, ", ").unwrap();
+        }
+        b
     }
 }
 
