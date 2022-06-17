@@ -8,12 +8,10 @@ use somok::{Either, Somok};
 use Op::*;
 
 use crate::{
-    ctir::{CStruct, ConcreteProgram},
+    ctir::{CProc, ConcreteProgram},
     eval::eval,
-    tir::{
-        self, Cond, CondBranch, FieldAccess, If, KConst, KMem, KProc, Type, TypeId, TypedIr,
-        TypedNode, Var, While,
-    },
+    inference::ReifiedType,
+    tir::{self, Cond, CondBranch, FieldAccess, If, KConst, KMem, Type, TypedIr, TypedNode, While},
 };
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -43,9 +41,6 @@ pub enum Op {
     ReadU8,
     WriteU64,
     WriteU8,
-
-    ReserveEscaping(usize),
-    PushEscaping(usize),
 
     ReserveLocals(usize),
     FreeLocals(usize),
@@ -90,21 +85,22 @@ pub enum Op {
 #[derive(Clone)]
 pub enum ComConst {
     Compiled(Vec<Literal>),
-    NotCompiled(KConst<Type>),
+    NotCompiled(KConst<ReifiedType>),
 }
 
 #[derive(Clone)]
 pub enum ComMem {
     Compiled(usize),
-    NotCompiled(KMem<Type>),
+    NotCompiled(KMem<ReifiedType>),
 }
 
 #[derive(Clone)]
 pub enum ComVar {
     Compiled(usize),
-    NotCompiled(Var<Type>),
+    NotCompiled(ReifiedType),
 }
 
+#[derive(Default)]
 pub struct Compiler {
     label: usize,
     mangle_table: FnvHashMap<ItemPathBuf, Mangled>,
@@ -116,16 +112,15 @@ pub struct Compiler {
     strings: Vec<String>,
     bindings: Vec<Vec<ItemPathBuf>>,
     mems: FnvHashMap<ItemPathBuf, ComMem>,
-    vars: FnvHashMap<ItemPathBuf, ComVar>,
-    local_vars: FnvHashMap<ItemPathBuf, (usize, Var<Type>)>,
+    local_vars: FnvHashMap<ItemPathBuf, (usize, ReifiedType)>,
     local_vars_size: usize,
     _escaping_size: usize,
-    structs: FnvHashMap<TypeId, CStruct>,
+    // structs: FnvHashMap<TypeId, CStruct>,
 }
 
 impl Compiler {
     pub fn compile(program: ConcreteProgram) -> (Vec<Op>, Vec<String>, FnvHashMap<Mangled, usize>) {
-        let mut this = Self::new(program.structs);
+        let mut this = Self::default();
 
         this.emit(Call(Mangled("main".into())));
         this.emit(Exit);
@@ -148,13 +143,14 @@ impl Compiler {
             let mangled = this.mangle(&name);
             this.mangle_table.insert(name.clone(), mangled.clone());
             this.unmangle_table.insert(mangled.clone(), name.clone());
-            this.vars.insert(name, ComVar::NotCompiled(var));
+            this.mems.insert(name, ComMem::Compiled(var.ty.size()));
         }
 
         let procs = program
             .procs
             .into_iter()
             .map(|(name, proc)| {
+                this.inc_proc_id();
                 let mangled = this.mangle(&name);
                 this.mangle_table.insert(name.clone(), mangled.clone());
                 this.unmangle_table.insert(mangled.clone(), name);
@@ -177,16 +173,15 @@ impl Compiler {
         (this.result, this.strings, mems)
     }
 
-    fn compile_proc(&mut self, name: Mangled, proc: KProc<TypedNode<Type>>) {
+    fn compile_proc(&mut self, name: Mangled, proc: CProc) {
         self.label = 0;
-        self.inc_proc_id();
         self.current_name = name.clone();
         let label = name;
         self.emit(Proc(label));
 
         let mut i = 0;
         for (name, var) in proc.vars {
-            let offset = 0; //var.ty.size(&self.structs);
+            let offset = var.size();
             self.local_vars.insert(name, (i, var));
             i += offset
         }
@@ -316,7 +311,7 @@ impl Compiler {
         self.mems.insert(name.to_owned(), ComMem::Compiled(size));
     }
 
-    fn compile_body(&mut self, body: Vec<TypedNode<Type>>) {
+    fn compile_body(&mut self, body: Vec<TypedNode<ReifiedType>>) {
         for node in body {
             match node.node {
                 TypedIr::Cond(cond) => self.compile_cond(cond),
@@ -343,9 +338,9 @@ impl Compiler {
                         self.emit(Push(c))
                     }
                 }
-                TypedIr::MemUse(w) => {
-                    self.compile_mem(&w);
-                    let mangled = self.mangle_table.get(&w).unwrap().clone();
+                TypedIr::MemUse(mem_name) => {
+                    self.compile_mem(&mem_name);
+                    let mangled = self.mangle_table.get(&mem_name).unwrap().clone();
                     self.emit(PushMem(mangled))
                 }
                 TypedIr::GVarUse(var_name) => {
@@ -366,11 +361,6 @@ impl Compiler {
                         .unwrap();
                     self.emit(UseBinding(offset))
                 }
-                // TypedIr::Path(w) if self.is_lvar(&w) => {
-                //     let &(offset, ref var) = &self.local_vars[&w];
-                //     self.emit(PushLvar(offset))
-                // }
-                // TypedIr::Path(w) if self.is_gvar(&w) => self.emit(PushMem(w)),
                 TypedIr::Call(w) => {
                     let mangled = self.mangle_table.get(&w).unwrap().clone();
                     self.emit(Call(mangled))
@@ -421,8 +411,8 @@ impl Compiler {
                 TypedIr::Bind(bind) => self.compile_bind(bind),
                 TypedIr::IgnorePattern => unreachable!(), // this is a noop
                 TypedIr::FieldAccess(FieldAccess { ty, field }) => {
-                    let ty = if let Type::Concrete(tir::ConcreteType::Custom(ty)) = ty {
-                        &self.structs[&ty]
+                    let ty = if let ReifiedType::Custom(ty) = ty {
+                        ty
                     } else {
                         todo!("{ty:?}")
                     };
@@ -434,7 +424,7 @@ impl Compiler {
         }
     }
 
-    fn compile_bind(&mut self, bind: tir::Bind<Type>) {
+    fn compile_bind(&mut self, bind: tir::Bind<ReifiedType>) {
         let mut new_bindings = Vec::new();
         for binding in bind.bindings.iter().rev() {
             match &binding.inner {
@@ -456,7 +446,7 @@ impl Compiler {
         self.bindings.pop();
     }
 
-    fn compile_while(&mut self, while_: While<Type>) {
+    fn compile_while(&mut self, while_: While<ReifiedType>) {
         let cond_label = self.gen_label();
         let end_label = self.gen_label();
         self.emit(Label(cond_label.clone()));
@@ -467,7 +457,7 @@ impl Compiler {
         self.emit(Label(end_label))
     }
 
-    fn compile_if(&mut self, if_: If<Type>) {
+    fn compile_if(&mut self, if_: If<ReifiedType>) {
         let lie_label = self.gen_label();
         let mut end_label = None;
         self.emit(JumpF(lie_label.clone()));
@@ -486,7 +476,7 @@ impl Compiler {
         }
     }
 
-    fn compile_cond(&mut self, cond: Cond<Type>) {
+    fn compile_cond(&mut self, cond: Cond<ReifiedType>) {
         let phi_label = self.gen_label();
         let num_branches = cond.branches.len() - 1;
         let mut this_branch_label = self.gen_label();
@@ -548,31 +538,10 @@ impl Compiler {
             strings,
             bindings: Default::default(),
             mems: Default::default(),
-            vars: Default::default(),
             local_vars: Default::default(),
             local_vars_size: Default::default(),
             _escaping_size: Default::default(),
-            structs: Default::default(),
-        }
-    }
-
-    fn new(structs: FnvHashMap<TypeId, CStruct>) -> Self {
-        Self {
-            label: 0,
-            mangle_table: Default::default(),
-            unmangle_table: Default::default(),
-            proc_id: 0,
-            current_name: Default::default(),
-            result: Default::default(),
-            consts: Default::default(),
-            strings: Default::default(),
-            bindings: Default::default(),
-            mems: Default::default(),
-            vars: Default::default(),
-            local_vars: Default::default(),
-            local_vars_size: Default::default(),
-            _escaping_size: Default::default(),
-            structs,
+            // structs: Default::default(),
         }
     }
 
@@ -581,7 +550,12 @@ impl Compiler {
         let name = name
             .iter()
             .intersperse(&joiner)
-            .map(|s| s.replace(|c: char| !c.is_alphanumeric(), &format!("{}", self.proc_id)))
+            .map(|s| {
+                s.replace(
+                    |c: char| !c.is_alphanumeric() && c != '_',
+                    &format!("{}", self.proc_id),
+                )
+            })
             .collect::<String>();
         Mangled(name)
     }

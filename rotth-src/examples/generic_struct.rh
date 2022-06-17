@@ -1,0 +1,19 @@
+struct [T] Vec do
+    len: u64
+    cap: u64
+    buf: &>T
+end
+
+mem FOO_BUF do 8 32 * end
+
+proc main: u64 do
+    var FOO: Vec
+    32 FOO -> cap !u64
+    FOO -> buf
+    bind buf: &>&>u64 do
+        FOO_BUF cast u64
+        buf cast &>u64 @u64 cast &>u64
+        !u64
+    end
+    0
+end

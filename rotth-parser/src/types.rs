@@ -28,6 +28,24 @@ pub enum Primitive {
     I8,
 }
 
+impl Primitive {
+    pub fn size(&self) -> usize {
+        match self {
+            Primitive::Void => 0,
+            Primitive::Bool => 1,
+            Primitive::Char => 1,
+            Primitive::U64 => 8,
+            Primitive::U32 => 4,
+            Primitive::U16 => 2,
+            Primitive::U8 => 1,
+            Primitive::I64 => 8,
+            Primitive::I32 => 4,
+            Primitive::I16 => 2,
+            Primitive::I8 => 1,
+        }
+    }
+}
+
 impl std::fmt::Debug for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -43,6 +61,7 @@ impl std::fmt::Debug for Type {
 
 pub struct StructBuilder<'i> {
     index: &'i mut StructIndex,
+    generics: Vec<Spanned<SmolStr>>,
     fields: FnvHashMap<SmolStr, Spanned<Type>>,
     name: ItemPathBuf,
 }
@@ -56,6 +75,7 @@ impl<'i> StructBuilder<'i> {
     pub fn finish(self) {
         let struct_ = Struct {
             name: self.name,
+            generics: self.generics,
             fields: self.fields,
         };
         self.index.structs.push(struct_);
@@ -68,10 +88,15 @@ pub struct StructIndex {
 }
 
 impl StructIndex {
-    pub fn new_struct(&'_ mut self, name: ItemPathBuf) -> StructBuilder<'_> {
+    pub fn new_struct(
+        &'_ mut self,
+        name: ItemPathBuf,
+        generics: Vec<Spanned<SmolStr>>,
+    ) -> StructBuilder<'_> {
         StructBuilder {
             index: self,
             fields: Default::default(),
+            generics,
             name,
         }
     }
@@ -104,5 +129,6 @@ impl<'s> IntoIterator for &'s StructIndex {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Struct {
     pub name: ItemPathBuf,
+    pub generics: Vec<Spanned<SmolStr>>,
     pub fields: FnvHashMap<SmolStr, Spanned<Type>>,
 }

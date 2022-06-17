@@ -322,10 +322,15 @@ impl Walker {
         } else {
             unreachable!()
         };
-        let ResolvedStruct { name, fields } = &*struct_;
+        let ResolvedStruct {
+            name,
+            fields,
+            generics,
+        } = &*struct_;
         let Word(name) = name.inner.clone();
         let name = self.current_path.child(name);
-        let mut builder = self.types.new_struct(name);
+        let generics = generics.iter().map(|t| t.map_ref(|t| t.clone())).collect();
+        let mut builder = self.types.new_struct(name, generics);
         for (name, ty) in fields {
             let span = ty.ty.span;
             let ty = ty.inner.ty.inner.clone();

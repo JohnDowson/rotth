@@ -1,8 +1,12 @@
+use std::rc::Rc;
+
 use fnv::FnvHashMap;
-use rotth_parser::types::Primitive;
+use rotth_parser::{ast::ItemPathBuf, types::Primitive};
+use smol_str::SmolStr;
 
 use crate::{
-    tir::{ConcreteType, GenId, Type, TypeId},
+    ctir::{CStruct, Field},
+    tir::{ConcreteType, GenId, KStruct, Type, TypeId},
     typecheck::{THeap, TypeStack},
 };
 ///! # Type inference in less than 100 lines of Rust
@@ -51,14 +55,56 @@ pub enum TypeInfo {
     Struct(TypeId),
 }
 
+#[derive(Clone, Debug)]
+pub enum ReifiedType {
+    Ptr(Box<ReifiedType>),
+    Primitive(Primitive),
+    Custom(CStruct),
+}
+
+impl ReifiedType {
+    pub const BOOL: Self = Self::Primitive(Primitive::Bool);
+    pub const CHAR: Self = Self::Primitive(Primitive::Char);
+    pub const U64: Self = Self::Primitive(Primitive::U64);
+    pub const U32: Self = Self::Primitive(Primitive::U32);
+    pub const U16: Self = Self::Primitive(Primitive::U16);
+    pub const U8: Self = Self::Primitive(Primitive::U8);
+
+    pub const I64: Self = Self::Primitive(Primitive::I64);
+    pub const I32: Self = Self::Primitive(Primitive::I32);
+    pub const I16: Self = Self::Primitive(Primitive::I16);
+    pub const I8: Self = Self::Primitive(Primitive::I8);
+
+    pub const VOID: Self = Self::Primitive(Primitive::Void);
+
+    pub fn size(&self) -> usize {
+        match self {
+            ReifiedType::Ptr(_) => 8,
+            ReifiedType::Primitive(p) => p.size(),
+            ReifiedType::Custom(c) => c.size(),
+        }
+    }
+}
+#[derive(Debug)]
+pub struct StructInfo {
+    pub fields: FnvHashMap<SmolStr, TermId>,
+}
+
 pub fn type_to_info_with_generic_substitution_table(
     engine: &mut Engine,
     generics: &mut FnvHashMap<GenId, TermId>,
+    structs: &FnvHashMap<ItemPathBuf, Rc<KStruct>>,
     term: &Type,
 ) -> TypeInfo {
     let mut type_to_id = |term| {
-        let info = type_to_info_with_generic_substitution_table(engine, generics, term);
+        let info = type_to_info_with_generic_substitution_table(engine, generics, structs, term);
         engine.insert(info)
+    };
+    let find_struct = |id| {
+        structs
+            .iter()
+            .find_map(|(_, s)| if s.id == id { Some(s) } else { None })
+            .unwrap()
     };
     match term {
         Type::Generic(g) => {
@@ -85,15 +131,44 @@ pub fn type_to_info_with_generic_substitution_table(
                 Primitive::I16 => TypeInfo::I16,
                 Primitive::I8 => TypeInfo::I8,
             },
-            ConcreteType::Custom(t) => TypeInfo::Struct(*t),
+            ConcreteType::Custom(t) => {
+                let s = find_struct(*t);
+
+                let fields = s
+                    .fields
+                    .iter()
+                    .map(|(n, t)| {
+                        let t = type_to_info_with_generic_substitution_table(
+                            engine, generics, structs, t,
+                        );
+                        let t = engine.insert(t);
+                        (n.clone(), t)
+                    })
+                    .collect();
+                let s = StructInfo { fields };
+                engine.structs.insert(*t, s);
+
+                TypeInfo::Struct(*t)
+            }
         },
     }
 }
 
-pub fn type_to_info(engine: &mut Engine, term: &Type, generics_are_unknown: bool) -> TypeInfo {
+pub fn type_to_info(
+    engine: &mut Engine,
+    structs: &FnvHashMap<ItemPathBuf, Rc<KStruct>>,
+    term: &Type,
+    generics_are_unknown: bool,
+) -> TypeInfo {
     let mut type_to_id = |term| {
-        let info = type_to_info(engine, term, generics_are_unknown);
+        let info = type_to_info(engine, structs, term, generics_are_unknown);
         engine.insert(info)
+    };
+    let find_struct = |id| {
+        structs
+            .iter()
+            .find_map(|(_, s)| if s.id == id { Some(&**s) } else { None })
+            .unwrap()
     };
     match term {
         Type::Generic(_) if generics_are_unknown => TypeInfo::Unknown,
@@ -113,7 +188,23 @@ pub fn type_to_info(engine: &mut Engine, term: &Type, generics_are_unknown: bool
                 Primitive::I16 => TypeInfo::I16,
                 Primitive::I8 => TypeInfo::I8,
             },
-            ConcreteType::Custom(t) => TypeInfo::Struct(*t),
+            ConcreteType::Custom(t) => {
+                let s = find_struct(*t);
+
+                let fields = s
+                    .fields
+                    .iter()
+                    .map(|(n, t)| {
+                        let t = type_to_info(engine, structs, t, generics_are_unknown);
+                        let t = engine.insert(t);
+                        (n.clone(), t)
+                    })
+                    .collect();
+                let s = StructInfo { fields };
+                engine.structs.insert(*t, s);
+
+                TypeInfo::Struct(*t)
+            }
         },
     }
 }
@@ -121,23 +212,70 @@ pub fn type_to_info(engine: &mut Engine, term: &Type, generics_are_unknown: bool
 #[derive(Default)]
 pub struct Engine {
     hash: FnvHashMap<TypeInfo, TermId>,
+    structs: FnvHashMap<TypeId, StructInfo>,
     vars: Vec<TypeInfo>,
 }
 
 impl std::fmt::Debug for Engine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn write_info(
+            info: &TypeInfo,
+            vars: &[TypeInfo],
+            structs: &FnvHashMap<TypeId, StructInfo>,
+            f: &mut std::fmt::Formatter<'_>,
+        ) -> std::fmt::Result {
+            match info {
+                TypeInfo::Unknown => write!(f, "Unknown"),
+                TypeInfo::Ref(id) => {
+                    write!(f, "Ref({:?})", id.0)
+                }
+                TypeInfo::Ptr(id) => {
+                    write!(f, "&>")?;
+                    write_info(&vars[id.0], vars, structs, f)
+                }
+                TypeInfo::Generic(g) => {
+                    write!(f, "{:?}", g)
+                }
+                TypeInfo::Void => write!(f, "void"),
+                TypeInfo::Bool => write!(f, "bool"),
+                TypeInfo::Char => write!(f, "char"),
+                TypeInfo::U64 => write!(f, "u64"),
+                TypeInfo::U32 => write!(f, "u32"),
+                TypeInfo::U16 => write!(f, "u16"),
+                TypeInfo::U8 => write!(f, "u8"),
+                TypeInfo::I64 => write!(f, "i64"),
+                TypeInfo::I32 => write!(f, "i32"),
+                TypeInfo::I16 => write!(f, "i16"),
+                TypeInfo::I8 => write!(f, "i8"),
+                TypeInfo::Struct(s) => {
+                    writeln!(f, "struct {:?}: {{", s)?;
+                    for (n, t) in &structs[s].fields {
+                        write!(f, "\t\t{n}: ")?;
+                        write_info(&vars[t.0], vars, structs, f)?;
+                        writeln!(f)?;
+                    }
+                    write!(f, "\t}}")
+                }
+            }
+        }
+
         if f.alternate() {
             writeln!(f, "Engine {{")?;
         } else {
             write!(f, "Engine {{")?;
         }
+
         for (id, info) in self.vars.iter().enumerate() {
             if f.alternate() {
-                writeln!(f, "\t{:?}: {:?},", id, info)?;
+                write!(f, "\t{:?}: ", id)?;
+                write_info(info, &self.vars, &self.structs, f)?;
+                write!(f, ", ")?;
+                writeln!(f)?;
             } else {
                 write!(f, "{:?}: {:?},", id, info)?;
             }
         }
+
         write!(f, "}}")
     }
 }
@@ -257,6 +395,22 @@ impl Engine {
         }
     }
 
+    pub fn get_struct(&self, id: TermId) -> Result<&StructInfo, String> {
+        use TypeInfo::*;
+        match self.vars[id.0] {
+            Struct(id) => Ok(&self.structs[&id]),
+            _ => Err(format!("{id:?} is not a struct")),
+        }
+    }
+
+    pub fn get_struct_ptr(&self, id: TermId) -> Result<&StructInfo, String> {
+        use TypeInfo::*;
+        match self.vars[id.0] {
+            Ptr(id) => self.get_struct(id),
+            _ => Err(format!("{id:?} is not a pointer")),
+        }
+    }
+
     /// Attempt to reconstruct a concrete type from the given type term ID. This
     /// may fail if we don't yet have enough information to figure out what the
     /// type is.
@@ -282,37 +436,82 @@ impl Engine {
         }
     }
 
-    pub fn reconstruct_substituting(
+    pub fn reconstruct_lossy(&self, id: TermId) -> Type {
+        use TypeInfo::*;
+        match self.vars[id.0] {
+            Unknown => Type::VOID,
+            Ref(id) => self.reconstruct_lossy(id),
+            Ptr(v) => Type::Concrete(ConcreteType::Ptr(box self.reconstruct_lossy(v))),
+            Generic(id) => Type::Generic(id),
+            Void => Type::VOID,
+            Bool => Type::BOOL,
+            Char => Type::CHAR,
+            U64 => Type::U64,
+            U32 => Type::U32,
+            U16 => Type::U16,
+            U8 => Type::U8,
+            I64 => Type::I64,
+            I32 => Type::I32,
+            I16 => Type::I16,
+            I8 => Type::I8,
+            Struct(id) => Type::Concrete(ConcreteType::Custom(id)),
+        }
+    }
+
+    pub fn reify(
         &self,
-        subs: &FnvHashMap<GenId, Type>,
+        subs: &FnvHashMap<GenId, ReifiedType>,
         id: TermId,
-    ) -> Result<Type, String> {
+    ) -> Result<ReifiedType, String> {
         use TypeInfo::*;
         match self.vars[id.0] {
             Unknown => Err("Cannot infer".to_string()),
-            Ref(id) => self.reconstruct_substituting(subs, id),
-            Ptr(v) => Ok(Type::Concrete(ConcreteType::Ptr(
-                box self.reconstruct_substituting(subs, v)?,
-            ))),
-            Generic(id) => {
-                if let Some(t) = subs.get(&id) {
-                    Ok(t.clone())
-                } else {
-                    Err("Cannot substitute generic".to_string())
-                }
+            Ref(id) => self.reify(subs, id),
+            Ptr(v) => Ok(ReifiedType::Ptr(box self.reify(subs, v)?)),
+            Generic(id) => Ok(subs[&id].clone()),
+            Void => Ok(ReifiedType::VOID),
+            Bool => Ok(ReifiedType::BOOL),
+            Char => Ok(ReifiedType::CHAR),
+            U64 => Ok(ReifiedType::U64),
+            U32 => Ok(ReifiedType::U32),
+            U16 => Ok(ReifiedType::U16),
+            U8 => Ok(ReifiedType::U8),
+            I64 => Ok(ReifiedType::I64),
+            I32 => Ok(ReifiedType::I32),
+            I16 => Ok(ReifiedType::I16),
+            I8 => Ok(ReifiedType::I8),
+            Struct(id) => {
+                let mut offset = 0;
+                let fields = self.structs[&id]
+                    .fields
+                    .iter()
+                    .map(|(n, t)| {
+                        let ty = self.reify(subs, *t)?;
+
+                        let f_offset = offset;
+                        offset += ty.size();
+                        Ok((
+                            n.clone(),
+                            Field {
+                                ty,
+                                offset: f_offset,
+                            },
+                        ))
+                    })
+                    .collect::<Result<_, String>>()?;
+                Ok(ReifiedType::Custom(CStruct { fields }))
             }
-            Void => Ok(Type::VOID),
-            Bool => Ok(Type::BOOL),
-            Char => Ok(Type::CHAR),
-            U64 => Ok(Type::U64),
-            U32 => Ok(Type::U32),
-            U16 => Ok(Type::U16),
-            U8 => Ok(Type::U8),
-            I64 => Ok(Type::I64),
-            I32 => Ok(Type::I32),
-            I16 => Ok(Type::I16),
-            I8 => Ok(Type::I8),
-            Struct(id) => Ok(Type::Concrete(ConcreteType::Custom(id))),
+        }
+    }
+
+    pub fn anonymize_generics(&mut self, term: TermId, subs: &FnvHashMap<GenId, TermId>) -> TermId {
+        match self.vars[term.0] {
+            TypeInfo::Generic(g) => subs[&g],
+            TypeInfo::Ptr(id) => {
+                let inner = self.anonymize_generics(id, subs);
+                self.insert(TypeInfo::Ptr(inner))
+            }
+            _ => term,
         }
     }
 }

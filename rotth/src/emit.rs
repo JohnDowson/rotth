@@ -23,7 +23,6 @@ pub fn compile<S: Write>(
             _start:
                 mov QWORD [ret_stack_rsp], ret_stack_end
                 mov QWORD [locals_stack_sp], locals_stack_end
-                mov QWORD [escaping_stack_sp], escaping_stack_end
                 ; set up args
                 pop rax
                 mov [argc], rax
@@ -150,27 +149,6 @@ pub fn compile<S: Write>(
                         pop rax
                     "},
                 op
-            )?,
-
-            ReserveEscaping(n) => write!(
-                sink,
-                indoc! {"
-                    ; {:?}
-                        mov rax, {}
-                        sub [escaping_stack_sp], rax
-                    "},
-                op, n
-            )?,
-            PushEscaping(n) => write!(
-                sink,
-                indoc! {"
-                    ; {:?}
-                        mov rax, {}
-                        mov rbx, [escaping_stack_sp]
-                        add rbx, rax
-                        push rbx
-                    "},
-                op, n
             )?,
 
             ReserveLocals(n) => write!(
@@ -639,9 +617,6 @@ pub fn compile<S: Write>(
                 locals_stack_sp: resq 1
                 locals_stack: resb 65536
                 locals_stack_end:
-                escaping_stack_sp: resq 1
-                escaping_stack: resb 65536
-                escaping_stack_end:
                 argc: resq 1
                 argv: resq 1
         "},

@@ -10,9 +10,7 @@ use spanner::{Span, Spanned};
 use std::rc::Rc;
 
 use crate::{
-    inference::{
-        type_to_info, type_to_info_with_generic_substitution_table, Engine, TermId, TypeInfo,
-    },
+    inference::{type_to_info, Engine, ReifiedType, TermId, TypeInfo},
     typecheck::{self, error, ErrorKind, THeap, TypeStack},
     Error,
 };
@@ -198,10 +196,10 @@ impl std::fmt::Debug for ConcreteType {
 #[derive(Debug, Clone)]
 pub struct KProc<T> {
     pub generics: FnvHashMap<SmolStr, GenId>,
-    pub vars: FnvHashMap<ItemPathBuf, Var<Type>>,
+    pub vars: FnvHashMap<ItemPathBuf, Var<TermId>>,
     pub span: Span,
-    pub ins: Vec<Type>,
-    pub outs: Vec<Type>,
+    pub ins: Vec<TermId>,
+    pub outs: Vec<TermId>,
     pub body: Vec<T>,
 }
 #[derive(Debug, Clone)]
@@ -239,7 +237,7 @@ pub enum Ref {
 #[derive(Debug)]
 pub struct Walker {
     known_procs: FnvHashMap<ItemPathBuf, Rc<KProc<Spanned<Hir>>>>,
-    known_gvars: FnvHashMap<ItemPathBuf, Var<Type>>,
+    known_gvars: FnvHashMap<ItemPathBuf, ReifiedType>,
     known_mems: FnvHashMap<ItemPathBuf, Rc<KMem<TermId>>>,
     known_structs: FnvHashMap<ItemPathBuf, Rc<KStruct>>,
     checked_consts: FnvHashMap<ItemPathBuf, Rc<KConst<TermId>>>,
@@ -257,7 +255,7 @@ pub struct TypecheckedProgram {
     pub procs: FnvHashMap<ItemPathBuf, KProc<TypedNode<TermId>>>,
     pub consts: FnvHashMap<ItemPathBuf, KConst<TermId>>,
     pub mems: FnvHashMap<ItemPathBuf, KMem<TermId>>,
-    pub vars: FnvHashMap<ItemPathBuf, Var<Type>>,
+    pub vars: FnvHashMap<ItemPathBuf, ReifiedType>,
     pub structs: FnvHashMap<ItemPathBuf, KStruct>,
     pub engine: Engine,
 }
@@ -282,16 +280,22 @@ impl Walker {
             next_gen_id: Default::default(),
         };
 
-        for ty in this.structs.clone() {
+        for struct_ in this.structs.clone() {
+            let generics = struct_
+                .generics
+                .into_iter()
+                .map(|ty| (ty.inner, this.gen_id()))
+                .collect();
             let mut fields = FnvHashMap::default();
-            for (n, ty) in &ty.fields {
-                let ty = this.abstract_to_concrete_type(ty, None)?;
+            for (n, ty) in &struct_.fields {
+                let ty = this.abstract_to_concrete_type(ty, Some(&generics))?;
                 fields.insert(n.clone(), ty);
             }
             let id = this.type_id();
             this.known_structs
-                .insert(ty.name, Rc::new(KStruct { id, fields }));
+                .insert(struct_.name, Rc::new(KStruct { id, fields }));
         }
+
         for (path, def) in ast {
             match def {
                 hir::TopLevel::Ref(referee) => {
@@ -300,7 +304,7 @@ impl Walker {
                 hir::TopLevel::Proc(proc) => this.register_proc(path, proc)?,
                 hir::TopLevel::Const(const_) => this.register_const(path, const_)?,
                 hir::TopLevel::Mem(mem) => this.register_mem(path, mem)?,
-                hir::TopLevel::Var(_) => todo!(),
+                hir::TopLevel::Var(var) => this.register_var(path, var)?,
             }
         }
         this.resolve_refs()?;
@@ -371,19 +375,31 @@ impl Walker {
         let ins = proc
             .ins
             .into_iter()
-            .map(|ty| self.abstract_to_concrete_type(&ty, Some(&generics)))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|ty| {
+                let ty = self.abstract_to_concrete_type(&ty, Some(&generics))?;
+                let ty = type_to_info(&mut self.engine, &self.known_structs, &ty, false);
+                let ty = self.engine.insert(ty);
+                Ok(ty)
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
         let outs = proc
             .outs
             .into_iter()
-            .map(|ty| self.abstract_to_concrete_type(&ty, Some(&generics)))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|ty| {
+                let ty = self.abstract_to_concrete_type(&ty, Some(&generics))?;
+                let ty = type_to_info(&mut self.engine, &self.known_structs, &ty, false);
+                let ty = self.engine.insert(ty);
+                Ok(ty)
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
         let vars = proc
             .vars
             .into_iter()
             .map(|(k, hir::Var { ty, span: _ })| {
                 Ok((k, {
                     let ty = self.abstract_to_concrete_type(&ty, Some(&generics))?;
+                    let ty = type_to_info(&mut self.engine, &self.known_structs, &ty, true);
+                    let ty = self.engine.insert(ty);
                     Var { ty }
                 }))
             })
@@ -470,6 +486,31 @@ impl Walker {
         }
     }
 
+    fn register_var(&mut self, path: ItemPathBuf, var: hir::Var) -> Result<(), Error> {
+        if self.known_gvars.contains_key(&path) {
+            return Ok(());
+        }
+        let hir::Var { ty, span } = var;
+        let ty = self.abstract_to_concrete_type(&ty, None)?;
+        let ty = type_to_info(&mut self.engine, &self.known_structs, &ty, true);
+        let ty = self.engine.insert(ty);
+        let ty = self.engine.reify(&Default::default(), ty);
+        let ty = match ty {
+            Ok(ty) => ty,
+            Err(message) => {
+                return error(
+                    span,
+                    ErrorKind::UnificationError(message),
+                    "Can't reify the type of this var",
+                )
+            }
+        };
+
+        self.known_gvars.insert(path, ty);
+
+        Ok(())
+    }
+
     fn register_const(&mut self, path: ItemPathBuf, const_: hir::Const) -> Result<(), Error> {
         if self.checked_consts.contains_key(&path) {
             return Ok(());
@@ -517,19 +558,8 @@ impl Walker {
     fn typecheck_proc(&mut self, heap: &mut THeap, path: &ItemPath) -> Result<(), Error> {
         let proc = self.known_procs.get(path).map(|p| (&**p).clone()).unwrap();
 
-        let mut ins = TypeStack::from_iter(
-            proc.ins.iter().map(|term| {
-                let info = type_to_info(&mut self.engine, term, false);
-                self.engine.insert(info)
-            }),
-            heap,
-        );
-
-        let outs = proc.outs.iter().map(|term| {
-            let info = type_to_info(&mut self.engine, term, false);
-            self.engine.insert(info)
-        });
-        let outs = TypeStack::from_iter(outs, heap);
+        let mut ins = TypeStack::from_iter(proc.ins.iter().copied(), heap);
+        let outs = TypeStack::from_iter(proc.outs.iter().copied(), heap);
 
         let body = self.typecheck_body(
             &mut ins,
@@ -581,18 +611,15 @@ impl Walker {
             );
         }
         let (ins, outs) = {
-            let mut generics = Default::default();
+            let generics = proc
+                .generics
+                .iter()
+                .map(|(_, g)| (*g, self.engine.insert(TypeInfo::Unknown)))
+                .collect();
             let expected_ins = proc
                 .ins
                 .iter()
-                .map(|ty| {
-                    let info = type_to_info_with_generic_substitution_table(
-                        &mut self.engine,
-                        &mut generics,
-                        ty,
-                    );
-                    self.engine.insert(info)
-                })
+                .map(|term| self.engine.anonymize_generics(*term, &generics))
                 .rev()
                 .collect::<Vec<_>>();
             for expected_ty in &expected_ins {
@@ -615,14 +642,8 @@ impl Walker {
             let outs = proc
                 .outs
                 .iter()
-                .map(|ty| {
-                    let info = type_to_info_with_generic_substitution_table(
-                        &mut self.engine,
-                        &mut generics,
-                        ty,
-                    );
-                    self.engine.insert(info)
-                })
+                .map(|term| self.engine.anonymize_generics(*term, &generics))
+                .rev()
                 .collect::<Vec<_>>();
             for out_t in &outs {
                 ins.push(heap, *out_t);
@@ -650,7 +671,7 @@ impl Walker {
             .outs
             .iter()
             .map(|term| {
-                let info = type_to_info(&mut self.engine, term, false);
+                let info = type_to_info(&mut self.engine, &self.known_structs, term, false);
                 self.engine.insert(info)
             })
             .collect();
@@ -673,7 +694,7 @@ impl Walker {
         ins: &mut TypeStack,
         heap: &mut THeap,
         body: &[Spanned<Hir>],
-        vars: &FnvHashMap<ItemPathBuf, Var<Type>>,
+        vars: &FnvHashMap<ItemPathBuf, Var<TermId>>,
         bindings_in_scope: Option<&FnvHashMap<ItemPathBuf, TermId>>,
         generics: Option<&FnvHashMap<SmolStr, GenId>>,
         expected_outs: Option<&TypeStack>,
@@ -697,9 +718,9 @@ impl Walker {
                 }
                 Hir::Path(path) if vars.contains_key(path) => {
                     let var = vars.get(path).unwrap();
-                    let ty = type_to_info(&mut self.engine, &var.ty, false);
-                    let ty = self.engine.insert(ty);
-                    let ty = self.engine.insert(TypeInfo::Ptr(ty));
+                    // let ty = type_to_info(&mut self.engine, &self.known_structs, &var.ty, true);
+                    // let ty = self.engine.insert(ty);
+                    let ty = self.engine.insert(TypeInfo::Ptr(var.ty));
                     ins.push(heap, ty);
                     TypedNode {
                         span: node.span,
@@ -840,7 +861,8 @@ impl Walker {
                         }
                         Intrinsic::Cast(o_ty) => {
                             let o_type = self.abstract_to_concrete_type(o_ty, generics)?;
-                            let o_type = type_to_info(&mut self.engine, &o_type, false);
+                            let o_type =
+                                type_to_info(&mut self.engine, &self.known_structs, &o_type, false);
                             let o_type = self.engine.insert(o_type);
                             if let Some(in_t) = ins.pop(heap) {
                                 ins.push(heap, o_type);
@@ -985,6 +1007,7 @@ impl Walker {
                             }
                         }
                         Intrinsic::CompStop => {
+                            dbg! {&self.engine};
                             return error(
                                 node.span,
                                 ErrorKind::CompStop,
@@ -996,7 +1019,7 @@ impl Walker {
                                         .map(|t| self.engine.reconstruct(t))
                                         .collect::<Vec<_>>()
                                 ),
-                            )
+                            );
                         }
                         Intrinsic::Dump => todo!(),
                         Intrinsic::Print => {
@@ -1169,7 +1192,35 @@ impl Walker {
                                 );
                             }
                         }
-                        Intrinsic::Mul => todo!(),
+                        Intrinsic::Mul => {
+                            if let Some(a) = ins.pop(heap) {
+                                if let Some(b) = ins.pop(heap) {
+                                    if let Err(msg) = self.engine.unify(a, b) {
+                                        return error(
+                                            node.span,
+                                            ErrorKind::UnificationError(msg),
+                                            "`mul` intrinsic expects it's inputs to be of the same type",
+                                        );
+                                    }
+                                    w_ins.push(a);
+                                    w_ins.push(a);
+                                    w_outs.push(a);
+                                    ins.push(heap, a);
+                                } else {
+                                    return error(
+                                        node.span,
+                                        ErrorKind::NotEnoughData,
+                                        "Not enough data in the stack for `mul` intrinsic",
+                                    );
+                                }
+                            } else {
+                                return error(
+                                    node.span,
+                                    ErrorKind::NotEnoughData,
+                                    "Not enough data in the stack for `mul` intrinsic",
+                                );
+                            }
+                        }
                         Intrinsic::Eq => {
                             if let Some(a) = ins.pop(heap) {
                                 if let Some(b) = ins.pop(heap) {
@@ -1370,8 +1421,12 @@ impl Walker {
                                                 generics,
                                             )
                                             .map(|ty| {
-                                                let info =
-                                                    type_to_info(&mut self.engine, &ty, false);
+                                                let info = type_to_info(
+                                                    &mut self.engine,
+                                                    &self.known_structs,
+                                                    &ty,
+                                                    false,
+                                                );
                                                 self.engine.insert(info)
                                             });
 
@@ -1671,8 +1726,12 @@ impl Walker {
                             w_outs.push(u64)
                         }
                         Literal::String(_) => {
-                            let cptr =
-                                type_to_info(&mut self.engine, &Type::ptr_to(Type::CHAR), false);
+                            let cptr = type_to_info(
+                                &mut self.engine,
+                                &self.known_structs,
+                                &Type::ptr_to(Type::CHAR),
+                                false,
+                            );
                             let cptr = self.engine.insert(cptr);
                             let u64 = self.engine.insert(TypeInfo::U64);
                             ins.push(heap, u64);
@@ -1720,56 +1779,13 @@ impl Walker {
                 }
                 Hir::FieldAccess(hir::FieldAccess { field }) => {
                     let (in_ty, out_ty) = if let Some(ty) = ins.pop(heap) {
-                        let out_ty = match self.engine.reconstruct(ty) {
-                            Ok(ty) => match ty {
-                                Type::Generic(_) => todo!(),
-                                Type::Concrete(ty) => match ty {
-                                    ConcreteType::Ptr(box ty) => match ty {
-                                        Type::Generic(_) => todo!(),
-                                        Type::Concrete(ty) => match ty {
-                                            ConcreteType::Ptr(_) => todo!(),
-                                            ConcreteType::Primitive(_) => todo!(),
-                                            ConcreteType::Custom(id) => {
-                                                if let Some(KStruct { id: _, fields }) =
-                                                    self.known_structs.iter().find_map(|(_, v)| {
-                                                        if v.id == id {
-                                                            Some(&**v)
-                                                        } else {
-                                                            None
-                                                        }
-                                                    })
-                                                {
-                                                    if let Some(ty) = fields.get(field) {
-                                                        let info = type_to_info(
-                                                            &mut self.engine,
-                                                            ty,
-                                                            true,
-                                                        );
-                                                        let ty = self.engine.insert(info);
-                                                        self.engine.insert(TypeInfo::Ptr(ty))
-                                                    } else {
-                                                        return error(
-                                                            node.span,
-                                                            ErrorKind::Undefined,
-                                                            "No suchfield on this type",
-                                                        );
-                                                    }
-                                                } else {
-                                                    return error(
-                                                        node.span,
-                                                        ErrorKind::Undefined,
-                                                        "Undefined type",
-                                                    );
-                                                }
-                                            }
-                                        },
-                                    },
-                                    ConcreteType::Primitive(_) => todo!(),
-                                    ConcreteType::Custom(_) => todo!(),
-                                },
-                            },
-                            Err(_) => todo!(),
+                        let field_ty = match self.engine.get_struct_ptr(ty) {
+                            Ok(t) => *t.fields.get(field).unwrap(),
+                            Err(msg) => {
+                                return error(node.span, ErrorKind::UnsupportedOperation, msg)
+                            }
                         };
+                        let out_ty = self.engine.insert(TypeInfo::Ptr(field_ty));
                         ins.push(heap, out_ty);
                         (ty, out_ty)
                     } else {

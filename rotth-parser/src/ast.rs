@@ -164,6 +164,7 @@ pub struct Mem {
 #[derive(Debug, Clone)]
 pub struct Struct {
     pub struct_: Spanned<Keyword>,
+    pub generics: Option<Spanned<Generics>>,
     pub name: Spanned<Word>,
     pub do_: Spanned<Keyword>,
     pub body: Vec<Spanned<NameTypePair>>,
@@ -574,6 +575,7 @@ impl ResolvedFile {
 #[derive(Debug, Clone)]
 pub struct ResolvedStruct {
     pub name: Spanned<Word>,
+    pub generics: Vec<Spanned<SmolStr>>,
     pub fields: FnvHashMap<SmolStr, Spanned<NameTypePair>>,
 }
 
@@ -704,9 +706,25 @@ fn make_struct(s: Struct) -> Result<ResolvedStruct, Vec<Error>> {
             fields.insert(name.clone(), field);
         }
     }
+    let mut generics = Vec::new();
+    if let Some(Spanned {
+        span: _,
+        inner:
+            Generics {
+                left_bracket: _,
+                tys,
+                right_bracket: _,
+            },
+    }) = s.generics
+    {
+        for ty in tys {
+            generics.push(ty.map(|Word(ty)| ty))
+        }
+    }
     if errors.is_empty() {
         Ok(ResolvedStruct {
             name: s.name,
+            generics,
             fields,
         })
     } else {

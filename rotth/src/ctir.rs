@@ -1,16 +1,17 @@
 use fnv::FnvHashMap;
-use rotth_parser::{path, types::Primitive};
+use rotth_parser::path;
 use smol_str::SmolStr;
 use somok::Somok;
 use std::fmt::Write;
 
 use crate::{
-    inference::TermId,
+    inference::{ReifiedType, TermId},
     tir::{
-        Bind, ConcreteType, Cond, CondBranch, FieldAccess, GenId, If, KConst, KMem, KProc, Type,
-        TypeId, TypecheckedProgram, TypedIr, TypedNode, Var, While,
+        Bind, ConcreteType, Cond, CondBranch, FieldAccess, GenId, If, KConst, KMem, Type,
+        TypecheckedProgram, TypedIr, TypedNode, Var, While,
     },
-    typecheck, Error,
+    typecheck::{self, error, ErrorKind},
+    Error,
 };
 use rotth_parser::ast::ItemPathBuf;
 
@@ -25,44 +26,59 @@ pub enum ConcreteError {
 
 #[derive(Debug)]
 pub struct ConcreteProgram {
-    pub procs: FnvHashMap<ItemPathBuf, KProc<TypedNode<Type>>>,
-    pub consts: FnvHashMap<ItemPathBuf, KConst<Type>>,
-    pub mems: FnvHashMap<ItemPathBuf, KMem<Type>>,
-    pub vars: FnvHashMap<ItemPathBuf, Var<Type>>,
-    pub structs: FnvHashMap<TypeId, CStruct>,
+    pub procs: FnvHashMap<ItemPathBuf, CProc>,
+    pub consts: FnvHashMap<ItemPathBuf, KConst<ReifiedType>>,
+    pub mems: FnvHashMap<ItemPathBuf, KMem<ReifiedType>>,
+    pub vars: FnvHashMap<ItemPathBuf, Var<ReifiedType>>,
+    // pub structs: FnvHashMap<TypeId, CStruct>,
 }
 
-fn substitutions(subs: &mut FnvHashMap<GenId, Type>, g: &Type, c: &Type) {
+fn substitutions(subs: &mut FnvHashMap<GenId, ReifiedType>, g: &Type, c: &ReifiedType) {
     match (g, c) {
-        (Type::Generic(g), c @ Type::Concrete(_)) => {
+        (Type::Generic(g), c) => {
             subs.insert(*g, c.clone());
         }
-        (Type::Concrete(g), Type::Concrete(c)) => {
-            if let (ConcreteType::Ptr(box g), ConcreteType::Ptr(box c)) = (g, c) {
+        (Type::Concrete(g), c) => {
+            if let (ConcreteType::Ptr(box g), ReifiedType::Ptr(box c)) = (g, c) {
                 substitutions(subs, g, c)
             }
         }
-        (_, Type::Generic(_)) => unreachable!(),
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CStruct {
     pub fields: FnvHashMap<SmolStr, Field>,
 }
 
-#[derive(Debug)]
+impl CStruct {
+    pub fn size(&self) -> usize {
+        self.fields.iter().map(|(_, f)| f.ty.size()).sum()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Field {
-    pub size: usize,
+    pub ty: ReifiedType,
     pub offset: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct CProc {
+    pub generics: FnvHashMap<SmolStr, GenId>,
+    pub vars: FnvHashMap<ItemPathBuf, ReifiedType>,
+    pub ins: Vec<ReifiedType>,
+    pub outs: Vec<ReifiedType>,
+    pub body: Vec<TypedNode<ReifiedType>>,
 }
 
 #[derive(Default)]
 pub struct Walker {
-    procs: FnvHashMap<ItemPathBuf, Option<KProc<TypedNode<Type>>>>,
-    consts: FnvHashMap<ItemPathBuf, Option<KConst<Type>>>,
-    mems: FnvHashMap<ItemPathBuf, Option<KMem<Type>>>,
-    vars: FnvHashMap<ItemPathBuf, Option<Var<Type>>>,
+    procs: FnvHashMap<ItemPathBuf, Option<CProc>>,
+    // structs: FnvHashMap<TypeId, CStruct>,
+    consts: FnvHashMap<ItemPathBuf, Option<KConst<ReifiedType>>>,
+    mems: FnvHashMap<ItemPathBuf, Option<KMem<ReifiedType>>>,
+    vars: FnvHashMap<ItemPathBuf, Option<Var<ReifiedType>>>,
 }
 
 impl Walker {
@@ -76,15 +92,7 @@ impl Walker {
             }
             let mut this = Self::default();
 
-            let body = this.walk_body(&program, &main.body, &main.vars, &Default::default())?;
-            let main = KProc {
-                generics: Default::default(),
-                vars: main.vars.clone(),
-                span: main.span,
-                ins: Default::default(),
-                outs: main.outs.clone(),
-                body,
-            };
+            let main = this.walk_proc(&program, &path!(main), &Default::default())?;
             this.procs.insert(path!(main), Some(main));
             let procs = this
                 .procs
@@ -132,74 +140,90 @@ impl Walker {
                 })
                 .collect::<Result<_, _>>()?;
 
-            let structs = program
-                .structs
-                .into_iter()
-                .map(|(_, i)| {
-                    (i.id, {
-                        let mut offset = 0;
-                        let mut fields = i
-                            .fields
-                            .into_iter()
-                            .map(|(n, t)| {
-                                let f = match t {
-                                    Type::Generic(_) => todo!(),
-                                    Type::Concrete(c) => match c {
-                                        ConcreteType::Ptr(_) => 8,
-                                        ConcreteType::Primitive(p) => match p {
-                                            Primitive::Void => 0,
-                                            Primitive::Bool => 1,
-                                            Primitive::Char => 1,
-                                            Primitive::U64 => 8,
-                                            Primitive::U32 => 4,
-                                            Primitive::U16 => 2,
-                                            Primitive::U8 => 1,
-                                            Primitive::I64 => 8,
-                                            Primitive::I32 => 4,
-                                            Primitive::I16 => 2,
-                                            Primitive::I8 => 1,
-                                        },
-                                        ConcreteType::Custom(_) => todo!(),
-                                    },
-                                };
-                                (n, f)
-                            })
-                            .collect::<Vec<_>>();
-                        fields.sort_by_key(|(_, s)| *s);
-                        let fields = fields
-                            .into_iter()
-                            .map(|(n, s)| {
-                                let f = Field { size: s, offset };
-                                offset += s;
-
-                                (n, f)
-                            })
-                            .collect();
-
-                        CStruct { fields }
-                    })
-                })
-                .collect();
-
             Ok(ConcreteProgram {
                 procs,
                 consts,
                 mems,
                 vars,
-                structs,
+                // structs: this.structs,
             })
         } else {
             Error::from(ConcreteError::NoEntry).error()
         }
     }
 
+    fn walk_proc(
+        &mut self,
+        program: &TypecheckedProgram,
+        path: &ItemPathBuf,
+        gensubs: &FnvHashMap<GenId, ReifiedType>,
+    ) -> Result<CProc, Error> {
+        let proc = program.procs.get(dbg! {path}).unwrap();
+        let body = self.walk_body(program, &proc.body, &proc.vars, gensubs)?;
+
+        let vars = proc
+            .vars
+            .iter()
+            .map(|(p, t)| Ok((p.clone(), program.engine.reify(gensubs, t.ty)?)))
+            .collect::<Result<_, String>>();
+        let vars = match vars {
+            Ok(vars) => vars,
+            Err(message) => {
+                return error(
+                    proc.span,
+                    ErrorKind::UnificationError(message),
+                    "Couldn't reify var types for this proc",
+                )
+            }
+        };
+
+        let ins = proc
+            .ins
+            .iter()
+            .map(|t| program.engine.reify(gensubs, *t))
+            .collect::<Result<_, String>>();
+        let ins = match ins {
+            Ok(ins) => ins,
+            Err(message) => {
+                return error(
+                    proc.span,
+                    ErrorKind::UnificationError(message),
+                    "Couldn't reify ins types for this proc",
+                )
+            }
+        };
+        let outs = proc
+            .outs
+            .iter()
+            .map(|t| program.engine.reify(gensubs, *t))
+            .collect::<Result<_, String>>();
+        let outs = match outs {
+            Ok(outs) => outs,
+            Err(message) => {
+                return error(
+                    proc.span,
+                    ErrorKind::UnificationError(message),
+                    "Couldn't reify outs types for this proc",
+                )
+            }
+        };
+
+        Ok(CProc {
+            generics: proc.generics.clone(),
+            vars,
+            ins,
+            outs,
+            body,
+        })
+    }
+
     fn walk_body(
         &mut self,
         program: &TypecheckedProgram,
         body: &[TypedNode<TermId>],
-        local_vars: &FnvHashMap<ItemPathBuf, Var<Type>>,
-        gensubs: &FnvHashMap<GenId, Type>,
-    ) -> Result<Vec<TypedNode<Type>>, Error> {
+        local_vars: &FnvHashMap<ItemPathBuf, Var<TermId>>,
+        gensubs: &FnvHashMap<GenId, ReifiedType>,
+    ) -> Result<Vec<TypedNode<ReifiedType>>, Error> {
         let mut concrete_body = Vec::new();
         for node in body {
             let node = self.walk_node(program, node, local_vars, gensubs)?;
@@ -212,22 +236,22 @@ impl Walker {
         &mut self,
         program: &TypecheckedProgram,
         node: &TypedNode<TermId>,
-        local_vars: &FnvHashMap<ItemPathBuf, Var<Type>>,
-        gensubs: &FnvHashMap<GenId, Type>,
-    ) -> Result<TypedNode<Type>, Error> {
+        local_vars: &FnvHashMap<ItemPathBuf, Var<TermId>>,
+        gensubs: &FnvHashMap<GenId, ReifiedType>,
+    ) -> Result<TypedNode<ReifiedType>, Error> {
         match &node.node {
             TypedIr::GVarUse(var_name) => {
                 if let Some(_var) = program.vars.get(var_name) {
                     let ins = node
                         .ins
                         .iter()
-                        .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                        .map(|t| program.engine.reify(gensubs, *t))
                         .collect::<Result<Vec<_>, _>>()
                         .unwrap();
                     let outs = node
                         .outs
                         .iter()
-                        .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                        .map(|t| program.engine.reify(gensubs, *t))
                         .collect::<Result<Vec<_>, _>>()
                         .unwrap();
 
@@ -246,13 +270,13 @@ impl Walker {
                     let ins = node
                         .ins
                         .iter()
-                        .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                        .map(|t| program.engine.reify(gensubs, *t))
                         .collect::<Result<Vec<_>, _>>()
                         .unwrap();
                     let outs = node
                         .outs
                         .iter()
-                        .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                        .map(|t| program.engine.reify(gensubs, *t))
                         .collect::<Result<Vec<_>, _>>()
                         .unwrap();
 
@@ -271,19 +295,19 @@ impl Walker {
                 let ins = node
                     .ins
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 let outs = node
                     .outs
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
 
                 if !self.mems.contains_key(mem_name) {
                     self.mems.insert(mem_name.clone(), None);
-                    let body: Vec<TypedNode<Type>> =
+                    let body: Vec<TypedNode<ReifiedType>> =
                         self.walk_body(program, &mem.body, local_vars, &Default::default())?;
                     let mem = KMem {
                         span: mem.span,
@@ -303,13 +327,13 @@ impl Walker {
                 let ins = node
                     .ins
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 let outs = node
                     .outs
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
 
@@ -326,19 +350,19 @@ impl Walker {
                 let ins = node
                     .ins
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 let outs = node
                     .outs
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
 
                 if !self.consts.contains_key(const_name) {
                     self.consts.insert(const_name.clone(), None);
-                    let body: Vec<TypedNode<Type>> =
+                    let body: Vec<TypedNode<ReifiedType>> =
                         self.walk_body(program, &const_.body, local_vars, &Default::default())?;
                     let const_ = KConst {
                         outs: const_.outs.clone(),
@@ -358,40 +382,44 @@ impl Walker {
             TypedIr::Call(p) => {
                 let callee = program.procs.get(p).unwrap();
 
-                let ins = node.ins.iter().map(|t| {
-                    match program.engine.reconstruct_substituting(gensubs, *t) {
+                let ins = node
+                    .ins
+                    .iter()
+                    .map(|t| match program.engine.reify(gensubs, *t) {
                         Ok(t) => Ok(t),
                         Err(e) => typecheck::error(
                             node.span,
                             typecheck::ErrorKind::UnificationError(e),
                             format!("Failure resolving term {t:?}"),
                         ),
-                    }
-                });
+                    });
 
-                let outs = node.outs.iter().map(|t| {
-                    match program.engine.reconstruct_substituting(gensubs, *t) {
+                let outs = node
+                    .outs
+                    .iter()
+                    .map(|t| match program.engine.reify(gensubs, *t) {
                         Ok(t) => Ok(t),
                         Err(e) => typecheck::error(
                             node.span,
                             typecheck::ErrorKind::UnificationError(e),
                             format!("Failure resolving term {t:?}"),
                         ),
-                    }
-                });
+                    });
 
                 let mut gensubs = FnvHashMap::default();
                 let mut ins2 = Vec::new();
                 let mut outs2 = Vec::new();
                 for (generic, instantiated) in callee.ins.iter().zip(ins) {
                     let instantiated = instantiated?;
+                    let generic = program.engine.reconstruct_lossy(*generic);
                     ins2.push(instantiated.clone());
-                    substitutions(&mut gensubs, generic, &instantiated)
+                    substitutions(&mut gensubs, &generic, &instantiated)
                 }
                 for (generic, instantiated) in callee.outs.iter().zip(outs) {
                     let instantiated = instantiated?;
+                    let generic = program.engine.reconstruct_lossy(*generic);
                     outs2.push(instantiated.clone());
-                    substitutions(&mut gensubs, generic, &instantiated)
+                    substitutions(&mut gensubs, &generic, &instantiated)
                 }
 
                 let mut substr = String::new();
@@ -408,16 +436,7 @@ impl Walker {
 
                 if !self.procs.contains_key(&callee_name) {
                     self.procs.insert(callee_name.clone(), None);
-                    let body: Vec<TypedNode<Type>> =
-                        self.walk_body(program, &callee.body, &callee.vars, &gensubs)?;
-                    let callee = KProc {
-                        generics: Default::default(),
-                        vars: callee.vars.clone(),
-                        span: callee.span,
-                        ins: ins2.clone(),
-                        outs: outs2.clone(),
-                        body,
-                    };
+                    let callee = self.walk_proc(program, p, &gensubs)?;
                     self.procs.insert(callee_name.clone(), Some(callee));
                 }
 
@@ -432,13 +451,13 @@ impl Walker {
                 let ins = node
                     .ins
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 let outs = node
                     .outs
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
 
@@ -453,13 +472,13 @@ impl Walker {
                 let ins = node
                     .ins
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 let outs = node
                     .outs
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 let body = self.walk_body(program, body, local_vars, gensubs)?;
@@ -478,13 +497,13 @@ impl Walker {
                 let ins = node
                     .ins
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 let outs = node
                     .outs
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 let cond = self.walk_body(program, cond, local_vars, gensubs)?;
@@ -501,13 +520,13 @@ impl Walker {
                 let ins = node
                     .ins
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 let outs = node
                     .outs
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 let truth = self.walk_body(program, truth, local_vars, gensubs)?;
@@ -528,13 +547,13 @@ impl Walker {
                 let ins = node
                     .ins
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 let outs = node
                     .outs
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 let mut concrete_branches = Vec::new();
@@ -556,13 +575,13 @@ impl Walker {
                 let ins = node
                     .ins
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 let outs = node
                     .outs
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 Ok(TypedNode {
@@ -576,13 +595,13 @@ impl Walker {
                 let ins = node
                     .ins
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 let outs = node
                     .outs
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 Ok(TypedNode {
@@ -596,13 +615,13 @@ impl Walker {
                 let ins = node
                     .ins
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 let outs = node
                     .outs
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 Ok(TypedNode {
@@ -616,18 +635,18 @@ impl Walker {
                 let ins = node
                     .ins
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 let outs = node
                     .outs
                     .iter()
-                    .map(|t| program.engine.reconstruct_substituting(gensubs, *t))
+                    .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
 
                 let ty = match &ins[0] {
-                    Type::Concrete(ConcreteType::Ptr(box t)) => t.clone(),
+                    ReifiedType::Ptr(box t) => t.clone(),
                     ty => todo!("{ty:?}"),
                 };
                 Ok(TypedNode {

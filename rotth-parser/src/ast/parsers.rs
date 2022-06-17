@@ -562,23 +562,26 @@ pub(super) fn name_type_pair(
         })
 }
 
-pub(super) fn struct_() -> impl Parser<Token, Spanned<TopLevel>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn struct_() -> impl Parser<Token, Spanned<TopLevel>, Error = Simple<Token, Span>> {
     kw_struct()
+        .then(generics().or_not())
         .then(word())
         .then(kw_do())
         .then(name_type_pair().repeated())
         .then(kw_end())
-        .map_with_span(|((((struct_, name), do_), body), end), span| Spanned {
-            span,
-            inner: TopLevel::Struct(Struct {
-                struct_,
-                name,
-                do_,
-                body,
-                end,
-            }),
-        })
+        .map_with_span(
+            |(((((struct_, generics), name), do_), body), end), span| Spanned {
+                span,
+                inner: TopLevel::Struct(Struct {
+                    struct_,
+                    generics,
+                    name,
+                    do_,
+                    body,
+                    end,
+                }),
+            },
+        )
 }
 
 pub(super) fn include() -> impl Parser<Token, Spanned<TopLevel>, Error = Simple<Token, Span>> + Clone
