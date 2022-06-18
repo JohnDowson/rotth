@@ -7,8 +7,13 @@ use spanner::Spanned;
 pub enum Type {
     Ptr(Box<Self>),
     Primitive(Primitive),
-    Custom(ItemPathBuf),
-    CustomParametrised(Box<Self>, Spanned<GenericParams>),
+    Custom(Custom),
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct Custom {
+    pub name: ItemPathBuf,
+    pub params: Option<Spanned<GenericParams>>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -55,10 +60,12 @@ impl std::fmt::Debug for Type {
                 ty.fmt(f)
             }
             Type::Primitive(p) => p.fmt(f),
-            Type::Custom(s) => s.fmt(f),
-            Type::CustomParametrised(s, params) => {
-                s.fmt(f)?;
-                params.tys.fmt(f)
+            Type::Custom(Custom { name, params }) => {
+                name.fmt(f)?;
+                if let Some(params) = params {
+                    params.tys.fmt(f)?;
+                }
+                Ok(())
             }
         }
     }

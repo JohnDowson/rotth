@@ -16,14 +16,6 @@ use crate::{
     Error, ErrorKind,
 };
 
-#[derive(Debug, Clone)]
-pub enum TopLevel {
-    Proc(Vec<TypedNode<TermId, Intrinsic<TypeId>>>),
-    Const(Vec<TypedNode<TermId, Intrinsic<TypeId>>>),
-    Mem(),
-    Var(),
-}
-
 #[derive(Clone)]
 pub struct TypedNode<T: TypeRepr, I> {
     pub span: Span,
@@ -1858,99 +1850,101 @@ impl Walker {
                 generics,
             )?),
             types::Type::Primitive(ty) => Type::Concrete(ConcreteType::Primitive(*ty)),
-            types::Type::CustomParametrised(box bty, p) => {
-                let params = p.tys.iter().map(|t| t.inner.clone());
-                // .iter()
-                // .map(|ty| self.abstract_to_concrete_type(ty, generics))
-                // .collect::<Result<Vec<_>, _>>()?;
-                let ty = match bty {
-                    types::Type::Custom(btyp) => {
-                        if self.known_structs.get(btyp).is_some() {
-                            let proto = self.structs.get(btyp).unwrap();
-                            let mut proto2 = proto.clone();
-                            fn find_generic(t: &mut types::Type, gen: &str, param: types::Type) {
-                                match t {
-                                    types::Type::Ptr(box r) => find_generic(r, gen, param),
-                                    types::Type::Custom(p) => {
-                                        if let Some(n) = p.only() {
-                                            if n == gen {
-                                                *t = param;
-                                            }
-                                        }
-                                    }
-                                    types::Type::CustomParametrised(_, _) => todo!(),
-                                    types::Type::Primitive(_) => (),
-                                }
-                            }
-                            for (param, gen) in params.zip(proto.generics.iter()) {
-                                for t in proto2.fields.values_mut() {
-                                    find_generic(t, &*gen.inner, param.clone())
-                                }
-                            }
-                            let mut fields = FnvHashMap::default();
-                            for (n, ty) in proto2.fields {
-                                let ty = self.abstract_to_concrete_type(&ty, None)?;
-                                fields.insert(n, ty);
-                            }
-                            let id = self.type_id();
-                            self.known_structs
-                                .insert(proto2.name, Rc::new(KStruct { id, fields }));
+            types::Type::Custom(types::Custom {
+                name,
+                params: Some(params),
+            }) => {
+                let params = params.tys.iter().map(|t| t.inner.clone());
 
-                            Type::Concrete(ConcreteType::Custom(id))
-                        } else if let Some(Ref::Struct(ty)) = self.item_refs.get(btyp) {
-                            let ty = Spanned {
-                                span,
-                                inner: types::Type::Custom(ty.clone()),
-                            };
-                            self.abstract_to_concrete_type(&ty, generics)?
-                        } else if let Some(r) = self.unresloved_item_refs.get(btyp) {
-                            if let Ref::Struct(ty) = self.resolve(r.clone()) {
-                                let ty = Spanned {
-                                    span,
-                                    inner: types::Type::Custom(ty),
-                                };
-                                self.abstract_to_concrete_type(&ty, generics)?
-                            } else {
-                                todo!("This is a error yo")
+                fn find_generic(t: &mut types::Type, gen: &str, param: types::Type) {
+                    match t {
+                        types::Type::Ptr(box r) => find_generic(r, gen, param),
+                        types::Type::Custom(types::Custom { name, params: None }) => {
+                            if let Some(n) = name.only() {
+                                if n == gen {
+                                    *t = param;
+                                }
                             }
-                        } else if let Some(ty) = self.structs.get(btyp).cloned() {
-                            let mut fields = FnvHashMap::default();
-                            for (n, ty) in ty.fields {
-                                let ty = self.abstract_to_concrete_type(&ty, None)?;
-                                fields.insert(n, ty);
-                            }
-                            let id = self.type_id();
-                            self.known_structs
-                                .insert(ty.name, Rc::new(KStruct { id, fields }));
-                            Type::Concrete(ConcreteType::Custom(id))
-                        } else {
+                        }
+                        types::Type::Custom(types::Custom {
+                            name: _,
+                            params: Some(_),
+                        }) => {
                             todo!()
                         }
+                        types::Type::Primitive(_) => (),
                     }
-                    _ => unreachable!(),
+                }
+
+                let ty = if self.known_structs.get(name).is_some() {
+                    let proto = self.structs.get(name).unwrap();
+
+                    let mut proto2 = proto.clone();
+                    for (param, gen) in params.zip(proto.generics.iter()) {
+                        proto2.name.push(format!("{:?}", param));
+                        for t in proto2.fields.values_mut() {
+                            find_generic(t, &*gen.inner, param.clone())
+                        }
+                    }
+                    let mut fields = FnvHashMap::default();
+                    for (n, ty) in proto2.fields {
+                        let ty = self.abstract_to_concrete_type(&ty, None)?;
+                        fields.insert(n, ty);
+                    }
+                    let id = self.type_id();
+                    self.known_structs
+                        .insert(proto2.name, Rc::new(KStruct { id, fields }));
+
+                    Type::Concrete(ConcreteType::Custom(id))
+                } else if let Some(proto) = self.structs.get(name).cloned() {
+                    let mut proto2 = proto.clone();
+                    for (param, gen) in params.zip(proto.generics.iter()) {
+                        proto2.name.push(format!("{:?}", param));
+                        for t in proto2.fields.values_mut() {
+                            find_generic(t, &*gen.inner, param.clone())
+                        }
+                    }
+                    let mut fields = FnvHashMap::default();
+                    for (n, ty) in proto2.fields {
+                        let ty = self.abstract_to_concrete_type(&ty, None)?;
+                        fields.insert(n, ty);
+                    }
+                    let id = self.type_id();
+                    self.known_structs
+                        .insert(proto2.name, Rc::new(KStruct { id, fields }));
+
+                    Type::Concrete(ConcreteType::Custom(id))
+                } else {
+                    todo!()
                 };
                 ty
             }
-            types::Type::Custom(ty) => {
-                if let Some(ty) = self.known_structs.get(ty) {
+            types::Type::Custom(types::Custom { name, params: None }) => {
+                if let Some(ty) = self.known_structs.get(name) {
                     Type::Concrete(ConcreteType::Custom(ty.id))
-                } else if let Some(Ref::Struct(ty)) = self.item_refs.get(ty) {
+                } else if let Some(Ref::Struct(ty)) = self.item_refs.get(name) {
                     let ty = Spanned {
                         span,
-                        inner: types::Type::Custom(ty.clone()),
+                        inner: types::Type::Custom(types::Custom {
+                            name: ty.clone(),
+                            params: None,
+                        }),
                     };
                     self.abstract_to_concrete_type(&ty, generics)?
-                } else if let Some(r) = self.unresloved_item_refs.get(ty) {
+                } else if let Some(r) = self.unresloved_item_refs.get(name) {
                     if let Ref::Struct(ty) = self.resolve(r.clone()) {
                         let ty = Spanned {
                             span,
-                            inner: types::Type::Custom(ty),
+                            inner: types::Type::Custom(types::Custom {
+                                name: ty,
+                                params: None,
+                            }),
                         };
                         self.abstract_to_concrete_type(&ty, generics)?
                     } else {
                         todo!("This is a error yo")
                     }
-                } else if let Some(ty) = self.structs.get(ty).cloned() {
+                } else if let Some(ty) = self.structs.get(name).cloned() {
                     let mut fields = FnvHashMap::default();
                     for (n, ty) in ty.fields {
                         let ty = self.abstract_to_concrete_type(&ty, None)?;
@@ -1960,7 +1954,7 @@ impl Walker {
                     self.known_structs
                         .insert(ty.name, Rc::new(KStruct { id, fields }));
                     Type::Concrete(ConcreteType::Custom(id))
-                } else if let Some(g) = ty.only() {
+                } else if let Some(g) = name.only() {
                     if let Some(id) = generics.and_then(|gs| gs.get(g)) {
                         Type::Generic(*id)
                     } else {

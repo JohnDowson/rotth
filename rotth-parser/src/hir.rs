@@ -6,7 +6,7 @@ use crate::{
         self, Cast, Expr, ItemPath, ItemPathBuf, Literal, ProcSignature, ResolvedFile,
         ResolvedItem, ResolvedStruct, Word,
     },
-    types::{StructIndex, Type},
+    types::{Custom, StructIndex, Type},
 };
 use fnv::FnvHashMap;
 use smol_str::SmolStr;
@@ -346,13 +346,12 @@ impl Walker {
             fn resolve_field(current_path: &ItemPath, ty: Type) -> Type {
                 match ty {
                     ty @ Type::Primitive(_) | ty @ Type::Ptr(_) => ty,
-                    Type::Custom(type_name) => {
-                        let type_name = current_path.join(&type_name);
-                        Type::Custom(type_name)
-                    }
-                    Type::CustomParametrised(box ty, params) => {
-                        let ty = resolve_field(current_path, ty);
-                        Type::CustomParametrised(box ty, params)
+                    Type::Custom(Custom { name, params }) => {
+                        let type_name = current_path.join(&name);
+                        Type::Custom(Custom {
+                            name: type_name,
+                            params,
+                        })
                     }
                 }
             }

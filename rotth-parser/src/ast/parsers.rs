@@ -5,7 +5,7 @@ use somok::Either;
 use spanner::{Span, Spanned};
 use std::path::{Path, PathBuf};
 
-use crate::types::{Primitive, Type};
+use crate::types::{Custom, Primitive, Type};
 
 use super::{
     Bind, Cast, Cond, CondBranch, Const, ConstSignature, Else, Expr, FieldAccess, File,
@@ -30,7 +30,7 @@ pub(super) fn ty() -> impl Parser<Token, Spanned<Type>, Error = Simple<Token, Sp
             .repeated()
             .then(path().then(generic_params.or_not()))
             .map_with_span(|(ptr, (ty, params)), span| {
-                let ty = if let Some(type_name) = ty.only() {
+                let mut ty = if let Some(type_name) = ty.only() {
                     match type_name {
                         "()" => Type::Primitive(Primitive::Void),
                         "bool" => Type::Primitive(Primitive::Bool),
@@ -45,15 +45,16 @@ pub(super) fn ty() -> impl Parser<Token, Spanned<Type>, Error = Simple<Token, Sp
                         "i32" => Type::Primitive(Primitive::I32),
                         "i16" => Type::Primitive(Primitive::I16),
                         "i8" => Type::Primitive(Primitive::I8),
-                        _ => Type::Custom(ty.inner),
+                        _ => Type::Custom(Custom {
+                            name: ty.inner,
+                            params,
+                        }),
                     }
                 } else {
-                    Type::Custom(ty.inner)
-                };
-                let mut ty = if let Some(params) = params {
-                    Type::CustomParametrised(box ty, params)
-                } else {
-                    ty
+                    Type::Custom(Custom {
+                        name: ty.inner,
+                        params,
+                    })
                 };
                 for _ in ptr {
                     ty = Type::Ptr(box ty)

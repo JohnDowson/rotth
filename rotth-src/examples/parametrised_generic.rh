@@ -9,6 +9,6 @@ var FOO: Vec[u64]
 
 proc main: u64 do
     var BAR: Vec
-    FOO BAR &?& ->buf bind b: &>&>char do end
+    FOO ->buf BAR ->buf bind a: &>&>u64 b: &>&>char do end
     0
 end
