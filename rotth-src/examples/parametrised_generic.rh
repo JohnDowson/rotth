@@ -4,11 +4,14 @@ struct [T] Vec do
     buf: &>T
 end
 
-mem FOO_BUF do 8 32 * end
 var FOO: Vec[u64]
+var COMPLEX: Vec[Vec[char]]
 
 proc main: u64 do
     var BAR: Vec
-    FOO ->buf BAR ->buf bind a: &>&>u64 b: &>&>char do end
+    FOO ->buf
+    BAR ->buf
+    COMPLEX ->buf
+    bind f: &>&>u64 b: &>&>u8 c: &>&>Vec[char] do end
     0
 end

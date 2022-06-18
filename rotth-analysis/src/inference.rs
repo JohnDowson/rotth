@@ -95,6 +95,7 @@ impl ReifiedType {
 }
 #[derive(Debug)]
 pub struct StructInfo {
+    pub typename: ItemPathBuf,
     pub fields: FnvHashMap<SmolStr, TermId>,
 }
 
@@ -153,7 +154,10 @@ pub fn type_to_info_with_generic_substitution_table(
                         (n.clone(), t)
                     })
                     .collect();
-                let s = StructInfo { fields };
+                let s = StructInfo {
+                    fields,
+                    typename: s.typename.clone(),
+                };
                 engine.structs.insert(*t, s);
 
                 TypeInfo::Struct(*t)
@@ -208,7 +212,10 @@ pub fn type_to_info(
                         (n.clone(), t)
                     })
                     .collect();
-                let s = StructInfo { fields };
+                let s = StructInfo {
+                    fields,
+                    typename: s.typename.clone(),
+                };
                 engine.structs.insert(*t, s);
 
                 TypeInfo::Struct(*t)
@@ -236,8 +243,8 @@ fn write_info(
             write!(f, "Ref({:?})", id.0)
         }
         TypeInfo::Ptr(id) => {
-            write!(f, "&>")?;
-            write_info(&vars[id.0], vars, structs, f)
+            write!(f, "&>{}", id.0)
+            // write_info(&vars[id.0], vars, structs, f)
         }
         TypeInfo::Generic(g) => {
             write!(f, "{:?}", g)
@@ -254,7 +261,7 @@ fn write_info(
         TypeInfo::I16 => write!(f, "i16"),
         TypeInfo::I8 => write!(f, "i8"),
         TypeInfo::Struct(s) => {
-            writeln!(f, "struct {:?}: {{", s)?;
+            writeln!(f, "struct {:?} {:?}: {{", &structs[s].typename, s)?;
             for (n, t) in &structs[s].fields {
                 write!(f, "\t\t{n}: ")?;
                 write_info(&vars[t.0], vars, structs, f)?;
@@ -395,11 +402,14 @@ impl Engine {
             (Ptr(a), Ptr(b)) => self.unify(a, b),
 
             // If no previous attempts to unify were successful, raise an error
-            (_, _) => Err(format!(
-                "Conflict between {:?} and {:?}",
-                self.reconstruct(a),
-                self.reconstruct(b)
-            )),
+            (_, _) => {
+                dbg! {&self};
+                Err(format!(
+                    "Conflict between {:?} and {:?}",
+                    self.reconstruct(a),
+                    self.reconstruct(b)
+                ))
+            }
         }
     }
 

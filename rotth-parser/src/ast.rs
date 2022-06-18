@@ -420,6 +420,10 @@ impl ItemPath {
         self.segments.last().cloned()
     }
 
+    pub fn segment_mut(&mut self, n: usize) -> Option<&mut SmolStr> {
+        self.segments.get_mut(n)
+    }
+
     pub fn drop_first(&self) -> Option<&Self> {
         self.segments
             .split_first()

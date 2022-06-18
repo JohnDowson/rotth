@@ -7,7 +7,7 @@ use rotth_parser::{
 use smol_str::SmolStr;
 use somok::{PartitionThree, Somok, Ternary};
 use spanner::{Span, Spanned};
-use std::rc::Rc;
+use std::{fmt::Write, rc::Rc};
 
 use crate::{
     error,
@@ -218,6 +218,7 @@ pub struct Var<T> {
 #[derive(Debug, Clone)]
 pub struct KStruct {
     pub id: TypeId,
+    pub typename: ItemPathBuf,
     pub fields: FnvHashMap<SmolStr, Type>,
 }
 
@@ -288,8 +289,14 @@ impl Walker {
                 fields.insert(n.clone(), ty);
             }
             let id = this.type_id();
-            this.known_structs
-                .insert(struct_.name, Rc::new(KStruct { id, fields }));
+            this.known_structs.insert(
+                struct_.name.clone(),
+                Rc::new(KStruct {
+                    id,
+                    fields,
+                    typename: struct_.name,
+                }),
+            );
         }
 
         let (consts, mems_vars, items) =
@@ -1856,67 +1863,12 @@ impl Walker {
             }) => {
                 let params = params.tys.iter().map(|t| t.inner.clone());
 
-                fn find_generic(t: &mut types::Type, gen: &str, param: types::Type) {
-                    match t {
-                        types::Type::Ptr(box r) => find_generic(r, gen, param),
-                        types::Type::Custom(types::Custom { name, params: None }) => {
-                            if let Some(n) = name.only() {
-                                if n == gen {
-                                    *t = param;
-                                }
-                            }
-                        }
-                        types::Type::Custom(types::Custom {
-                            name: _,
-                            params: Some(_),
-                        }) => {
-                            todo!()
-                        }
-                        types::Type::Primitive(_) => (),
-                    }
-                }
-
-                let ty = if self.known_structs.get(name).is_some() {
-                    let proto = self.structs.get(name).unwrap();
-
-                    let mut proto2 = proto.clone();
-                    for (param, gen) in params.zip(proto.generics.iter()) {
-                        proto2.name.push(format!("{:?}", param));
-                        for t in proto2.fields.values_mut() {
-                            find_generic(t, &*gen.inner, param.clone())
-                        }
-                    }
-                    let mut fields = FnvHashMap::default();
-                    for (n, ty) in proto2.fields {
-                        let ty = self.abstract_to_concrete_type(&ty, None)?;
-                        fields.insert(n, ty);
-                    }
-                    let id = self.type_id();
-                    self.known_structs
-                        .insert(proto2.name, Rc::new(KStruct { id, fields }));
-
-                    Type::Concrete(ConcreteType::Custom(id))
-                } else if let Some(proto) = self.structs.get(name).cloned() {
-                    let mut proto2 = proto.clone();
-                    for (param, gen) in params.zip(proto.generics.iter()) {
-                        proto2.name.push(format!("{:?}", param));
-                        for t in proto2.fields.values_mut() {
-                            find_generic(t, &*gen.inner, param.clone())
-                        }
-                    }
-                    let mut fields = FnvHashMap::default();
-                    for (n, ty) in proto2.fields {
-                        let ty = self.abstract_to_concrete_type(&ty, None)?;
-                        fields.insert(n, ty);
-                    }
-                    let id = self.type_id();
-                    self.known_structs
-                        .insert(proto2.name, Rc::new(KStruct { id, fields }));
-
-                    Type::Concrete(ConcreteType::Custom(id))
-                } else {
-                    todo!()
-                };
+                let ty =
+                    if self.known_structs.get(name).is_some() || self.structs.get(name).is_some() {
+                        self.instantiate_type(name, params)?
+                    } else {
+                        todo!()
+                    };
                 ty
             }
             types::Type::Custom(types::Custom { name, params: None }) => {
@@ -1951,8 +1903,14 @@ impl Walker {
                         fields.insert(n, ty);
                     }
                     let id = self.type_id();
-                    self.known_structs
-                        .insert(ty.name, Rc::new(KStruct { id, fields }));
+                    self.known_structs.insert(
+                        ty.name.clone(),
+                        Rc::new(KStruct {
+                            id,
+                            fields,
+                            typename: ty.name,
+                        }),
+                    );
                     Type::Concrete(ConcreteType::Custom(id))
                 } else if let Some(g) = name.only() {
                     if let Some(id) = generics.and_then(|gs| gs.get(g)) {
@@ -1975,6 +1933,76 @@ impl Walker {
         };
 
         kind.okay()
+    }
+
+    fn instantiate_type(
+        &mut self,
+        name: &ItemPath,
+        params: impl Iterator<Item = types::Type>,
+    ) -> Result<Type, Error> {
+        fn substitute_and_rename(
+            proto: &types::Struct,
+            params: impl Iterator<Item = types::Type>,
+        ) -> types::Struct {
+            fn find_generic(t: &mut types::Type, gen: &str, param: types::Type) {
+                match t {
+                    types::Type::Ptr(box r) => find_generic(r, gen, param),
+                    types::Type::Custom(types::Custom { name, params: None }) => {
+                        if let Some(n) = name.only() {
+                            if n == gen {
+                                *t = param;
+                            }
+                        }
+                    }
+                    types::Type::Custom(types::Custom {
+                        name: _,
+                        params: Some(_),
+                    }) => {
+                        todo!()
+                    }
+                    types::Type::Primitive(_) => (),
+                }
+            }
+            let mut proto2 = proto.clone();
+            let mut paramstr = String::from("[");
+            for (i, (param, gen)) in params.zip(proto.generics.iter()).enumerate() {
+                if i == 0 {
+                    write!(paramstr, "{:?}", param).unwrap();
+                } else {
+                    write!(paramstr, " {:?}", param).unwrap();
+                }
+                for t in proto2.fields.values_mut() {
+                    find_generic(t, &*gen.inner, param.clone())
+                }
+            }
+            write!(paramstr, "]").unwrap();
+            proto2.name.push(paramstr);
+            proto2
+        }
+
+        let proto = self.structs.get(name).unwrap();
+        let proto2 = substitute_and_rename(proto, params);
+        let mut fields = FnvHashMap::default();
+        for (n, ty) in proto2.fields {
+            let ty = self.abstract_to_concrete_type(&ty, None)?;
+            fields.insert(n, ty);
+        }
+        let id = if let Some(s) = self.known_structs.get(&proto2.name) {
+            s.id
+        } else {
+            let id = self.type_id();
+            self.known_structs.insert(
+                proto2.name.clone(),
+                Rc::new(KStruct {
+                    id,
+                    fields,
+                    typename: proto2.name,
+                }),
+            );
+            id
+        };
+
+        Ok(Type::Concrete(ConcreteType::Custom(id)))
     }
 
     fn is_proc(&self, name: &ItemPath) -> bool {
