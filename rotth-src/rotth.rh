@@ -1,4 +1,4 @@
-include "./std.rh"
+include puts putu core::ptr+ streq absdiff from "./std.rh"
 
 ; Token is:
 struct Token do
@@ -18,7 +18,7 @@ end
 
 proc main: u64 do
 "proc main : u64 do
-    0
+    10 6 * 9 +
 end"
     bind n: u64 s: &>char do
         n s while over 0 != do
@@ -34,8 +34,8 @@ end
 proc process-token &>char u64 &>char do
     var tok: Token
     bind buf: &>char tn: u64 ts: &>char do
-        buf cast u64 ts cast u64 absdiff tok ->loc !u64
-        tn ts type-of-token tok ->kind !u64
+        buf cast u64 ts cast u64 absdiff tok -> loc !u64
+        tn ts type-of-token tok -> kind !u64
         tn ts puts "\n" puts
         tok put-token
     end
@@ -43,8 +43,8 @@ end
 
 proc put-token &>Token do
     bind tok: &>Token do
-        " loc: " puts tok ->loc @u64 putu "\n" puts
-        " kind: " puts tok ->kind @u64 putu "\n" puts
+        " loc: " puts tok -> loc @u64 putu "\n" puts
+        " kind: " puts tok -> kind @u64 putu "\n" puts
     end
 end
 

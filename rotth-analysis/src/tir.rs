@@ -5,33 +5,36 @@ use rotth_parser::{
     types::{self, Primitive, StructIndex},
 };
 use smol_str::SmolStr;
-use somok::Somok;
+use somok::{PartitionThree, Somok, Ternary};
 use spanner::{Span, Spanned};
 use std::rc::Rc;
 
 use crate::{
     error,
     inference::{type_to_info, Engine, ReifiedType, TermId, TypeInfo},
-    typecheck::{self, THeap, TypeStack},
+    typecheck::{self, NodeRepr, THeap, TypeRepr, TypeStack},
     Error, ErrorKind,
 };
 
 #[derive(Debug, Clone)]
 pub enum TopLevel {
-    Proc(Vec<TypedNode<TermId>>),
-    Const(Vec<TypedNode<TermId>>),
+    Proc(Vec<TypedNode<TermId, Intrinsic<TypeId>>>),
+    Const(Vec<TypedNode<TermId, Intrinsic<TypeId>>>),
     Mem(),
     Var(),
 }
+
 #[derive(Clone)]
-pub struct TypedNode<T> {
+pub struct TypedNode<T: TypeRepr, I> {
     pub span: Span,
-    pub node: TypedIr<T>,
+    pub node: TypedIr<T, I>,
     pub ins: Vec<T>,
     pub outs: Vec<T>,
 }
 
-impl<T: std::fmt::Debug> std::fmt::Debug for TypedNode<T> {
+pub type TirNode = TypedNode<TermId, Intrinsic<TermId>>;
+
+impl<T: TypeRepr + std::fmt::Debug, I: std::fmt::Debug> std::fmt::Debug for TypedNode<T, I> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if f.alternate() {
             write!(
@@ -50,22 +53,22 @@ impl<T: std::fmt::Debug> std::fmt::Debug for TypedNode<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Bind<T> {
+pub struct Bind<T: NodeRepr> {
     pub bindings: Vec<Spanned<hir::Binding>>,
-    pub body: Vec<TypedNode<T>>,
+    pub body: Vec<T>,
 }
 #[derive(Debug, Clone)]
-pub struct While<T> {
-    pub cond: Vec<TypedNode<T>>,
-    pub body: Vec<TypedNode<T>>,
+pub struct While<T: NodeRepr> {
+    pub cond: Vec<T>,
+    pub body: Vec<T>,
 }
 #[derive(Clone)]
-pub struct If<T> {
-    pub truth: Vec<TypedNode<T>>,
-    pub lie: Option<Vec<TypedNode<T>>>,
+pub struct If<T: NodeRepr> {
+    pub truth: Vec<T>,
+    pub lie: Option<Vec<T>>,
 }
 
-impl<T: std::fmt::Debug> std::fmt::Debug for If<T> {
+impl<T: NodeRepr + std::fmt::Debug> std::fmt::Debug for If<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut d = f.debug_struct("If");
         d.field("truth", &self.truth);
@@ -77,13 +80,13 @@ impl<T: std::fmt::Debug> std::fmt::Debug for If<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Cond<T> {
-    pub branches: Vec<CondBranch<T>>,
+pub struct Cond<T: TypeRepr, I> {
+    pub branches: Vec<CondBranch<T, I>>,
 }
 #[derive(Debug, Clone)]
-pub struct CondBranch<T> {
-    pub pattern: TypedNode<T>,
-    pub body: Vec<TypedNode<T>>,
+pub struct CondBranch<T: TypeRepr, I> {
+    pub pattern: TypedNode<T, I>,
+    pub body: Vec<TypedNode<T, I>>,
 }
 
 #[derive(Debug, Clone)]
@@ -93,25 +96,25 @@ pub struct FieldAccess<T> {
 }
 
 #[derive(Clone)]
-pub enum TypedIr<T> {
+pub enum TypedIr<T: TypeRepr, I> {
     MemUse(ItemPathBuf),
     GVarUse(ItemPathBuf),
     LVarUse(ItemPathBuf),
     BindingUse(ItemPathBuf),
     ConstUse(ItemPathBuf),
     Call(ItemPathBuf),
-    Intrinsic(hir::Intrinsic),
-    Bind(Bind<T>),
-    While(While<T>),
-    If(If<T>),
-    Cond(Cond<T>),
+    Intrinsic(I),
+    Bind(Bind<TypedNode<T, I>>),
+    While(While<TypedNode<T, I>>),
+    If(If<TypedNode<T, I>>),
+    Cond(Cond<T, I>),
     Literal(Literal),
     IgnorePattern,
     Return,
     FieldAccess(FieldAccess<T>),
 }
 
-impl<T: std::fmt::Debug> std::fmt::Debug for TypedIr<T> {
+impl<T: TypeRepr + std::fmt::Debug, I: std::fmt::Debug> std::fmt::Debug for TypedIr<T, I> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::GVarUse(arg0) => f.debug_tuple("GVarUse").field(arg0).finish(),
@@ -207,12 +210,12 @@ pub struct KProc<T> {
 pub struct KConst<T> {
     pub outs: Vec<Type>,
     pub span: Span,
-    pub body: Vec<TypedNode<T>>,
+    pub body: Vec<T>,
 }
 #[derive(Debug, Clone)]
 pub struct KMem<T> {
     pub span: Span,
-    pub body: Vec<TypedNode<T>>,
+    pub body: Vec<T>,
 }
 #[derive(Debug, Clone)]
 
@@ -220,7 +223,7 @@ pub struct Var<T> {
     pub ty: T,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct KStruct {
     pub id: TypeId,
     pub fields: FnvHashMap<SmolStr, Type>,
@@ -238,11 +241,11 @@ pub enum Ref {
 #[derive(Debug)]
 pub struct Walker {
     known_procs: FnvHashMap<ItemPathBuf, Rc<KProc<Spanned<Hir>>>>,
-    known_gvars: FnvHashMap<ItemPathBuf, ReifiedType>,
-    known_mems: FnvHashMap<ItemPathBuf, Rc<KMem<TermId>>>,
+    known_gvars: FnvHashMap<ItemPathBuf, TermId>,
+    known_mems: FnvHashMap<ItemPathBuf, Rc<KMem<TirNode>>>,
     known_structs: FnvHashMap<ItemPathBuf, Rc<KStruct>>,
-    checked_consts: FnvHashMap<ItemPathBuf, Rc<KConst<TermId>>>,
-    checked_procs: FnvHashMap<ItemPathBuf, KProc<TypedNode<TermId>>>,
+    checked_consts: FnvHashMap<ItemPathBuf, Rc<KConst<TirNode>>>,
+    checked_procs: FnvHashMap<ItemPathBuf, KProc<TypedNode<TermId, Intrinsic<TermId>>>>,
     item_refs: FnvHashMap<ItemPathBuf, Ref>,
     unresloved_item_refs: FnvHashMap<ItemPathBuf, ItemPathBuf>,
     engine: Engine,
@@ -253,9 +256,9 @@ pub struct Walker {
 
 #[derive(Debug)]
 pub struct TypecheckedProgram {
-    pub procs: FnvHashMap<ItemPathBuf, KProc<TypedNode<TermId>>>,
-    pub consts: FnvHashMap<ItemPathBuf, KConst<TermId>>,
-    pub mems: FnvHashMap<ItemPathBuf, KMem<TermId>>,
+    pub procs: FnvHashMap<ItemPathBuf, KProc<TypedNode<TermId, Intrinsic<TermId>>>>,
+    pub consts: FnvHashMap<ItemPathBuf, KConst<TirNode>>,
+    pub mems: FnvHashMap<ItemPathBuf, KMem<TirNode>>,
     pub vars: FnvHashMap<ItemPathBuf, ReifiedType>,
     pub structs: FnvHashMap<ItemPathBuf, KStruct>,
     pub engine: Engine,
@@ -297,15 +300,35 @@ impl Walker {
                 .insert(struct_.name, Rc::new(KStruct { id, fields }));
         }
 
-        for (path, def) in ast {
+        let (consts, mems_vars, items) =
+            ast.into_iter()
+                .partition_three::<Vec<_>, _>(|(_, i)| match i {
+                    hir::TopLevel::Ref(_) => Ternary::Third,
+                    hir::TopLevel::Proc(_) => Ternary::Third,
+                    hir::TopLevel::Const(_) => Ternary::First,
+                    hir::TopLevel::Mem(_) => Ternary::Second,
+                    hir::TopLevel::Var(_) => Ternary::Second,
+                });
+        for (path, def) in consts {
+            match def {
+                hir::TopLevel::Const(const_) => this.register_const(path, const_)?,
+                _ => unreachable!(),
+            }
+        }
+        for (path, def) in mems_vars {
+            match def {
+                hir::TopLevel::Mem(mem) => this.register_mem(path, mem)?,
+                hir::TopLevel::Var(var) => this.register_var(path, var)?,
+                _ => unreachable!(),
+            }
+        }
+        for (path, def) in items {
             match def {
                 hir::TopLevel::Ref(referee) => {
                     this.unresloved_item_refs.insert(path, referee);
                 }
                 hir::TopLevel::Proc(proc) => this.register_proc(path, proc)?,
-                hir::TopLevel::Const(const_) => this.register_const(path, const_)?,
-                hir::TopLevel::Mem(mem) => this.register_mem(path, mem)?,
-                hir::TopLevel::Var(var) => this.register_var(path, var)?,
+                _ => unreachable!(),
             }
         }
         this.resolve_refs()?;
@@ -336,7 +359,10 @@ impl Walker {
                 .into_iter()
                 .map(|(a, b)| (a, Rc::try_unwrap(b).unwrap()))
                 .collect(),
-            vars: known_gvars,
+            vars: known_gvars
+                .into_iter()
+                .map(|(p, t)| (p, engine.reify(&Default::default(), t).unwrap()))
+                .collect(),
             engine,
         }
         .okay()
@@ -495,21 +521,17 @@ impl Walker {
         let ty = self.abstract_to_concrete_type(&ty, None)?;
         let ty = type_to_info(&mut self.engine, &self.known_structs, &ty, true);
         let ty = self.engine.insert(ty);
-        let ty = self.engine.reify(&Default::default(), ty);
-        let ty = match ty {
-            Ok(ty) => ty,
-            Err(message) => {
-                return error(
-                    span,
-                    ErrorKind::UnificationError(message),
-                    "Can't reify the type of this var",
-                )
-            }
-        };
+        if self.engine.is_real(&Default::default(), ty) {
+            self.known_gvars.insert(path, ty);
 
-        self.known_gvars.insert(path, ty);
-
-        Ok(())
+            Ok(())
+        } else {
+            error(
+                span,
+                ErrorKind::UnificationError("This `var` has incomplete type".to_string()),
+                "Generic types in global variables must be parametrised",
+            )
+        }
     }
 
     fn register_const(&mut self, path: ItemPathBuf, const_: hir::Const) -> Result<(), Error> {
@@ -603,7 +625,7 @@ impl Walker {
         proc_name: &ItemPath,
         span: Span,
         in_const: bool,
-    ) -> Result<TypedNode<TermId>, Error> {
+    ) -> Result<TypedNode<TermId, Intrinsic<TermId>>, Error> {
         if in_const {
             return error(
                 span,
@@ -669,10 +691,10 @@ impl Walker {
         &mut self,
         ins: &mut TypeStack,
         heap: &mut simplearena::Heap<typecheck::TypeFrame, 0>,
-        const_: Rc<KConst<TermId>>,
+        const_: Rc<KConst<TirNode>>,
         const_name: &ItemPath,
         span: Span,
-    ) -> TypedNode<TermId> {
+    ) -> TypedNode<TermId, Intrinsic<TermId>> {
         let outs: Vec<TermId> = const_
             .outs
             .iter()
@@ -705,7 +727,7 @@ impl Walker {
         generics: Option<&FnvHashMap<SmolStr, GenId>>,
         expected_outs: Option<&TypeStack>,
         in_const: bool,
-    ) -> Result<Vec<TypedNode<TermId>>, Error> {
+    ) -> Result<Vec<TirNode>, Error> {
         let mut checked_body = Vec::new();
         for node in body {
             let node = match &node.inner {
@@ -724,8 +746,6 @@ impl Walker {
                 }
                 Hir::Path(path) if vars.contains_key(path) => {
                     let var = vars.get(path).unwrap();
-                    // let ty = type_to_info(&mut self.engine, &self.known_structs, &var.ty, true);
-                    // let ty = self.engine.insert(ty);
                     let ty = self.engine.insert(TypeInfo::Ptr(var.ty));
                     ins.push(heap, ty);
                     TypedNode {
@@ -742,6 +762,17 @@ impl Walker {
                     TypedNode {
                         span: node.span,
                         node: TypedIr::MemUse(path.clone()),
+                        ins: vec![],
+                        outs: vec![ty],
+                    }
+                }
+                Hir::Path(path) if self.is_var(path) => {
+                    let var = self.known_gvars.get(path).unwrap();
+                    let ty = self.engine.insert(TypeInfo::Ptr(*var));
+                    ins.push(heap, ty);
+                    TypedNode {
+                        span: node.span,
+                        node: TypedIr::GVarUse(path.clone()),
                         ins: vec![],
                         outs: vec![ty],
                     }
@@ -788,10 +819,11 @@ impl Walker {
                 }
                 Hir::Intrinsic(i) => {
                     let (mut w_ins, mut w_outs) = (Vec::new(), Vec::new());
-                    match i {
+                    let i = match i {
                         Intrinsic::Drop => {
                             if let Some(ty) = ins.pop(heap) {
                                 w_ins.push(ty);
+                                Intrinsic::Drop
                             } else {
                                 return error(
                                     node.span,
@@ -807,6 +839,7 @@ impl Walker {
                                 w_ins.push(ty);
                                 w_outs.push(ty);
                                 w_outs.push(ty);
+                                Intrinsic::Dup
                             } else {
                                 return error(
                                     node.span,
@@ -824,6 +857,7 @@ impl Walker {
                                     w_ins.push(ty2);
                                     w_outs.push(ty1);
                                     w_outs.push(ty2);
+                                    Intrinsic::Swap
                                 } else {
                                     return error(
                                         node.span,
@@ -850,6 +884,7 @@ impl Walker {
                                     w_outs.push(ty2);
                                     w_outs.push(ty1);
                                     w_outs.push(ty2);
+                                    Intrinsic::Over
                                 } else {
                                     return error(
                                         node.span,
@@ -874,6 +909,7 @@ impl Walker {
                                 ins.push(heap, o_type);
                                 w_ins.push(in_t);
                                 w_outs.push(o_type);
+                                Intrinsic::Cast(o_ty.map_ref(|_| o_type))
                             } else {
                                 return error(
                                     node.span,
@@ -882,27 +918,28 @@ impl Walker {
                                 );
                             }
                         }
-                        Intrinsic::ReadU64 => {
+                        Intrinsic::Read(ty) => {
                             if let Some(actual) = ins.pop(heap) {
-                                // let vptr = type_to_info(
-                                //     &mut self.engine,
-                                //     &Type::ptr_to(Type::VOID),
-                                //     false,
-                                // );
-                                let unknown = self.engine.insert(TypeInfo::Unknown);
-                                let vptr = TypeInfo::Ptr(unknown);
-                                let expect = self.engine.insert(vptr);
-                                if let Err(msg) = self.engine.unify(expect, actual) {
+                                let ety = self.abstract_to_concrete_type(ty, generics)?;
+                                let ety =
+                                    type_to_info(&mut self.engine, &self.known_structs, &ety, true);
+                                let ety = self.engine.insert(ety);
+
+                                let eptr = self.engine.insert(TypeInfo::Ptr(ety));
+                                if let Err(msg) = self.engine.unify(eptr, actual) {
                                     return error(
                                         node.span,
                                         ErrorKind::UnificationError(msg),
-                                        "Read intrinsic expects a pointer",
+                                        format!(
+                                            "Read intrinsic expects a pointer to {:?}",
+                                            &ty.inner
+                                        ),
                                     );
                                 } else {
-                                    let out_ty = self.engine.insert(TypeInfo::U64);
-                                    ins.push(heap, out_ty);
-                                    w_ins.push(expect);
-                                    w_outs.push(out_ty);
+                                    ins.push(heap, ety);
+                                    w_ins.push(eptr);
+                                    w_outs.push(ety);
+                                    Intrinsic::Read(ty.map_ref(|_| ety))
                                 }
                             } else {
                                 return error(
@@ -912,45 +949,25 @@ impl Walker {
                                 );
                             }
                         }
-                        Intrinsic::ReadU8 => {
-                            if let Some(actual) = ins.pop(heap) {
-                                let unknown = self.engine.insert(TypeInfo::Unknown);
-                                let vptr = TypeInfo::Ptr(unknown);
-                                let expect = self.engine.insert(vptr);
-                                if let Err(msg) = self.engine.unify(expect, actual) {
-                                    return error(
-                                        node.span,
-                                        ErrorKind::UnificationError(msg),
-                                        "Read intrinsic expects a pointer",
-                                    );
-                                } else {
-                                    let out_ty = self.engine.insert(TypeInfo::U8);
-                                    ins.push(heap, out_ty);
-                                    w_ins.push(expect);
-                                    w_outs.push(out_ty);
-                                }
-                            } else {
-                                return error(
-                                    node.span,
-                                    ErrorKind::NotEnoughData,
-                                    "Not enough data in the stack for `!u64` intrinsic",
-                                );
-                            }
-                        }
-                        Intrinsic::WriteU64 => {
+                        Intrinsic::Write(ty) => {
                             if let Some(ty1) = ins.pop(heap) {
-                                let unknown = self.engine.insert(TypeInfo::Unknown);
-                                let expect = self.engine.insert(TypeInfo::Ptr(unknown));
-                                if let Err(msg) = self.engine.unify(expect, ty1) {
+                                let ety = self.abstract_to_concrete_type(ty, generics)?;
+                                let ety =
+                                    type_to_info(&mut self.engine, &self.known_structs, &ety, true);
+                                let ety = self.engine.insert(ety);
+                                let eptr = self.engine.insert(TypeInfo::Ptr(ety));
+                                if let Err(msg) = self.engine.unify(eptr, ty1) {
                                     return error(
                                         node.span,
                                         ErrorKind::UnificationError(msg),
-                                        "Write intrinsic expects a pointer",
+                                        format!(
+                                            "Write intrinsic expects a pointer to {:?}",
+                                            &ty.inner
+                                        ),
                                     );
                                 }
                                 if let Some(ty2) = ins.pop(heap) {
-                                    let expect = self.engine.insert(TypeInfo::U64);
-                                    if let Err(msg) = self.engine.unify(expect, ty2) {
+                                    if let Err(msg) = self.engine.unify(ety, ty2) {
                                         return error(
                                             node.span,
                                             ErrorKind::UnificationError(msg),
@@ -959,6 +976,7 @@ impl Walker {
                                     }
                                     w_ins.push(ty1);
                                     w_ins.push(ty2);
+                                    Intrinsic::Write(ty.map_ref(|_| ety))
                                 } else {
                                     return error(
                                         node.span,
@@ -971,44 +989,6 @@ impl Walker {
                                     node.span,
                                     ErrorKind::NotEnoughData,
                                     "Not enough data in the stack for `!u64` intrinsic",
-                                );
-                            }
-                        }
-                        Intrinsic::WriteU8 => {
-                            if let Some(ty1) = ins.pop(heap) {
-                                let unknown = self.engine.insert(TypeInfo::Unknown);
-                                let expect = self.engine.insert(TypeInfo::Ptr(unknown));
-                                if let Err(msg) = self.engine.unify(expect, ty1) {
-                                    return error(
-                                        node.span,
-                                        ErrorKind::UnificationError(msg),
-                                        "`!u8` intrinsic expects a pointer",
-                                    );
-                                }
-                                if let Some(ty2) = ins.pop(heap) {
-                                    let expect = self.engine.insert(TypeInfo::U8);
-                                    if let Err(msg) = self.engine.unify(expect, ty2) {
-                                        return error(
-                                            node.span,
-                                            ErrorKind::UnificationError(msg),
-                                            "`!u8` intrinsic expects a u8",
-                                        );
-                                    }
-
-                                    w_ins.push(ty1);
-                                    w_ins.push(ty2);
-                                } else {
-                                    return error(
-                                        node.span,
-                                        ErrorKind::NotEnoughData,
-                                        "Not enough data in the stack for `!u8` intrinsic",
-                                    );
-                                }
-                            } else {
-                                return error(
-                                    node.span,
-                                    ErrorKind::NotEnoughData,
-                                    "Not enough data in the stack for `!u8` intrinsic",
                                 );
                             }
                         }
@@ -1031,6 +1011,7 @@ impl Walker {
                         Intrinsic::Print => {
                             if let Some(ty) = ins.pop(heap) {
                                 w_ins.push(ty);
+                                Intrinsic::Print
                             } else {
                                 return error(
                                     node.span,
@@ -1039,30 +1020,39 @@ impl Walker {
                                 );
                             }
                         }
-                        Intrinsic::Syscall0 => self.typecheck_syscall(
-                            0,
-                            node.span,
-                            ins,
-                            heap,
-                            &mut w_ins,
-                            &mut w_outs,
-                        )?,
-                        Intrinsic::Syscall1 => self.typecheck_syscall(
-                            1,
-                            node.span,
-                            ins,
-                            heap,
-                            &mut w_ins,
-                            &mut w_outs,
-                        )?,
-                        Intrinsic::Syscall2 => self.typecheck_syscall(
-                            2,
-                            node.span,
-                            ins,
-                            heap,
-                            &mut w_ins,
-                            &mut w_outs,
-                        )?,
+                        Intrinsic::Syscall0 => {
+                            self.typecheck_syscall(
+                                0,
+                                node.span,
+                                ins,
+                                heap,
+                                &mut w_ins,
+                                &mut w_outs,
+                            )?;
+                            Intrinsic::Syscall0
+                        }
+                        Intrinsic::Syscall1 => {
+                            self.typecheck_syscall(
+                                1,
+                                node.span,
+                                ins,
+                                heap,
+                                &mut w_ins,
+                                &mut w_outs,
+                            )?;
+                            Intrinsic::Syscall1
+                        }
+                        Intrinsic::Syscall2 => {
+                            self.typecheck_syscall(
+                                2,
+                                node.span,
+                                ins,
+                                heap,
+                                &mut w_ins,
+                                &mut w_outs,
+                            )?;
+                            Intrinsic::Syscall2
+                        }
                         Intrinsic::Syscall3 => {
                             self.typecheck_syscall(
                                 3,
@@ -1072,35 +1062,46 @@ impl Walker {
                                 &mut w_ins,
                                 &mut w_outs,
                             )?;
+                            Intrinsic::Syscall3
                         }
-                        Intrinsic::Syscall4 => self.typecheck_syscall(
-                            4,
-                            node.span,
-                            ins,
-                            heap,
-                            &mut w_ins,
-                            &mut w_outs,
-                        )?,
-                        Intrinsic::Syscall5 => self.typecheck_syscall(
-                            5,
-                            node.span,
-                            ins,
-                            heap,
-                            &mut w_ins,
-                            &mut w_outs,
-                        )?,
-                        Intrinsic::Syscall6 => self.typecheck_syscall(
-                            6,
-                            node.span,
-                            ins,
-                            heap,
-                            &mut w_ins,
-                            &mut w_outs,
-                        )?,
+                        Intrinsic::Syscall4 => {
+                            self.typecheck_syscall(
+                                4,
+                                node.span,
+                                ins,
+                                heap,
+                                &mut w_ins,
+                                &mut w_outs,
+                            )?;
+                            Intrinsic::Syscall4
+                        }
+                        Intrinsic::Syscall5 => {
+                            self.typecheck_syscall(
+                                5,
+                                node.span,
+                                ins,
+                                heap,
+                                &mut w_ins,
+                                &mut w_outs,
+                            )?;
+                            Intrinsic::Syscall5
+                        }
+                        Intrinsic::Syscall6 => {
+                            self.typecheck_syscall(
+                                6,
+                                node.span,
+                                ins,
+                                heap,
+                                &mut w_ins,
+                                &mut w_outs,
+                            )?;
+                            Intrinsic::Syscall6
+                        }
                         Intrinsic::Argc => {
                             let ty = self.engine.insert(TypeInfo::U64);
                             ins.push(heap, ty);
                             w_outs.push(ty);
+                            Intrinsic::Argc
                         }
                         Intrinsic::Argv => {
                             let char = self.engine.insert(TypeInfo::Char);
@@ -1108,6 +1109,7 @@ impl Walker {
                             let charpp = self.engine.insert(TypeInfo::Ptr(charp));
                             ins.push(heap, charpp);
                             w_outs.push(charpp);
+                            Intrinsic::Argv
                         }
                         Intrinsic::Add => {
                             if let Some(a) = ins.pop(heap) {
@@ -1123,6 +1125,7 @@ impl Walker {
                                     w_ins.push(a);
                                     w_outs.push(a);
                                     ins.push(heap, a);
+                                    Intrinsic::Add
                                 } else {
                                     return error(
                                         node.span,
@@ -1152,6 +1155,7 @@ impl Walker {
                                     w_ins.push(a);
                                     w_outs.push(a);
                                     ins.push(heap, a);
+                                    Intrinsic::Sub
                                 } else {
                                     return error(
                                         node.span,
@@ -1183,6 +1187,7 @@ impl Walker {
                                     w_outs.push(a);
                                     ins.push(heap, a);
                                     ins.push(heap, a);
+                                    Intrinsic::Divmod
                                 } else {
                                     return error(
                                         node.span,
@@ -1212,6 +1217,7 @@ impl Walker {
                                     w_ins.push(a);
                                     w_outs.push(a);
                                     ins.push(heap, a);
+                                    Intrinsic::Mul
                                 } else {
                                     return error(
                                         node.span,
@@ -1239,6 +1245,7 @@ impl Walker {
                                     }
                                     let bool = self.engine.insert(TypeInfo::Bool);
                                     ins.push(heap, bool);
+                                    Intrinsic::Eq
                                 } else {
                                     return error(
                                         node.span,
@@ -1266,6 +1273,7 @@ impl Walker {
                                     }
                                     let bool = self.engine.insert(TypeInfo::Bool);
                                     ins.push(heap, bool);
+                                    Intrinsic::Ne
                                 } else {
                                     return error(
                                         node.span,
@@ -1293,6 +1301,7 @@ impl Walker {
                                     }
                                     let bool = self.engine.insert(TypeInfo::Bool);
                                     ins.push(heap, bool);
+                                    Intrinsic::Lt
                                 } else {
                                     return error(
                                         node.span,
@@ -1320,6 +1329,7 @@ impl Walker {
                                     }
                                     let bool = self.engine.insert(TypeInfo::Bool);
                                     ins.push(heap, bool);
+                                    Intrinsic::Le
                                 } else {
                                     return error(
                                         node.span,
@@ -1347,6 +1357,7 @@ impl Walker {
                                     }
                                     let bool = self.engine.insert(TypeInfo::Bool);
                                     ins.push(heap, bool);
+                                    Intrinsic::Gt
                                 } else {
                                     return error(
                                         node.span,
@@ -1374,6 +1385,7 @@ impl Walker {
                                     }
                                     let bool = self.engine.insert(TypeInfo::Bool);
                                     ins.push(heap, bool);
+                                    Intrinsic::Ge
                                 } else {
                                     return error(
                                         node.span,
@@ -1392,7 +1404,7 @@ impl Walker {
                     };
                     TypedNode {
                         span: node.span,
-                        node: TypedIr::Intrinsic(i.clone()),
+                        node: TypedIr::Intrinsic(i),
                         ins: w_ins,
                         outs: w_outs,
                     }
@@ -1481,8 +1493,8 @@ impl Walker {
                     for _ in b_ins {
                         a_ins.next();
                     }
-                    let w_outs = a_ins.collect();
-                    TypedNode {
+                    let w_outs: Vec<TermId> = a_ins.collect();
+                    let n: TirNode = TypedNode {
                         span: node.span,
                         node: TypedIr::Bind(Bind {
                             bindings: bindings.clone(),
@@ -1490,7 +1502,8 @@ impl Walker {
                         }),
                         ins: w_ins,
                         outs: w_outs,
-                    }
+                    };
+                    n
                 }
                 Hir::While(hir::While { cond, body }) => {
                     let mut ins_c = ins.clone();
@@ -1845,6 +1858,79 @@ impl Walker {
                 generics,
             )?),
             types::Type::Primitive(ty) => Type::Concrete(ConcreteType::Primitive(*ty)),
+            types::Type::CustomParametrised(box bty, p) => {
+                let params = p.tys.iter().map(|t| t.inner.clone());
+                // .iter()
+                // .map(|ty| self.abstract_to_concrete_type(ty, generics))
+                // .collect::<Result<Vec<_>, _>>()?;
+                let ty = match bty {
+                    types::Type::Custom(btyp) => {
+                        if self.known_structs.get(btyp).is_some() {
+                            let proto = self.structs.get(btyp).unwrap();
+                            let mut proto2 = proto.clone();
+                            fn find_generic(t: &mut types::Type, gen: &str, param: types::Type) {
+                                match t {
+                                    types::Type::Ptr(box r) => find_generic(r, gen, param),
+                                    types::Type::Custom(p) => {
+                                        if let Some(n) = p.only() {
+                                            if n == gen {
+                                                *t = param;
+                                            }
+                                        }
+                                    }
+                                    types::Type::CustomParametrised(_, _) => todo!(),
+                                    types::Type::Primitive(_) => (),
+                                }
+                            }
+                            for (param, gen) in params.zip(proto.generics.iter()) {
+                                for t in proto2.fields.values_mut() {
+                                    find_generic(t, &*gen.inner, param.clone())
+                                }
+                            }
+                            let mut fields = FnvHashMap::default();
+                            for (n, ty) in proto2.fields {
+                                let ty = self.abstract_to_concrete_type(&ty, None)?;
+                                fields.insert(n, ty);
+                            }
+                            let id = self.type_id();
+                            self.known_structs
+                                .insert(proto2.name, Rc::new(KStruct { id, fields }));
+
+                            Type::Concrete(ConcreteType::Custom(id))
+                        } else if let Some(Ref::Struct(ty)) = self.item_refs.get(btyp) {
+                            let ty = Spanned {
+                                span,
+                                inner: types::Type::Custom(ty.clone()),
+                            };
+                            self.abstract_to_concrete_type(&ty, generics)?
+                        } else if let Some(r) = self.unresloved_item_refs.get(btyp) {
+                            if let Ref::Struct(ty) = self.resolve(r.clone()) {
+                                let ty = Spanned {
+                                    span,
+                                    inner: types::Type::Custom(ty),
+                                };
+                                self.abstract_to_concrete_type(&ty, generics)?
+                            } else {
+                                todo!("This is a error yo")
+                            }
+                        } else if let Some(ty) = self.structs.get(btyp).cloned() {
+                            let mut fields = FnvHashMap::default();
+                            for (n, ty) in ty.fields {
+                                let ty = self.abstract_to_concrete_type(&ty, None)?;
+                                fields.insert(n, ty);
+                            }
+                            let id = self.type_id();
+                            self.known_structs
+                                .insert(ty.name, Rc::new(KStruct { id, fields }));
+                            Type::Concrete(ConcreteType::Custom(id))
+                        } else {
+                            todo!()
+                        }
+                    }
+                    _ => unreachable!(),
+                };
+                ty
+            }
             types::Type::Custom(ty) => {
                 if let Some(ty) = self.known_structs.get(ty) {
                     Type::Concrete(ConcreteType::Custom(ty.id))
@@ -1905,7 +1991,11 @@ impl Walker {
         self.checked_consts.contains_key(name)
     }
 
-    fn is_mem(&self, name: &ItemPathBuf) -> bool {
+    fn is_mem(&self, name: &ItemPath) -> bool {
         self.known_mems.contains_key(name)
+    }
+
+    fn is_var(&self, name: &ItemPath) -> bool {
+        self.known_gvars.contains_key(name)
     }
 }

@@ -88,7 +88,7 @@ pub struct Mem {
 #[derive(Debug, Clone)]
 pub enum Hir {
     Path(ItemPathBuf),
-    Intrinsic(Intrinsic),
+    Intrinsic(Intrinsic<Type>),
     Bind(Bind),
     While(While),
     If(If),
@@ -157,18 +157,16 @@ pub enum Binding {
 }
 
 #[derive(Debug, Clone)]
-pub enum Intrinsic {
+pub enum Intrinsic<T> {
     Drop,
     Dup,
     Swap,
     Over,
 
-    Cast(Spanned<Type>),
+    Cast(Spanned<T>),
 
-    ReadU64,
-    ReadU8,
-    WriteU64,
-    WriteU8,
+    Read(Spanned<T>),
+    Write(Spanned<T>),
 
     CompStop,
     Dump,
@@ -241,6 +239,21 @@ impl Walker {
             }
             Expr::Path(p) => p.only()?,
             Expr::Word(Word(w)) => w.as_str(),
+
+            Expr::Read(i) => {
+                return Spanned {
+                    span: ast.span,
+                    inner: Hir::Intrinsic(Intrinsic::Read(i.ty.clone())),
+                }
+                .some()
+            }
+            Expr::Write(i) => {
+                return Spanned {
+                    span: ast.span,
+                    inner: Hir::Intrinsic(Intrinsic::Write(i.ty.clone())),
+                }
+                .some()
+            }
             _ => return None,
         };
         let intrinsic = match word {
@@ -248,11 +261,6 @@ impl Walker {
             "dup" => Intrinsic::Dup,
             "swap" => Intrinsic::Swap,
             "over" => Intrinsic::Over,
-
-            "@u64" => Intrinsic::ReadU64,
-            "@u8" => Intrinsic::ReadU8,
-            "!u64" => Intrinsic::WriteU64,
-            "!u8" => Intrinsic::WriteU8,
 
             "&?" => Intrinsic::Dump,
             "print" => Intrinsic::Print,
@@ -334,13 +342,22 @@ impl Walker {
         for (name, ty) in fields {
             let span = ty.ty.span;
             let ty = ty.inner.ty.inner.clone();
-            let ty = match ty {
-                ty @ Type::Primitive(_) | ty @ Type::Ptr(_) => ty,
-                Type::Custom(type_name) => {
-                    let type_name = self.current_path.join(&type_name);
-                    Type::Custom(type_name)
+
+            fn resolve_field(current_path: &ItemPath, ty: Type) -> Type {
+                match ty {
+                    ty @ Type::Primitive(_) | ty @ Type::Ptr(_) => ty,
+                    Type::Custom(type_name) => {
+                        let type_name = current_path.join(&type_name);
+                        Type::Custom(type_name)
+                    }
+                    Type::CustomParametrised(box ty, params) => {
+                        let ty = resolve_field(current_path, ty);
+                        Type::CustomParametrised(box ty, params)
+                    }
                 }
-            };
+            }
+
+            let ty = resolve_field(&self.current_path, ty);
             let ty = Spanned { span, inner: ty };
             builder.field(name.clone(), ty);
         }

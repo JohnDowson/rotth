@@ -44,7 +44,6 @@ pub fn compile<S: Write>(
                 sink,
                 indoc! {"
                     ; {:?}
-                    ;   mov rax, len
                         push {}
                         push str_{}
                     "},

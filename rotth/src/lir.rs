@@ -1,13 +1,13 @@
 use crate::eval::eval;
 use fnv::FnvHashMap;
 use rotth_analysis::{
-    ctir::{CProc, ConcreteProgram},
+    ctir::{CProc, ConcreteNode, ConcreteProgram, Intrinsic},
     inference::ReifiedType,
-    tir::{self, Cond, CondBranch, FieldAccess, If, KConst, KMem, Type, TypedIr, TypedNode, While},
+    tir::{self, Cond, CondBranch, FieldAccess, If, KConst, KMem, Type, TypedIr, While},
 };
 use rotth_parser::{
     ast::{ItemPath, ItemPathBuf, Literal},
-    hir::{Binding, Intrinsic},
+    hir::Binding,
     types::Primitive,
 };
 use somok::{Either, Somok};
@@ -84,13 +84,13 @@ pub enum Op {
 #[derive(Clone)]
 pub enum ComConst {
     Compiled(Vec<Literal>),
-    NotCompiled(KConst<ReifiedType>),
+    NotCompiled(KConst<ConcreteNode>),
 }
 
 #[derive(Clone)]
 pub enum ComMem {
     Compiled(usize),
-    NotCompiled(KMem<ReifiedType>),
+    NotCompiled(KMem<ConcreteNode>),
 }
 
 #[derive(Clone)]
@@ -310,7 +310,7 @@ impl Compiler {
         self.mems.insert(name.to_owned(), ComMem::Compiled(size));
     }
 
-    fn compile_body(&mut self, body: Vec<TypedNode<ReifiedType>>) {
+    fn compile_body(&mut self, body: Vec<ConcreteNode>) {
         for node in body {
             match node.node {
                 TypedIr::Cond(cond) => self.compile_cond(cond),
@@ -372,10 +372,12 @@ impl Compiler {
 
                     Intrinsic::Cast(_) => (), // this is a noop
 
-                    Intrinsic::ReadU64 => self.emit(ReadU64),
-                    Intrinsic::ReadU8 => self.emit(ReadU8),
-                    Intrinsic::WriteU64 => self.emit(WriteU64),
-                    Intrinsic::WriteU8 => self.emit(WriteU8),
+                    Intrinsic::Read(ReifiedType::Primitive(Primitive::U64)) => self.emit(ReadU64),
+                    Intrinsic::Write(ReifiedType::Primitive(Primitive::U64)) => self.emit(WriteU64),
+                    Intrinsic::Read(ReifiedType::Primitive(Primitive::U8)) => self.emit(ReadU8),
+                    Intrinsic::Write(ReifiedType::Primitive(Primitive::U8)) => self.emit(WriteU8),
+                    Intrinsic::Read(_) => todo!(),
+                    Intrinsic::Write(_) => todo!(),
 
                     Intrinsic::Add => self.emit(Add),
                     Intrinsic::Sub => self.emit(Sub),
@@ -423,7 +425,7 @@ impl Compiler {
         }
     }
 
-    fn compile_bind(&mut self, bind: tir::Bind<ReifiedType>) {
+    fn compile_bind(&mut self, bind: tir::Bind<ConcreteNode>) {
         let mut new_bindings = Vec::new();
         for binding in bind.bindings.iter().rev() {
             match &binding.inner {
@@ -445,7 +447,7 @@ impl Compiler {
         self.bindings.pop();
     }
 
-    fn compile_while(&mut self, while_: While<ReifiedType>) {
+    fn compile_while(&mut self, while_: While<ConcreteNode>) {
         let cond_label = self.gen_label();
         let end_label = self.gen_label();
         self.emit(Label(cond_label.clone()));
@@ -456,7 +458,7 @@ impl Compiler {
         self.emit(Label(end_label))
     }
 
-    fn compile_if(&mut self, if_: If<ReifiedType>) {
+    fn compile_if(&mut self, if_: If<ConcreteNode>) {
         let lie_label = self.gen_label();
         let mut end_label = None;
         self.emit(JumpF(lie_label.clone()));
@@ -475,7 +477,7 @@ impl Compiler {
         }
     }
 
-    fn compile_cond(&mut self, cond: Cond<ReifiedType>) {
+    fn compile_cond(&mut self, cond: Cond<ReifiedType, Intrinsic>) {
         let phi_label = self.gen_label();
         let num_branches = cond.branches.len() - 1;
         let mut this_branch_label = self.gen_label();

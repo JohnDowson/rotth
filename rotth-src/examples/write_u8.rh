@@ -2,6 +2,6 @@ include puts from "../std.rh"
 
 proc main: u64 do
     "hello\n"
-    dup 'f' cast u8 swap !u8 puts
+    dup cast &>u8 'f' cast u8 swap !u8 puts
     0
 end

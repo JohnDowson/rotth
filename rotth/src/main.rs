@@ -253,7 +253,7 @@ fn compiler() -> Result<(), Error> {
 
     if args.dump_tokens {
         println!("Tokens:");
-        println!("{tokens:?}");
+        println!("{:?}", tokens.iter().map(|(a, _)| a).collect::<Vec<_>>());
     }
 
     let ast = rotth_parser::ast::parse(tokens)?;

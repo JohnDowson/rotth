@@ -21,17 +21,29 @@ fn to_smol_str(l: &'_ mut Lexer<'_, Token>) -> SmolStr {
 
 #[derive(Clone, Hash, PartialEq, Eq, Logos)]
 pub enum Token {
-    #[token("&>")]
+    #[token("->", priority = 1000000)]
+    FieldAccess,
+    #[token("&>", priority = 1000000)]
     Ptr,
     #[token("&?&")]
     CompStop,
-    #[regex("false|true", to_bool)]
-    Bool(bool),
+    #[token("@")]
+    Read,
+    #[token("!")]
+    Write,
     #[regex(
-        r"[()\{\}<>\|\\/!@#$%^*\-=+_?A-Za-z][()\{\}<>\|\\/!@#$%^&*\-=+_?A-Za-z0-9]*",
+        r"[()\{\}<>\|\\/!@#$%^&*\-=+?][()\{\}<>\|\\/!@#$%^&*\-=+?]?",
         to_smol_str
     )]
+    Operator(SmolStr),
+    #[regex(
+        r"[_A-Za-z][()\{\}<>\|\\/!@#$%^&*\-=+_?A-Za-z0-9]*",
+        to_smol_str,
+        priority = 0
+    )]
     Word(SmolStr),
+    #[regex("false|true", to_bool)]
+    Bool(bool),
     #[regex(r#""(?:[^"]|\\")*""#, to_smol_str)]
     String(SmolStr),
     #[regex(r"'.'", to_char)]
@@ -42,8 +54,6 @@ pub enum Token {
     SigSep,
     #[token("::")]
     PathSep,
-    #[token("->")]
-    FieldAccess,
     #[token("[")]
     LBracket,
     #[token("]")]
@@ -95,8 +105,11 @@ pub enum Token {
 impl std::fmt::Debug for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Token::Word(word) => write!(f, "W({})", word),
+            Token::Read => write!(f, "@"),
+            Token::Write => write!(f, "!"),
+            Token::Operator(op) => write!(f, "O({})", op),
             Token::Bool(b) => write!(f, "{}", b),
-            Token::Word(word) => write!(f, "{}", word),
             Token::String(str) => write!(f, "{:?}", str),
             Token::Char(c) => write!(f, "{:?}", c),
             Token::Num(num) => write!(f, "{}", num),

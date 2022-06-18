@@ -1,4 +1,4 @@
-use crate::ast::{ItemPath, ItemPathBuf};
+use crate::ast::{GenericParams, ItemPath, ItemPathBuf};
 use fnv::FnvHashMap;
 use smol_str::SmolStr;
 use spanner::Spanned;
@@ -8,6 +8,7 @@ pub enum Type {
     Ptr(Box<Self>),
     Primitive(Primitive),
     Custom(ItemPathBuf),
+    CustomParametrised(Box<Self>, Spanned<GenericParams>),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -55,6 +56,10 @@ impl std::fmt::Debug for Type {
             }
             Type::Primitive(p) => p.fmt(f),
             Type::Custom(s) => s.fmt(f),
+            Type::CustomParametrised(s, params) => {
+                s.fmt(f)?;
+                params.tys.fmt(f)
+            }
         }
     }
 }

@@ -8,42 +8,60 @@ use std::path::{Path, PathBuf};
 use crate::types::{Primitive, Type};
 
 use super::{
-    Bind, Cast, Cond, CondBranch, Const, ConstSignature, Else, Expr, FieldAccess, File, Generics,
-    If, Include, ItemPathBuf, Keyword, Literal, Mem, NameTypePair, Proc, ProcSignature,
-    Punctuation, Qualifiers, Struct, TopLevel, Var, While, Word,
+    Bind, Cast, Cond, CondBranch, Const, ConstSignature, Else, Expr, FieldAccess, File,
+    GenericParams, Generics, If, Include, ItemPathBuf, Keyword, Literal, Mem, NameTypePair, Proc,
+    ProcSignature, Punctuation, Qualifiers, Read, Struct, TopLevel, Var, While, Word, Write,
 };
 
 pub(super) fn ty() -> impl Parser<Token, Spanned<Type>, Error = Simple<Token, Span>> + Clone {
-    just(Token::Ptr)
-        .repeated()
-        .then(path())
-        .map_with_span(|(ptr, ty), span| {
-            let mut ty = if let Some(type_name) = ty.only() {
-                match type_name {
-                    "()" => Type::Primitive(Primitive::Void),
-                    "bool" => Type::Primitive(Primitive::Bool),
-                    "char" => Type::Primitive(Primitive::Char),
+    recursive(|ty| {
+        let generic_params = lbracket()
+            .then(ty.clone().repeated().at_least(1))
+            .then(rbracket())
+            .map_with_span(|((left_bracket, tys), right_bracket), span| Spanned {
+                span,
+                inner: GenericParams {
+                    left_bracket,
+                    tys,
+                    right_bracket,
+                },
+            });
+        just(Token::Ptr)
+            .repeated()
+            .then(path().then(generic_params.or_not()))
+            .map_with_span(|(ptr, (ty, params)), span| {
+                let ty = if let Some(type_name) = ty.only() {
+                    match type_name {
+                        "()" => Type::Primitive(Primitive::Void),
+                        "bool" => Type::Primitive(Primitive::Bool),
+                        "char" => Type::Primitive(Primitive::Char),
 
-                    "u64" => Type::Primitive(Primitive::U64),
-                    "u32" => Type::Primitive(Primitive::U32),
-                    "u16" => Type::Primitive(Primitive::U16),
-                    "u8" => Type::Primitive(Primitive::U8),
+                        "u64" => Type::Primitive(Primitive::U64),
+                        "u32" => Type::Primitive(Primitive::U32),
+                        "u16" => Type::Primitive(Primitive::U16),
+                        "u8" => Type::Primitive(Primitive::U8),
 
-                    "i64" => Type::Primitive(Primitive::I64),
-                    "i32" => Type::Primitive(Primitive::I32),
-                    "i16" => Type::Primitive(Primitive::I16),
-                    "i8" => Type::Primitive(Primitive::I8),
-                    _ => Type::Custom(ty.inner),
+                        "i64" => Type::Primitive(Primitive::I64),
+                        "i32" => Type::Primitive(Primitive::I32),
+                        "i16" => Type::Primitive(Primitive::I16),
+                        "i8" => Type::Primitive(Primitive::I8),
+                        _ => Type::Custom(ty.inner),
+                    }
+                } else {
+                    Type::Custom(ty.inner)
+                };
+                let mut ty = if let Some(params) = params {
+                    Type::CustomParametrised(box ty, params)
+                } else {
+                    ty
+                };
+                for _ in ptr {
+                    ty = Type::Ptr(box ty)
                 }
-            } else {
-                Type::Custom(ty.inner)
-            };
-            for _ in ptr {
-                ty = Type::Ptr(box ty)
-            }
 
-            Spanned { span, inner: ty }
-        })
+                Spanned { span, inner: ty }
+            })
+    })
 }
 
 pub(super) fn parse_string(s: &str, path: &'static Path) -> Result<String, Simple<Token, Span>> {
@@ -214,6 +232,7 @@ pub(super) fn kw_struct(
 pub(super) fn word() -> impl Parser<Token, Spanned<Word>, Error = Simple<Token, Span>> + Clone {
     select! {
         Token::Word(w), span => Spanned { span, inner: Word(w) },
+        Token::Operator(w), span => Spanned { span, inner: Word(w) },
     }
 }
 
@@ -221,6 +240,7 @@ pub(super) fn word_expr() -> impl Parser<Token, Spanned<Expr>, Error = Simple<To
 {
     select! {
         Token::Word(w), span => Spanned { span, inner: Expr::Word(Word(w)) },
+        Token::Operator(w), span => Spanned { span, inner: Expr::Word(Word(w)) },
     }
 }
 
@@ -228,6 +248,7 @@ pub(super) fn path() -> impl Parser<Token, Spanned<ItemPathBuf>, Error = Simple<
 {
     select! {
         Token::Word(w) =>  w,
+        Token::Operator(w) =>  w,
     }
     .separated_by(just(Token::PathSep))
     .at_least(1)
@@ -241,6 +262,7 @@ pub(super) fn path_expr() -> impl Parser<Token, Spanned<Expr>, Error = Simple<To
 {
     select! {
         Token::Word(w) =>  w,
+        Token::Operator(w) =>  w,
     }
     .separated_by(just(Token::PathSep))
     .at_least(1)
@@ -255,6 +277,30 @@ pub(super) fn separator(
     select! {
         Token::SigSep, span => Spanned { span, inner: Punctuation::Colon },
     }
+}
+
+pub(super) fn read_expr() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token, Span>> + Clone
+{
+    select! {
+        t @ Token::Read, span => Spanned { span, inner: t },
+    }
+    .then(ty())
+    .map_with_span(|(read, ty), span| Spanned {
+        span,
+        inner: Expr::Read(Read { read, ty }),
+    })
+}
+
+pub(super) fn write_expr() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token, Span>> + Clone
+{
+    select! {
+        t @ Token::Write, span => Spanned { span, inner: t },
+    }
+    .then(ty())
+    .map_with_span(|(write, ty), span| Spanned {
+        span,
+        inner: Expr::Write(Write { write, ty }),
+    })
 }
 
 pub(super) fn var() -> impl Parser<Token, Spanned<Var>, Error = Simple<Token, Span>> + Clone {
@@ -415,6 +461,8 @@ pub(super) fn expr<'d>(
             var_expr(),
             path_expr(),
             word_expr(),
+            read_expr(),
+            write_expr(),
             bind,
             while_,
             if_,

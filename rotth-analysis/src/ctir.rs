@@ -1,5 +1,5 @@
 use fnv::FnvHashMap;
-use rotth_parser::{path, types::Primitive};
+use rotth_parser::{hir, path, types::Primitive};
 use smol_str::SmolStr;
 use std::fmt::Write;
 
@@ -7,7 +7,7 @@ use crate::{
     concrete_error, error,
     inference::{ReifiedType, TermId},
     tir::{
-        Bind, ConcreteType, Cond, CondBranch, FieldAccess, GenId, If, KConst, KMem, Type,
+        Bind, ConcreteType, Cond, CondBranch, FieldAccess, GenId, If, KConst, KMem, TirNode, Type,
         TypecheckedProgram, TypedIr, TypedNode, Var, While,
     },
     Error, ErrorKind,
@@ -26,11 +26,51 @@ pub enum ConcreteError {
     IncompleteVar(ItemPathBuf),
 }
 
+#[derive(Debug, Clone)]
+pub enum Intrinsic {
+    Drop,
+    Dup,
+    Swap,
+    Over,
+
+    Cast(ReifiedType),
+
+    Read(ReifiedType),
+    Write(ReifiedType),
+
+    CompStop,
+    Dump,
+    Print,
+
+    Syscall0,
+    Syscall1,
+    Syscall2,
+    Syscall3,
+    Syscall4,
+    Syscall5,
+    Syscall6,
+
+    Argc,
+    Argv,
+
+    Add,
+    Sub,
+    Divmod,
+    Mul,
+
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
 #[derive(Debug)]
 pub struct ConcreteProgram {
     pub procs: FnvHashMap<ItemPathBuf, CProc>,
-    pub consts: FnvHashMap<ItemPathBuf, KConst<ReifiedType>>,
-    pub mems: FnvHashMap<ItemPathBuf, KMem<ReifiedType>>,
+    pub consts: FnvHashMap<ItemPathBuf, KConst<ConcreteNode>>,
+    pub mems: FnvHashMap<ItemPathBuf, KMem<ConcreteNode>>,
     pub vars: FnvHashMap<ItemPathBuf, Var<ReifiedType>>,
     // pub structs: FnvHashMap<TypeId, CStruct>,
 }
@@ -64,22 +104,22 @@ pub struct Field {
     pub ty: ReifiedType,
     pub offset: usize,
 }
-
+pub type ConcreteNode = TypedNode<ReifiedType, Intrinsic>;
 #[derive(Debug, Clone)]
 pub struct CProc {
     pub generics: FnvHashMap<SmolStr, GenId>,
     pub vars: FnvHashMap<ItemPathBuf, ReifiedType>,
     pub ins: Vec<ReifiedType>,
     pub outs: Vec<ReifiedType>,
-    pub body: Vec<TypedNode<ReifiedType>>,
+    pub body: Vec<ConcreteNode>,
 }
 
 #[derive(Default)]
 pub struct Walker {
     procs: FnvHashMap<ItemPathBuf, Option<CProc>>,
     // structs: FnvHashMap<TypeId, CStruct>,
-    consts: FnvHashMap<ItemPathBuf, Option<KConst<ReifiedType>>>,
-    mems: FnvHashMap<ItemPathBuf, Option<KMem<ReifiedType>>>,
+    consts: FnvHashMap<ItemPathBuf, Option<KConst<ConcreteNode>>>,
+    mems: FnvHashMap<ItemPathBuf, Option<KMem<ConcreteNode>>>,
     vars: FnvHashMap<ItemPathBuf, Option<Var<ReifiedType>>>,
 }
 
@@ -186,11 +226,7 @@ impl Walker {
                 // structs: this.structs,
             })
         } else {
-            concrete_error(
-                None,
-                ConcreteError::NoEntry,
-                "Main can not be a generic proc",
-            )
+            concrete_error(None, ConcreteError::NoEntry, "Couldn't find an entrypoint")
         }
     }
 
@@ -262,10 +298,10 @@ impl Walker {
     fn walk_body(
         &mut self,
         program: &TypecheckedProgram,
-        body: &[TypedNode<TermId>],
+        body: &[TirNode],
         local_vars: &FnvHashMap<ItemPathBuf, Var<TermId>>,
         gensubs: &FnvHashMap<GenId, ReifiedType>,
-    ) -> Result<Vec<TypedNode<ReifiedType>>, Error> {
+    ) -> Result<Vec<ConcreteNode>, Error> {
         let mut concrete_body = Vec::new();
         for node in body {
             let node = self.walk_node(program, node, local_vars, gensubs)?;
@@ -277,10 +313,10 @@ impl Walker {
     fn walk_node(
         &mut self,
         program: &TypecheckedProgram,
-        node: &TypedNode<TermId>,
+        node: &TirNode,
         local_vars: &FnvHashMap<ItemPathBuf, Var<TermId>>,
         gensubs: &FnvHashMap<GenId, ReifiedType>,
-    ) -> Result<TypedNode<ReifiedType>, Error> {
+    ) -> Result<ConcreteNode, Error> {
         match &node.node {
             TypedIr::GVarUse(var_name) => {
                 if let Some(_var) = program.vars.get(var_name) {
@@ -296,6 +332,15 @@ impl Walker {
                         .map(|t| program.engine.reify(gensubs, *t))
                         .collect::<Result<Vec<_>, _>>()
                         .unwrap();
+
+                    if !self.vars.contains_key(var_name) {
+                        self.vars.insert(
+                            var_name.clone(),
+                            Some(Var {
+                                ty: outs[0].clone(),
+                            }),
+                        );
+                    }
 
                     Ok(TypedNode {
                         span: node.span,
@@ -349,9 +394,9 @@ impl Walker {
 
                 if !self.mems.contains_key(mem_name) {
                     self.mems.insert(mem_name.clone(), None);
-                    let body: Vec<TypedNode<ReifiedType>> =
+                    let body: Vec<ConcreteNode> =
                         self.walk_body(program, &mem.body, local_vars, &Default::default())?;
-                    let mem = KMem {
+                    let mem: KMem<ConcreteNode> = KMem {
                         span: mem.span,
                         body,
                     };
@@ -404,9 +449,9 @@ impl Walker {
 
                 if !self.consts.contains_key(const_name) {
                     self.consts.insert(const_name.clone(), None);
-                    let body: Vec<TypedNode<ReifiedType>> =
+                    let body: Vec<ConcreteNode> =
                         self.walk_body(program, &const_.body, local_vars, &Default::default())?;
-                    let const_ = KConst {
+                    let const_: KConst<ConcreteNode> = KConst {
                         outs: const_.outs.clone(),
                         span: const_.span,
                         body,
@@ -490,6 +535,46 @@ impl Walker {
                 })
             }
             TypedIr::Intrinsic(i) => {
+                let i = match i {
+                    hir::Intrinsic::Cast(t) => {
+                        let t = program.engine.reify(gensubs, t.inner).unwrap();
+                        Intrinsic::Cast(t)
+                    }
+                    hir::Intrinsic::Read(t) => {
+                        let t = program.engine.reify(gensubs, t.inner).unwrap();
+                        Intrinsic::Read(t)
+                    }
+                    hir::Intrinsic::Write(t) => {
+                        let t = program.engine.reify(gensubs, t.inner).unwrap();
+                        Intrinsic::Write(t)
+                    }
+                    hir::Intrinsic::Drop => Intrinsic::Drop,
+                    hir::Intrinsic::Dup => Intrinsic::Dup,
+                    hir::Intrinsic::Swap => Intrinsic::Swap,
+                    hir::Intrinsic::Over => Intrinsic::Over,
+                    hir::Intrinsic::CompStop => Intrinsic::CompStop,
+                    hir::Intrinsic::Dump => Intrinsic::Dump,
+                    hir::Intrinsic::Print => Intrinsic::Print,
+                    hir::Intrinsic::Syscall0 => Intrinsic::Syscall0,
+                    hir::Intrinsic::Syscall1 => Intrinsic::Syscall1,
+                    hir::Intrinsic::Syscall2 => Intrinsic::Syscall2,
+                    hir::Intrinsic::Syscall3 => Intrinsic::Syscall3,
+                    hir::Intrinsic::Syscall4 => Intrinsic::Syscall4,
+                    hir::Intrinsic::Syscall5 => Intrinsic::Syscall5,
+                    hir::Intrinsic::Syscall6 => Intrinsic::Syscall6,
+                    hir::Intrinsic::Argc => Intrinsic::Argv,
+                    hir::Intrinsic::Argv => Intrinsic::Argc,
+                    hir::Intrinsic::Add => Intrinsic::Add,
+                    hir::Intrinsic::Sub => Intrinsic::Sub,
+                    hir::Intrinsic::Divmod => Intrinsic::Divmod,
+                    hir::Intrinsic::Mul => Intrinsic::Mul,
+                    hir::Intrinsic::Eq => Intrinsic::Eq,
+                    hir::Intrinsic::Ne => Intrinsic::Ne,
+                    hir::Intrinsic::Lt => Intrinsic::Lt,
+                    hir::Intrinsic::Le => Intrinsic::Le,
+                    hir::Intrinsic::Gt => Intrinsic::Gt,
+                    hir::Intrinsic::Ge => Intrinsic::Ge,
+                };
                 let ins = node
                     .ins
                     .iter()
@@ -505,7 +590,7 @@ impl Walker {
 
                 Ok(TypedNode {
                     span: node.span,
-                    node: TypedIr::Intrinsic(i.clone()),
+                    node: TypedIr::Intrinsic(i),
                     ins,
                     outs,
                 })
@@ -523,9 +608,9 @@ impl Walker {
                     .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
-                let body = self.walk_body(program, body, local_vars, gensubs)?;
+                let body: Vec<ConcreteNode> = self.walk_body(program, body, local_vars, gensubs)?;
 
-                Ok(TypedNode {
+                Ok(ConcreteNode {
                     span: node.span,
                     node: TypedIr::Bind(Bind {
                         bindings: bindings.clone(),

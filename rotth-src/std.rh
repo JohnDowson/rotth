@@ -50,7 +50,7 @@ end
 mem PUTU_BUF do 32 end
 proc ZERO_PUTU_BUF do
     0 while dup 32 8 div < do
-        dup PUTU_BUF swap core::ptr+ 0 swap !u64
+        dup PUTU_BUF cast &>u64 swap core::ptr+ 0 swap !u64
         1 +
     end drop
 end
@@ -95,7 +95,7 @@ proc streq u64 &>char u64 &>char : bool do
     bind an: u64 as: &>char bn: u64 bs: &>char do
         an bn != if false return end
         0 while dup an != do
-            dup dup as swap core::ptr+ swap bs swap core::ptr+ cast &>u8 @u8 swap @u8 != if drop false return end
+            dup dup as swap core::ptr+ swap bs swap core::ptr+ cast &>u8 @u8 swap cast &>u8 @u8 != if drop false return end
             1 +
         end drop
     end

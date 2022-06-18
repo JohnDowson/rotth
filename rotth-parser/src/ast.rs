@@ -22,7 +22,7 @@ pub struct File(pub Vec<Spanned<TopLevel>>);
 #[derive(Debug, Clone)]
 pub struct Word(pub SmolStr);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Punctuation {
     LBracket,
     RBracket,
@@ -194,6 +194,18 @@ pub struct Qualifiers {
     pub from: Spanned<Keyword>,
 }
 
+#[derive(Debug, Clone)]
+pub struct Read {
+    pub read: Spanned<Token>,
+    pub ty: Spanned<Type>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Write {
+    pub write: Spanned<Token>,
+    pub ty: Spanned<Type>,
+}
+
 #[derive(Clone)]
 pub enum Expr {
     CompStop,
@@ -208,6 +220,8 @@ pub enum Expr {
     Cond(Box<Cond>),
 
     Cast(Cast),
+    Read(Read),
+    Write(Write),
 
     Word(Word),
     Path(ItemPathBuf),
@@ -222,6 +236,8 @@ impl Debug for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Expr::CompStop => write!(f, "&?&"),
+            Expr::Read(r) => write!(f, "@{:?}", r.ty),
+            Expr::Write(w) => write!(f, "@{:?}", w.ty),
             Expr::Keyword(arg0) => arg0.fmt(f),
             Expr::Type(arg0) => arg0.fmt(f),
             Expr::Bind(arg0) => arg0.fmt(f),
@@ -242,6 +258,13 @@ impl Debug for Expr {
 pub struct Generics {
     pub left_bracket: Spanned<Punctuation>,
     pub tys: Vec<Spanned<Word>>,
+    pub right_bracket: Spanned<Punctuation>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct GenericParams {
+    pub left_bracket: Spanned<Punctuation>,
+    pub tys: Vec<Spanned<Type>>,
     pub right_bracket: Spanned<Punctuation>,
 }
 

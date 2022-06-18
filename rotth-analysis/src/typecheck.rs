@@ -1,8 +1,22 @@
+use crate::{
+    inference::{ReifiedType, TermId},
+    tir::{self, TypedNode},
+};
+use rotth_parser::{hir::Hir, types};
 use simplearena::{Heap, Ref};
 use somok::Somok;
+use spanner::Spanned;
 use std::collections::VecDeque;
 
-use crate::inference::TermId;
+pub trait TypeRepr {}
+impl TypeRepr for ReifiedType {}
+impl TypeRepr for TermId {}
+impl TypeRepr for tir::Type {}
+impl TypeRepr for types::Type {}
+
+pub trait NodeRepr {}
+impl<T: TypeRepr, I> NodeRepr for TypedNode<T, I> {}
+impl NodeRepr for Spanned<Hir> {}
 
 #[derive(Clone, Default)]
 pub struct TypeStack {

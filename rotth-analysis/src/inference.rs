@@ -20,6 +20,14 @@ use crate::{
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub struct TermId(usize);
 
+impl TermId {
+    pub fn debug(&self, engine: &Engine) -> String {
+        let mut b = String::new();
+        write_info(&engine.vars[self.0], &engine.vars, &engine.structs, &mut b).unwrap();
+        b
+    }
+}
+
 impl std::fmt::Debug for TermId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "TermId({})", self.0)
@@ -458,6 +466,31 @@ impl Engine {
         }
     }
 
+    pub fn is_real(&self, subs: &FnvHashMap<GenId, ReifiedType>, id: TermId) -> bool {
+        use TypeInfo::*;
+        match self.vars[id.0] {
+            Unknown => false,
+            Ref(id) => self.is_real(subs, id),
+            Ptr(v) => self.is_real(subs, v),
+            Generic(_) => false,
+            Void => true,
+            Bool => true,
+            Char => true,
+            U64 => true,
+            U32 => true,
+            U16 => true,
+            U8 => true,
+            I64 => true,
+            I32 => true,
+            I16 => true,
+            I8 => true,
+            Struct(id) => self.structs[&id]
+                .fields
+                .iter()
+                .all(|(_, t)| self.is_real(subs, *t)),
+        }
+    }
+
     pub fn reify(
         &self,
         subs: &FnvHashMap<GenId, ReifiedType>,
@@ -523,29 +556,4 @@ impl Engine {
         }
         b
     }
-}
-
-// # Example usage
-// In reality, the most common approach will be to walk your AST, assigning type
-// terms to each of your nodes with whatever information you have available. You
-// will also need to call `engine.unify(x, y)` when you know two nodes have the
-// same type, such as in the statement `x = y;`.
-#[test]
-fn test() {
-    let mut engine = Engine::default();
-
-    // proc [T] incptr &>T : &>T
-    let var = engine.insert(TypeInfo::Unknown);
-
-    let i = engine.insert(TypeInfo::Ptr(var));
-    let o = engine.insert(TypeInfo::Ptr(var));
-
-    // 0 cast &>u64 incptr
-    // let u = engine.insert(TypeInfo::U64);
-    let u = engine.insert(TypeInfo::Struct(TypeId(0)));
-    let a = engine.insert(TypeInfo::Ptr(u));
-    engine.unify(a, i).unwrap();
-
-    // ...and compute the resulting type
-    panic!("Final type = {:?}", engine.reconstruct(o));
 }
