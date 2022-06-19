@@ -1,4 +1,5 @@
 include cstrlen puts from "../std.rh"
+
 proc main: u64 do
     argv cast &>u64
     @u64 cast &>char

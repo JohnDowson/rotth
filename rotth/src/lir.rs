@@ -1,9 +1,9 @@
 use crate::eval::eval;
 use fnv::FnvHashMap;
 use rotth_analysis::{
-    ctir::{CProc, ConcreteNode, ConcreteProgram, Intrinsic},
+    ctir::{CConst, CMem, CProc, ConcreteNode, ConcreteProgram, Intrinsic},
     inference::ReifiedType,
-    tir::{self, Cond, CondBranch, FieldAccess, If, KConst, KMem, Type, TypedIr, While},
+    tir::{self, Cond, CondBranch, FieldAccess, If, TypedIr, While},
 };
 use rotth_parser::{
     ast::{ItemPath, ItemPathBuf, Literal},
@@ -84,13 +84,13 @@ pub enum Op {
 #[derive(Clone)]
 pub enum ComConst {
     Compiled(Vec<Literal>),
-    NotCompiled(KConst<ConcreteNode>),
+    NotCompiled(CConst),
 }
 
 #[derive(Clone)]
 pub enum ComMem {
     Compiled(usize),
-    NotCompiled(KMem<ConcreteNode>),
+    NotCompiled(CMem),
 }
 
 #[derive(Clone)]
@@ -205,11 +205,7 @@ impl Compiler {
             Some(ComConst::NotCompiled(c)) => c.clone(),
             None => todo!(),
         };
-        let KConst {
-            outs,
-            span: _,
-            body,
-        } = const_;
+        let CConst { outs, body } = const_;
         let mut com = Self::with_consts_and_strings(self.consts.clone(), self.strings.clone());
         com.compile_body(body.clone());
         self.consts = com.consts;
@@ -220,17 +216,14 @@ impl Compiler {
             Ok(Either::Right(bytes)) => {
                 for (ty, bytes) in outs.iter().zip(bytes) {
                     match ty {
-                        Type::Generic(_) => unreachable!(),
-                        Type::Concrete(ty) => match ty {
-                            tir::ConcreteType::Ptr(_) => todo!(),
-                            tir::ConcreteType::Primitive(ty) => match ty {
-                                Primitive::Bool => const_.push(Literal::Bool(bytes == 1)),
-                                Primitive::U64 => const_.push(Literal::Num(bytes)),
-                                Primitive::Char => const_.push(Literal::Char(bytes as u8 as char)),
-                                _ => todo!(),
-                            },
-                            tir::ConcreteType::Custom(_) => todo!(),
+                        ReifiedType::Ptr(_) => todo!(),
+                        ReifiedType::Primitive(ty) => match ty {
+                            Primitive::Bool => const_.push(Literal::Bool(bytes == 1)),
+                            Primitive::U64 => const_.push(Literal::Num(bytes)),
+                            Primitive::Char => const_.push(Literal::Char(bytes as u8 as char)),
+                            _ => todo!(),
                         },
+                        ReifiedType::Custom(_) => todo!(),
                     }
                 }
             }
@@ -248,19 +241,16 @@ impl Compiler {
                     Ok(Either::Right(bytes)) => {
                         for (ty, bytes) in outs.iter().zip(bytes) {
                             match ty {
-                                Type::Generic(_) => unreachable!(),
-                                Type::Concrete(ty) => match ty {
-                                    tir::ConcreteType::Ptr(_) => todo!(),
-                                    tir::ConcreteType::Primitive(ty) => match ty {
-                                        Primitive::Bool => const_.push(Literal::Bool(bytes == 1)),
-                                        Primitive::U64 => const_.push(Literal::Num(bytes)),
-                                        Primitive::Char => {
-                                            const_.push(Literal::Char(bytes as u8 as char))
-                                        }
-                                        _ => todo!(),
-                                    },
-                                    tir::ConcreteType::Custom(_) => todo!(),
+                                ReifiedType::Ptr(_) => todo!(),
+                                ReifiedType::Primitive(ty) => match ty {
+                                    Primitive::Bool => const_.push(Literal::Bool(bytes == 1)),
+                                    Primitive::U64 => const_.push(Literal::Num(bytes)),
+                                    Primitive::Char => {
+                                        const_.push(Literal::Char(bytes as u8 as char))
+                                    }
+                                    _ => todo!(),
                                 },
+                                ReifiedType::Custom(_) => todo!(),
                             }
                         }
                     }
@@ -281,7 +271,7 @@ impl Compiler {
             Some(ComMem::NotCompiled(c)) => c.clone(),
             None => unreachable!(),
         };
-        let KMem { body, span: _ } = mem;
+        let CMem { body } = mem;
         let mut com = Self::with_consts_and_strings(self.consts.clone(), self.strings.clone());
         com.compile_body(body.clone());
         self.consts = com.consts;

@@ -7,8 +7,8 @@ use crate::{
     concrete_error, error,
     inference::{ReifiedType, TermId},
     tir::{
-        Bind, ConcreteType, Cond, CondBranch, FieldAccess, GenId, If, KConst, KMem, TirNode, Type,
-        TypecheckedProgram, TypedIr, TypedNode, Var, While,
+        Bind, Cond, CondBranch, FieldAccess, GenId, If, TirNode, Type, TypecheckedProgram, TypedIr,
+        TypedNode, Var, While,
     },
     Error, ErrorKind,
 };
@@ -66,11 +66,21 @@ pub enum Intrinsic {
     Ge,
 }
 
+#[derive(Debug, Clone)]
+pub struct CConst {
+    pub outs: Vec<ReifiedType>,
+    pub body: Vec<ConcreteNode>,
+}
+#[derive(Debug, Clone)]
+pub struct CMem {
+    pub body: Vec<ConcreteNode>,
+}
+
 #[derive(Debug)]
 pub struct ConcreteProgram {
     pub procs: FnvHashMap<ItemPathBuf, CProc>,
-    pub consts: FnvHashMap<ItemPathBuf, KConst<ConcreteNode>>,
-    pub mems: FnvHashMap<ItemPathBuf, KMem<ConcreteNode>>,
+    pub consts: FnvHashMap<ItemPathBuf, CConst>,
+    pub mems: FnvHashMap<ItemPathBuf, CMem>,
     pub vars: FnvHashMap<ItemPathBuf, Var<ReifiedType>>,
     // pub structs: FnvHashMap<TypeId, CStruct>,
 }
@@ -80,11 +90,8 @@ fn substitutions(subs: &mut FnvHashMap<GenId, ReifiedType>, g: &Type, c: &Reifie
         (Type::Generic(g), c) => {
             subs.insert(*g, c.clone());
         }
-        (Type::Concrete(g), c) => {
-            if let (ConcreteType::Ptr(box g), ReifiedType::Ptr(box c)) = (g, c) {
-                substitutions(subs, g, c)
-            }
-        }
+        (Type::Concrete(_), _) => {}
+        (Type::Ptr(box g), _) => substitutions(subs, g, c),
     }
 }
 
@@ -118,8 +125,8 @@ pub struct CProc {
 pub struct Walker {
     procs: FnvHashMap<ItemPathBuf, Option<CProc>>,
     // structs: FnvHashMap<TypeId, CStruct>,
-    consts: FnvHashMap<ItemPathBuf, Option<KConst<ConcreteNode>>>,
-    mems: FnvHashMap<ItemPathBuf, Option<KMem<ConcreteNode>>>,
+    consts: FnvHashMap<ItemPathBuf, Option<CConst>>,
+    mems: FnvHashMap<ItemPathBuf, Option<CMem>>,
     vars: FnvHashMap<ItemPathBuf, Option<Var<ReifiedType>>>,
 }
 
@@ -186,6 +193,7 @@ impl Walker {
                     }
                 })
                 .collect::<Result<_, _>>()?;
+
             let mems = this
                 .mems
                 .into_iter()
@@ -396,10 +404,7 @@ impl Walker {
                     self.mems.insert(mem_name.clone(), None);
                     let body: Vec<ConcreteNode> =
                         self.walk_body(program, &mem.body, local_vars, &Default::default())?;
-                    let mem: KMem<ConcreteNode> = KMem {
-                        span: mem.span,
-                        body,
-                    };
+                    let mem = CMem { body };
                     self.mems.insert(mem_name.clone(), Some(mem));
                 }
 
@@ -440,6 +445,7 @@ impl Walker {
                     .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
+
                 let outs = node
                     .outs
                     .iter()
@@ -451,9 +457,8 @@ impl Walker {
                     self.consts.insert(const_name.clone(), None);
                     let body: Vec<ConcreteNode> =
                         self.walk_body(program, &const_.body, local_vars, &Default::default())?;
-                    let const_: KConst<ConcreteNode> = KConst {
-                        outs: const_.outs.clone(),
-                        span: const_.span,
+                    let const_ = CConst {
+                        outs: outs.clone(),
                         body,
                     };
                     self.consts.insert(const_name.clone(), Some(const_));
@@ -562,8 +567,8 @@ impl Walker {
                     hir::Intrinsic::Syscall4 => Intrinsic::Syscall4,
                     hir::Intrinsic::Syscall5 => Intrinsic::Syscall5,
                     hir::Intrinsic::Syscall6 => Intrinsic::Syscall6,
-                    hir::Intrinsic::Argc => Intrinsic::Argv,
-                    hir::Intrinsic::Argv => Intrinsic::Argc,
+                    hir::Intrinsic::Argc => Intrinsic::Argc,
+                    hir::Intrinsic::Argv => Intrinsic::Argv,
                     hir::Intrinsic::Add => Intrinsic::Add,
                     hir::Intrinsic::Sub => Intrinsic::Sub,
                     hir::Intrinsic::Divmod => Intrinsic::Divmod,

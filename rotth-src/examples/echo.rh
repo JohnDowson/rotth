@@ -4,7 +4,7 @@ proc main: u64 do
     else
         argv 8 ptr+
         argc 1 - while dup 0 > do
-            over cast &>u64  @u64 cast &>char
+            over cast &>u64 @u64 cast &>char
             dup cstrlen swap puts " " puts
             1 - swap 8 ptr+ swap
         end drop drop

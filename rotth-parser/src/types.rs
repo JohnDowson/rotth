@@ -17,20 +17,6 @@ pub enum Type {
 impl std::fmt::Debug for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.type_name().fmt(f)
-        // match self {
-        //     Type::Ptr(box ty) => {
-        //         write!(f, "&>")?;
-        //         ty.fmt(f)
-        //     }
-        //     Type::Primitive(p) => p.fmt(f),
-        //     Type::Custom(Custom { name, params }) => {
-        //         name.fmt(f)?;
-        //         if let Some(params) = params {
-        //             params.tys.fmt(f)?;
-        //         }
-        //         Ok(())
-        //     }
-        // }
     }
 }
 
@@ -60,11 +46,16 @@ impl Type {
             Type::Custom(Custom { name, params }) => {
                 let mut base = name.clone();
                 if let Some(params) = params {
-                    let mut b = String::new();
-                    for param in &params.tys {
-                        write!(b, "{:?}", param.inner.type_name()).unwrap();
+                    let mut paramstr = String::from("[");
+                    for (i, param) in params.tys.iter().enumerate() {
+                        if i == 0 {
+                            write!(paramstr, "{:?}", param.type_name()).unwrap();
+                        } else {
+                            write!(paramstr, " {:?}", param.type_name()).unwrap();
+                        }
                     }
-                    base.push(b);
+                    write!(paramstr, "]").unwrap();
+                    base.push(paramstr);
                 }
                 base
             }

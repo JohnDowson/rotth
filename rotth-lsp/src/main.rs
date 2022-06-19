@@ -88,7 +88,7 @@ impl<'s> Backend {
         let ast = match parse(tokens) {
             Ok(ast) => ast,
             Err(ParserError(es)) => {
-                let diagnostics = es
+                let _diagnostics = es
                     .into_iter()
                     .filter_map(|error| {
                         let (message, span) = match error {
@@ -140,9 +140,9 @@ impl<'s> Backend {
                     .collect::<Vec<_>>();
 
                 // todo: unbreak diagnostics
-                self.client
-                    .publish_diagnostics(params.uri.clone(), diagnostics, None)
-                    .await;
+                // self.client
+                //     .publish_diagnostics(params.uri.clone(), diagnostics, None)
+                //     .await;
                 return None;
             } // TODO!
         };

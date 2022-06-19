@@ -2,19 +2,22 @@ use fnv::FnvHashMap;
 use rotth_parser::{
     ast::{ItemPath, ItemPathBuf, Literal},
     hir::{self, Hir, Intrinsic},
-    types::{self, Primitive, StructIndex},
+    types::{self, StructIndex},
 };
 use smol_str::SmolStr;
 use somok::{PartitionThree, Somok, Ternary};
 use spanner::{Span, Spanned};
-use std::{fmt::Write, rc::Rc};
+use std::rc::Rc;
 
 use crate::{
     error,
-    inference::{type_to_info, Engine, ReifiedType, TermId, TypeInfo},
+    inference::{Engine, Insert, ReifiedType, TermId, TypeInfo},
     typecheck::{self, NodeRepr, THeap, TypeRepr, TypeStack},
     Error, ErrorKind,
 };
+
+impl TypeRepr for Type {}
+impl<T: TypeRepr, I> NodeRepr for TypedNode<T, I> {}
 
 #[derive(Clone)]
 pub struct TypedNode<T: TypeRepr, I> {
@@ -131,27 +134,8 @@ impl<T: TypeRepr + std::fmt::Debug, I: std::fmt::Debug> std::fmt::Debug for Type
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Generic(GenId),
-    Concrete(ConcreteType),
-}
-
-impl Type {
-    pub const BOOL: Self = Self::Concrete(ConcreteType::Primitive(Primitive::Bool));
-    pub const CHAR: Self = Self::Concrete(ConcreteType::Primitive(Primitive::Char));
-    pub const U64: Self = Self::Concrete(ConcreteType::Primitive(Primitive::U64));
-    pub const U32: Self = Self::Concrete(ConcreteType::Primitive(Primitive::U32));
-    pub const U16: Self = Self::Concrete(ConcreteType::Primitive(Primitive::U16));
-    pub const U8: Self = Self::Concrete(ConcreteType::Primitive(Primitive::U8));
-
-    pub const I64: Self = Self::Concrete(ConcreteType::Primitive(Primitive::I64));
-    pub const I32: Self = Self::Concrete(ConcreteType::Primitive(Primitive::I32));
-    pub const I16: Self = Self::Concrete(ConcreteType::Primitive(Primitive::I16));
-    pub const I8: Self = Self::Concrete(ConcreteType::Primitive(Primitive::I8));
-
-    pub const VOID: Self = Self::Concrete(ConcreteType::Primitive(Primitive::Void));
-
-    pub fn ptr_to(t: Self) -> Self {
-        Self::Concrete(ConcreteType::Ptr(box t))
-    }
+    Concrete(TermId),
+    Ptr(Box<Self>),
 }
 
 impl std::fmt::Debug for Type {
@@ -159,6 +143,7 @@ impl std::fmt::Debug for Type {
         match self {
             Type::Generic(i) => write!(f, "Generic({:?})", i),
             Type::Concrete(t) => t.fmt(f),
+            Type::Ptr(box t) => write!(f, "&>{:?}", t),
         }
     }
 }
@@ -168,26 +153,6 @@ pub struct TypeId(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct GenId(pub usize);
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum ConcreteType {
-    Ptr(Box<Type>),
-    Primitive(Primitive),
-    Custom(TypeId),
-}
-
-impl std::fmt::Debug for ConcreteType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConcreteType::Ptr(box ty) => {
-                write!(f, "&>")?;
-                ty.fmt(f)
-            }
-            ConcreteType::Primitive(p) => p.fmt(f),
-            ConcreteType::Custom(s) => s.fmt(f),
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct KProc<T> {
@@ -217,8 +182,8 @@ pub struct Var<T> {
 
 #[derive(Debug, Clone)]
 pub struct KStruct {
-    pub id: TypeId,
     pub typename: ItemPathBuf,
+    pub generics: Vec<GenId>,
     pub fields: FnvHashMap<SmolStr, Type>,
 }
 
@@ -243,7 +208,6 @@ pub struct Walker {
     unresloved_item_refs: FnvHashMap<ItemPathBuf, ItemPathBuf>,
     engine: Engine,
     structs: StructIndex,
-    next_type_id: usize,
     next_gen_id: usize,
 }
 
@@ -272,27 +236,30 @@ impl Walker {
             item_refs: Default::default(),
             unresloved_item_refs: Default::default(),
             checked_procs: Default::default(),
-            engine: Default::default(),
-            next_type_id: Default::default(),
+            engine: Engine::default(),
             next_gen_id: Default::default(),
         };
 
         for struct_ in this.structs.clone() {
-            let generics = struct_
+            let mut generics_hash: FnvHashMap<SmolStr, GenId> = Default::default();
+            let mut generics: Vec<GenId> = Default::default();
+            for (name, gid) in struct_
                 .generics
                 .into_iter()
                 .map(|ty| (ty.inner, this.gen_id()))
-                .collect();
+            {
+                generics.push(gid);
+                generics_hash.insert(name, gid);
+            }
             let mut fields = FnvHashMap::default();
             for (n, ty) in &struct_.fields {
-                let ty = this.abstract_to_concrete_type(ty, Some(&generics))?;
+                let ty = this.abstract_to_concrete_type(ty, Some(&generics_hash))?;
                 fields.insert(n.clone(), ty);
             }
-            let id = this.type_id();
             this.known_structs.insert(
                 struct_.name.clone(),
                 Rc::new(KStruct {
-                    id,
+                    generics,
                     fields,
                     typename: struct_.name,
                 }),
@@ -403,8 +370,8 @@ impl Walker {
             .into_iter()
             .map(|ty| {
                 let ty = self.abstract_to_concrete_type(&ty, Some(&generics))?;
-                let ty = type_to_info(&mut self.engine, &self.known_structs, &ty, false);
-                let ty = self.engine.insert(ty);
+                let ty = self.engine.insert(&ty);
+
                 Ok(ty)
             })
             .collect::<Result<Vec<_>, Error>>()?;
@@ -413,8 +380,7 @@ impl Walker {
             .into_iter()
             .map(|ty| {
                 let ty = self.abstract_to_concrete_type(&ty, Some(&generics))?;
-                let ty = type_to_info(&mut self.engine, &self.known_structs, &ty, false);
-                let ty = self.engine.insert(ty);
+                let ty = self.engine.insert(&ty);
                 Ok(ty)
             })
             .collect::<Result<Vec<_>, Error>>()?;
@@ -424,8 +390,7 @@ impl Walker {
             .map(|(k, hir::Var { ty, span: _ })| {
                 Ok((k, {
                     let ty = self.abstract_to_concrete_type(&ty, Some(&generics))?;
-                    let ty = type_to_info(&mut self.engine, &self.known_structs, &ty, true);
-                    let ty = self.engine.insert(ty);
+                    let ty = self.engine.insert_unknown_generics(&ty);
                     Var { ty }
                 }))
             })
@@ -518,9 +483,9 @@ impl Walker {
         }
         let hir::Var { ty, span } = var;
         let ty = self.abstract_to_concrete_type(&ty, None)?;
-        let ty = type_to_info(&mut self.engine, &self.known_structs, &ty, true);
-        let ty = self.engine.insert(ty);
-        if self.engine.is_real(&Default::default(), ty) {
+        let ty = self.engine.insert_unknown_generics(&ty);
+
+        if self.engine.is_real(ty) {
             self.known_gvars.insert(path, ty);
 
             Ok(())
@@ -697,16 +662,19 @@ impl Walker {
         let outs: Vec<TermId> = const_
             .outs
             .iter()
-            .map(|term| {
-                let info = type_to_info(&mut self.engine, &self.known_structs, term, false);
-                self.engine.insert(info)
-            })
+            .map(|term| self.engine.insert(term))
             .collect();
+
+        // dbg! {const_name};
+        // dbg! {&const_.outs};
 
         for ty in &outs {
             ins.push(heap, *ty);
         }
 
+        // dbg! {&outs};
+        // eprintln!();
+        // eprintln!();
         TypedNode {
             span,
             node: TypedIr::ConstUse(const_name.to_owned()),
@@ -901,9 +869,7 @@ impl Walker {
                         }
                         Intrinsic::Cast(o_ty) => {
                             let o_type = self.abstract_to_concrete_type(o_ty, generics)?;
-                            let o_type =
-                                type_to_info(&mut self.engine, &self.known_structs, &o_type, false);
-                            let o_type = self.engine.insert(o_type);
+                            let o_type = self.engine.insert(&o_type);
                             if let Some(in_t) = ins.pop(heap) {
                                 ins.push(heap, o_type);
                                 w_ins.push(in_t);
@@ -920,9 +886,7 @@ impl Walker {
                         Intrinsic::Read(ty) => {
                             if let Some(actual) = ins.pop(heap) {
                                 let ety = self.abstract_to_concrete_type(ty, generics)?;
-                                let ety =
-                                    type_to_info(&mut self.engine, &self.known_structs, &ety, true);
-                                let ety = self.engine.insert(ety);
+                                let ety = self.engine.insert_unknown_generics(&ety);
 
                                 let eptr = self.engine.insert(TypeInfo::Ptr(ety));
                                 if let Err(msg) = self.engine.unify(eptr, actual) {
@@ -951,9 +915,7 @@ impl Walker {
                         Intrinsic::Write(ty) => {
                             if let Some(ty1) = ins.pop(heap) {
                                 let ety = self.abstract_to_concrete_type(ty, generics)?;
-                                let ety =
-                                    type_to_info(&mut self.engine, &self.known_structs, &ety, true);
-                                let ety = self.engine.insert(ety);
+                                let ety = self.engine.insert_unknown_generics(&ety);
                                 let eptr = self.engine.insert(TypeInfo::Ptr(ety));
                                 if let Err(msg) = self.engine.unify(eptr, ty1) {
                                     return error(
@@ -1001,7 +963,7 @@ impl Walker {
                                     ins.clone()
                                         .into_vec(heap)
                                         .into_iter()
-                                        .map(|t| self.engine.reconstruct(t))
+                                        .map(|t| self.engine.term_to_string(t))
                                         .collect::<Vec<_>>()
                                 ),
                             );
@@ -1437,15 +1399,7 @@ impl Walker {
                                                 },
                                                 generics,
                                             )
-                                            .map(|ty| {
-                                                let info = type_to_info(
-                                                    &mut self.engine,
-                                                    &self.known_structs,
-                                                    &ty,
-                                                    false,
-                                                );
-                                                self.engine.insert(info)
-                                            });
+                                            .map(|ty| self.engine.insert(&ty));
 
                                         if let Ok(ty2) = ty2 {
                                             if let Err(msg) = self.engine.unify(ty, ty2) {
@@ -1677,7 +1631,7 @@ impl Walker {
                             span: pattern.span,
                             node: tir_pat,
                             ins: vec![],
-                            outs: vec![],
+                            outs: vec![pat_ty],
                         };
                         if let Err(msg) = self.engine.unify(ty, pat_ty) {
                             return error(
@@ -1744,13 +1698,8 @@ impl Walker {
                             w_outs.push(u64)
                         }
                         Literal::String(_) => {
-                            let cptr = type_to_info(
-                                &mut self.engine,
-                                &self.known_structs,
-                                &Type::ptr_to(Type::CHAR),
-                                false,
-                            );
-                            let cptr = self.engine.insert(cptr);
+                            let char = self.engine.insert(TypeInfo::Char);
+                            let cptr = self.engine.ptr_to(&Type::Concrete(char));
                             let u64 = self.engine.insert(TypeInfo::U64);
                             ins.push(heap, u64);
                             ins.push(heap, cptr);
@@ -1797,13 +1746,10 @@ impl Walker {
                 }
                 Hir::FieldAccess(hir::FieldAccess { field }) => {
                     let (in_ty, out_ty) = if let Some(ty) = ins.pop(heap) {
-                        let field_ty = match self.engine.get_struct_ptr(ty) {
-                            Ok(t) => *t.fields.get(field).unwrap(),
-                            Err(msg) => {
-                                return error(node.span, ErrorKind::UnsupportedOperation, msg)
-                            }
-                        };
+                        let field_ty = self.engine.get_struct_field_through_ptr(ty, field).unwrap();
+
                         let out_ty = self.engine.insert(TypeInfo::Ptr(field_ty));
+
                         ins.push(heap, out_ty);
                         (ty, out_ty)
                     } else {
@@ -1831,12 +1777,6 @@ impl Walker {
         Ok(checked_body)
     }
 
-    fn type_id(&mut self) -> TypeId {
-        let id = TypeId(self.next_type_id);
-        self.next_type_id += 1;
-        id
-    }
-
     fn gen_id(&mut self) -> GenId {
         let id = GenId(self.next_gen_id);
         self.next_gen_id += 1;
@@ -1849,72 +1789,51 @@ impl Walker {
     ) -> Result<Type, Error> {
         let span = ty.span;
         let kind = match &ty.inner {
-            types::Type::Ptr(box t) => Type::ptr_to(self.abstract_to_concrete_type(
-                &Spanned {
-                    span,
-                    inner: t.clone(),
-                },
-                generics,
-            )?),
-            types::Type::Primitive(ty) => Type::Concrete(ConcreteType::Primitive(*ty)),
-            types::Type::Custom(types::Custom {
-                name,
-                params: Some(params),
-            }) => {
-                let params = params.tys.iter().map(|t| t.inner.clone());
-
-                let ty =
-                    if self.known_structs.get(name).is_some() || self.structs.get(name).is_some() {
-                        self.instantiate_type(name, params)?
-                    } else {
-                        todo!()
-                    };
-                ty
-            }
-            types::Type::Custom(types::Custom { name, params: None }) => {
-                if let Some(ty) = self.known_structs.get(name) {
-                    Type::Concrete(ConcreteType::Custom(ty.id))
-                } else if let Some(Ref::Struct(ty)) = self.item_refs.get(name) {
-                    let ty = Spanned {
+            types::Type::Ptr(box t) => {
+                let ty = self.abstract_to_concrete_type(
+                    &Spanned {
                         span,
-                        inner: types::Type::Custom(types::Custom {
-                            name: ty.clone(),
-                            params: None,
-                        }),
-                    };
-                    self.abstract_to_concrete_type(&ty, generics)?
+                        inner: t.clone(),
+                    },
+                    generics,
+                )?;
+                Type::Ptr(box ty)
+            }
+            types::Type::Primitive(ty) => Type::Concrete(self.engine.insert(*ty)),
+
+            types::Type::Custom(types::Custom { name, params }) => {
+                let ty = if let Some(ty) = self.known_structs.get(name) {
+                    ty.clone()
+                } else if let Some(Ref::Struct(ty)) = self.item_refs.get(name) {
+                    self.known_structs.get(ty).unwrap().clone()
                 } else if let Some(r) = self.unresloved_item_refs.get(name) {
                     if let Ref::Struct(ty) = self.resolve(r.clone()) {
-                        let ty = Spanned {
-                            span,
-                            inner: types::Type::Custom(types::Custom {
-                                name: ty,
-                                params: None,
-                            }),
-                        };
-                        self.abstract_to_concrete_type(&ty, generics)?
+                        self.known_structs.get(&ty).unwrap().clone()
                     } else {
                         todo!("This is a error yo")
                     }
                 } else if let Some(ty) = self.structs.get(name).cloned() {
+                    let mut generics_hash: FnvHashMap<SmolStr, GenId> = Default::default();
+                    let mut generics: Vec<GenId> = Default::default();
+                    for (name, gid) in ty.generics.into_iter().map(|ty| (ty.inner, self.gen_id())) {
+                        generics.push(gid);
+                        generics_hash.insert(name, gid);
+                    }
                     let mut fields = FnvHashMap::default();
                     for (n, ty) in ty.fields {
-                        let ty = self.abstract_to_concrete_type(&ty, None)?;
+                        let ty = self.abstract_to_concrete_type(&ty, Some(&generics_hash))?;
                         fields.insert(n, ty);
                     }
-                    let id = self.type_id();
-                    self.known_structs.insert(
-                        ty.name.clone(),
-                        Rc::new(KStruct {
-                            id,
-                            fields,
-                            typename: ty.name,
-                        }),
-                    );
-                    Type::Concrete(ConcreteType::Custom(id))
+                    let s = Rc::new(KStruct {
+                        generics,
+                        fields,
+                        typename: ty.name.clone(),
+                    });
+                    self.known_structs.insert(ty.name, s.clone());
+                    s
                 } else if let Some(g) = name.only() {
                     if let Some(id) = generics.and_then(|gs| gs.get(g)) {
-                        Type::Generic(*id)
+                        return Ok(Type::Generic(*id));
                     } else {
                         return error(
                             span,
@@ -1928,6 +1847,28 @@ impl Walker {
                         ErrorKind::Undefined,
                         "This type name is not found in the current scope",
                     );
+                };
+                let pid = self.engine.insert_proto(ty.clone());
+                if ty.generics.is_empty() {
+                    let tid = self.engine.instantiate(pid, &Default::default());
+                    Type::Concrete(tid)
+                } else if let Some(params) = params {
+                    let subs = ty
+                        .generics
+                        .iter()
+                        .zip(params.tys.iter())
+                        .map(|(gen, param)| {
+                            let ty = self.abstract_to_concrete_type(param, generics)?;
+                            let ty = self.engine.insert(&ty);
+                            Ok((*gen, ty))
+                        })
+                        .collect::<Result<_, _>>()?;
+
+                    let tid = self.engine.instantiate(pid, &subs);
+                    Type::Concrete(tid)
+                } else {
+                    let tid = self.engine.instantiate(pid, &Default::default());
+                    Type::Concrete(tid)
                 }
             }
         };
@@ -1935,75 +1876,81 @@ impl Walker {
         kind.okay()
     }
 
-    fn instantiate_type(
-        &mut self,
-        name: &ItemPath,
-        params: impl Iterator<Item = types::Type>,
-    ) -> Result<Type, Error> {
-        fn substitute_and_rename(
-            proto: &types::Struct,
-            params: impl Iterator<Item = types::Type>,
-        ) -> types::Struct {
-            fn find_generic(t: &mut types::Type, gen: &str, param: types::Type) {
-                match t {
-                    types::Type::Ptr(box r) => find_generic(r, gen, param),
-                    types::Type::Custom(types::Custom { name, params: None }) => {
-                        if let Some(n) = name.only() {
-                            if n == gen {
-                                *t = param;
-                            }
-                        }
-                    }
-                    types::Type::Custom(types::Custom {
-                        name: _,
-                        params: Some(_),
-                    }) => {
-                        todo!()
-                    }
-                    types::Type::Primitive(_) => (),
-                }
-            }
-            let mut proto2 = proto.clone();
-            let mut paramstr = String::from("[");
-            for (i, (param, gen)) in params.zip(proto.generics.iter()).enumerate() {
-                if i == 0 {
-                    write!(paramstr, "{:?}", param).unwrap();
-                } else {
-                    write!(paramstr, " {:?}", param).unwrap();
-                }
-                for t in proto2.fields.values_mut() {
-                    find_generic(t, &*gen.inner, param.clone())
-                }
-            }
-            write!(paramstr, "]").unwrap();
-            proto2.name.push(paramstr);
-            proto2
-        }
+    // fn instantiate_type(
+    //     &mut self,
+    //     name: &ItemPath,
+    //     params: impl Iterator<Item = types::Type>,
+    // ) -> Result<Type, Error> {
+    //     fn substitute_and_rename(
+    //         proto: &types::Struct,
+    //         params: impl Iterator<Item = types::Type>,
+    //     ) -> types::Struct {
+    //         fn find_generic(t: &mut types::Type, gen: &str, param: types::Type) {
+    //             match t {
+    //                 types::Type::Ptr(box r) => find_generic(r, gen, param),
+    //                 types::Type::Custom(types::Custom { name, params: None }) => {
+    //                     if let Some(n) = name.only() {
+    //                         if n == gen {
+    //                             *t = param;
+    //                         }
+    //                     }
+    //                 }
+    //                 types::Type::Custom(types::Custom {
+    //                     name: _,
+    //                     params: Some(_),
+    //                 }) => {
+    //                     todo!()
+    //                 }
+    //                 types::Type::Primitive(_) => (),
+    //             }
+    //         }
+    //         let mut proto2 = proto.clone();
+    //         let mut paramstr = String::from("[");
+    //         for (i, (param, gen)) in params.zip(proto.generics.iter()).enumerate() {
+    //             if i == 0 {
+    //                 write!(paramstr, "{:?}", param).unwrap();
+    //             } else {
+    //                 write!(paramstr, " {:?}", param).unwrap();
+    //             }
+    //             for t in proto2.fields.values_mut() {
+    //                 find_generic(t, &*gen.inner, param.clone())
+    //             }
+    //         }
+    //         write!(paramstr, "]").unwrap();
+    //         proto2.name.push(paramstr);
+    //         proto2
+    //     }
 
-        let proto = self.structs.get(name).unwrap();
-        let proto2 = substitute_and_rename(proto, params);
-        let mut fields = FnvHashMap::default();
-        for (n, ty) in proto2.fields {
-            let ty = self.abstract_to_concrete_type(&ty, None)?;
-            fields.insert(n, ty);
-        }
-        let id = if let Some(s) = self.known_structs.get(&proto2.name) {
-            s.id
-        } else {
-            let id = self.type_id();
-            self.known_structs.insert(
-                proto2.name.clone(),
-                Rc::new(KStruct {
-                    id,
-                    fields,
-                    typename: proto2.name,
-                }),
-            );
-            id
-        };
+    //     let proto = self.structs.get(name).unwrap();
+    //     let proto2 = substitute_and_rename(proto, params);
+    //     let mut fields = FnvHashMap::default();
+    //     for (n, ty) in proto2.fields {
+    //         let ty = self.abstract_to_concrete_type(&ty, None)?;
+    //         fields.insert(n, ty);
+    //     }
+    //     let id = if let Some(s) = self.known_structs.get(&proto2.name) {
+    //         s.id
+    //     } else {
+    //         let generics = proto2
+    //             .generics
+    //             .iter()
+    //             .map(|s| (s.inner.clone(), self.gen_id()))
+    //             .collect();
+    //         let id = self.type_id();
+    //         self.known_structs.insert(
+    //             proto2.name.clone(),
+    //             Rc::new(KStruct {
+    //                 fields,
+    //                 typename: proto2.name,
+    //                 generics,
+    //             }),
+    //         );
+    //         id
+    //     };
 
-        Ok(Type::Concrete(ConcreteType::Custom(id)))
-    }
+    //     Ok(Type::Concrete(ConcreteType::Custom(id)))
+    //     todo!()
+    // }
 
     fn is_proc(&self, name: &ItemPath) -> bool {
         self.known_procs.contains_key(name)

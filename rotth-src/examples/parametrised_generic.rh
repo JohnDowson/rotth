@@ -8,10 +8,17 @@ var FOO: Vec[u64]
 var COMPLEX: Vec[Vec[char]]
 
 proc main: u64 do
+    var hmm: Vec[Vec]
     var BAR: Vec
     FOO ->buf
     BAR ->buf
     COMPLEX ->buf
-    bind f: &>&>u64 b: &>&>u8 c: &>&>Vec[char] do end
+    hmm
+    bind
+        f: &>&>u64
+        b: &>&>u8
+        c: &>&>Vec[char]
+        h: &>Vec[Vec[u64]]
+    do end
     0
 end
