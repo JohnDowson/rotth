@@ -22,3 +22,10 @@ smol_str = "0.1"
 inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = [
   "llvm12-0",
 ] }
+
+target-lexicon = "0.12"
+cranelift = "0.84"
+cranelift-jit = "0.84"
+cranelift-module = "0.84"
+cranelift-preopt = "0.84"
+capstone = "0.11"

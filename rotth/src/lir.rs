@@ -10,6 +10,7 @@ use rotth_parser::{
     hir::Binding,
     types::Primitive,
 };
+use smol_str::SmolStr;
 use somok::{Either, Somok};
 use spanner::Span;
 use Op::*;
@@ -101,6 +102,9 @@ pub enum ComVar {
 
 #[derive(Default)]
 pub struct CompiledProc {
+    pub ins: Vec<ReifiedType>,
+    pub outs: Vec<ReifiedType>,
+    pub name: SmolStr,
     pub code: Vec<SpannedOp>,
 }
 
@@ -113,13 +117,19 @@ impl std::fmt::Debug for CompiledProc {
     }
 }
 
-pub fn unspan(spanned: Vec<SpannedOp>) -> Vec<Op> {
+pub fn unspan(spanned: impl IntoIterator<Item = SpannedOp>) -> Vec<Op> {
     spanned.into_iter().map(|s| s.op).collect()
 }
 
+pub fn spanify(ops: impl IntoIterator<Item = Op>) -> Vec<SpannedOp> {
+    ops.into_iter()
+        .map(|op| SpannedOp { span: None, op })
+        .collect()
+}
+
 pub struct SpannedOp {
-    op: Op,
-    span: Option<Span>,
+    pub op: Op,
+    pub span: Option<Span>,
 }
 
 impl std::fmt::Debug for SpannedOp {
@@ -211,7 +221,15 @@ impl Compiler {
     fn compile_proc(&mut self, name: Mangled, proc: CProc) {
         self.label = 0;
         self.current_name = name.clone();
-        self.result.insert(name, Default::default());
+        self.result.insert(
+            name.clone(),
+            CompiledProc {
+                ins: proc.ins,
+                outs: proc.outs,
+                name: name.0.into(),
+                code: Default::default(),
+            },
+        );
 
         let mut i = 0;
         for (name, var) in proc.vars {

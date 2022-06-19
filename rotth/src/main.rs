@@ -1,6 +1,6 @@
 use ariadne::{Color, FileCache, Fmt, Label, Report, ReportKind, Span};
 use chumsky::error::SimpleReason;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use rotth::{emit, lir, Error};
 use rotth_analysis::{ctir, tir};
 use rotth_parser::hir;
@@ -23,7 +23,16 @@ struct Args {
     dump_lir: bool,
     #[clap(short = 't', long)]
     time: bool,
+    #[clap(short = 'b', long, value_enum, default_value = "asm")]
+    backend: Backend,
     source: PathBuf,
+}
+
+#[derive(Clone, ValueEnum)]
+enum Backend {
+    Asm,
+    Llvm,
+    Cranelift,
 }
 
 fn main() -> std::result::Result<(), ()> {
@@ -322,18 +331,24 @@ fn compiler() -> Result<(), Error> {
         println!();
     }
 
-    emit::asm::compile(
-        lir,
-        strings,
-        mems,
-        BufWriter::new(
-            OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(source.with_extension("asm"))?,
-        ),
-    )?;
+    match args.backend {
+        Backend::Asm => {
+            emit::asm::compile(
+                lir,
+                strings,
+                mems,
+                BufWriter::new(
+                    OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(true)
+                        .open(source.with_extension("asm"))?,
+                ),
+            )?;
+        }
+        Backend::Llvm => todo!(),
+        Backend::Cranelift => todo!(),
+    }
 
     let compiled = Instant::now();
     if args.time {
