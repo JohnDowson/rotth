@@ -19,3 +19,6 @@ spanner = { path = "../spanner" }
 chumsky = { git = "https://github.com/zesterer/chumsky.git" }
 thiserror = "1.0"
 smol_str = "0.1"
+inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = [
+  "llvm12-0",
+] }

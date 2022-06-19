@@ -12,7 +12,7 @@ assemble FILE:
     ld -o {{FILE}} {{FILE}}.o {{root}}/print.o
 
 build FILE:
-    cargo run --bin rotth -- --compile -- {{rotthdir}}/{{FILE}}.rh
+    cargo run --bin rotth -- -- {{rotthdir}}/{{FILE}}.rh
     nasm -g -F dwarf -f elf64 {{root}}/print.asm -o {{root}}/print.o
     nasm -g -F dwarf -f elf64 {{rotthdir}}/{{FILE}}.asm -o {{rotthdir}}/{{FILE}}.o
     ld -o {{rotthdir}}/{{FILE}} {{rotthdir}}/{{FILE}}.o {{root}}/print.o
@@ -24,7 +24,7 @@ gdb FILE: (build FILE)
     gdb --tui {{rotthdir}}/{{FILE}}
 
 compiler:
-    cargo run --bin rotth -- --compile -- {{compiler}}.rh
+    cargo run --bin rotth -- -- {{compiler}}.rh
     nasm -g -F dwarf -f elf64 {{root}}/print.asm -o {{root}}/print.o
     nasm -g -F dwarf -f elf64 {{compiler}}.asm -o {{compiler}}.o
     ld -o {{compiler}} {{compiler}}.o {{root}}/print.o

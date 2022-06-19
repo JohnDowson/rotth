@@ -12,7 +12,7 @@ pub fn eval(
         .iter()
         .enumerate()
         .filter_map(|(i, op)| {
-            if let Op::Label(l) | Op::Proc(l) = op {
+            if let Op::Label(l) = op {
                 (l.clone(), i).some()
             } else {
                 None
@@ -126,7 +126,6 @@ pub fn eval(
                 stack.push((a >= b) as u64);
             }
 
-            Op::Proc(_) => (),
             Op::Label(_) => (),
             Op::Jump(l) => i = labels[l],
             Op::JumpF(l) => {

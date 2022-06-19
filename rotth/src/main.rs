@@ -1,7 +1,7 @@
 use ariadne::{Color, FileCache, Fmt, Label, Report, ReportKind, Span};
 use chumsky::error::SimpleReason;
 use clap::Parser;
-use rotth::{emit, eval::eval, lir, Error};
+use rotth::{emit, lir, Error};
 use rotth_analysis::{ctir, tir};
 use rotth_parser::hir;
 use somok::Somok;
@@ -23,8 +23,6 @@ struct Args {
     dump_lir: bool,
     #[clap(short = 't', long)]
     time: bool,
-    #[clap(long)]
-    compile: bool,
     source: PathBuf,
 }
 
@@ -317,38 +315,30 @@ fn compiler() -> Result<(), Error> {
 
     if args.dump_lir {
         println!("LIR:");
-        for (i, op) in lir.iter().enumerate() {
-            println!("{i}:\t{op:?}");
+        for (name, proc) in lir.iter() {
+            println!("{name}:");
+            println!("{proc:?}");
         }
         println!();
     }
 
-    if args.compile {
-        emit::compile(
-            lir,
-            &strings,
-            &mems,
-            BufWriter::new(
-                OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .truncate(true)
-                    .open(source.with_extension("asm"))?,
-            ),
-        )?;
+    emit::asm::compile(
+        lir,
+        strings,
+        mems,
+        BufWriter::new(
+            OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(source.with_extension("asm"))?,
+        ),
+    )?;
 
-        let compiled = Instant::now();
-        if args.time {
-            println!("Compiled in:\t{:?}", compiled - transpiled);
-            println!("Total:\t{:?}", compiled - start);
-        }
-    } else {
-        println!("exitcode: {:?}", eval(lir, &[], false).unwrap());
-        let evaluated = Instant::now();
-        if args.time {
-            println!("Evaluated in:\t{:?}", evaluated - transpiled);
-            println!("Total:\t{:?}", evaluated - start);
-        }
+    let compiled = Instant::now();
+    if args.time {
+        println!("Compiled in:\t{:?}", compiled - transpiled);
+        println!("Total:\t{:?}", compiled - start);
     }
 
     ().okay()
