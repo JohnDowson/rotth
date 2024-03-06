@@ -76,7 +76,7 @@ impl<T: Debug> Debug for Container<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Free => write!(f, "[]"),
-            Self::Value(value) => write!(f, "[{:?}]", value),
+            Self::Value(value) => write!(f, "[{value:?}]"),
         }
     }
 }
@@ -111,7 +111,7 @@ impl<T: Debug, const ID: u32> std::fmt::Debug for Heap<T, ID> {
     }
 }
 
-impl<'h, T, const ID: u32> Heap<T, ID> {
+impl<T, const ID: u32> Heap<T, ID> {
     pub fn new() -> Self {
         Self {
             values: Default::default(),
@@ -140,7 +140,7 @@ impl<'h, T, const ID: u32> Heap<T, ID> {
     }
 }
 
-impl<'h, T, const ID: u32> Default for Heap<T, ID> {
+impl<T, const ID: u32> Default for Heap<T, ID> {
     fn default() -> Self {
         Self::new()
     }

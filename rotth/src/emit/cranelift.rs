@@ -320,6 +320,7 @@ impl<'a> Stack2SSA<'a> {
                 Op::Exit => todo!(),
             };
 
+            dbg! {self.end_of_basic_block};
             if !self.end_of_basic_block && index == self.runoff {
                 self.end_of_basic_block = true;
                 self.fallthrough = true;

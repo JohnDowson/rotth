@@ -1,120 +1,34 @@
 use std::collections::BTreeMap;
 
-use crate::lir::{CompiledProc, Op, SpannedOp};
+use crate::lir::{Block, CompiledProc, Mangled, Op, SpannedOp};
+use fnv::FnvHashMap;
 use inkwell::{
     basic_block::BasicBlock,
     builder::Builder,
     context::Context,
     module::Module,
     passes::PassManager,
-    values::{AnyValue, BasicValue, FunctionValue, IntValue},
+    values::{FunctionValue, InstructionOpcode, IntValue, PointerValue},
+    AddressSpace,
 };
-use rotth_analysis::inference::ReifiedType;
-use rotth_parser::{ast::Literal, types::Primitive};
+use rotth_parser::ast::Literal;
 use smol_str::SmolStr;
 
-pub struct ProcBlock<'ctx> {
-    pub low: usize,
-    pub high: usize,
-    pub max: usize,
-
-    pub block: BasicBlock<'ctx>,
-    pub stack_state: Box<[IntValue<'ctx>]>,
-    flags: u8,
+struct ProcBlock<'ctx> {
+    low: usize,
+    high: usize,
+    block: BasicBlock<'ctx>,
+    stack_state: Box<[IntValue<'ctx>]>,
 }
 
 impl<'ctx> ProcBlock<'ctx> {
-    const STACK_KNOWN: u8 = 0x01;
-    const LOCAL_KNOWN: u8 = 0x02;
-    const SELF_REGEN: u8 = 0x04;
-    const GENERATED: u8 = 0x08;
-    const COLOR: u8 = 0x10;
-    const IN_CODE_ORDER: u8 = 0x20;
-
-    pub fn set_stack_known(&mut self) {
-        self.flags |= Self::STACK_KNOWN;
-    }
-
-    pub fn clear_stack_known(&mut self) {
-        self.flags &= !Self::STACK_KNOWN;
-    }
-
-    pub fn is_stack_known(&self) -> bool {
-        (self.flags & Self::STACK_KNOWN) != 0
-    }
-
-    pub fn set_local_known(&mut self) {
-        self.flags |= Self::LOCAL_KNOWN;
-    }
-
-    pub fn clear_local_known(&mut self) {
-        self.flags &= !Self::LOCAL_KNOWN;
-    }
-
-    pub fn is_local_known(&self) -> bool {
-        (self.flags & Self::LOCAL_KNOWN) != 0
-    }
-
-    pub fn set_self_regen(&mut self) {
-        self.flags |= Self::SELF_REGEN;
-    }
-
-    pub fn clear_self_regen(&mut self) {
-        self.flags &= !Self::SELF_REGEN;
-    }
-
-    pub fn is_self_regen(&self) -> bool {
-        (self.flags & Self::SELF_REGEN) != 0
-    }
-
-    pub fn set_generated(&mut self) {
-        self.flags |= Self::GENERATED;
-    }
-
-    pub fn clear_generated(&mut self) {
-        self.flags &= !Self::GENERATED;
-    }
-
-    pub fn is_generated(&self) -> bool {
-        (self.flags & Self::GENERATED) != 0
-    }
-
-    pub fn set_black(&mut self) {
-        self.flags |= Self::COLOR;
-    }
-
-    pub fn set_red(&mut self) {
-        self.flags &= !Self::COLOR;
-    }
-
-    pub fn is_red(&self) -> bool {
-        (self.flags & Self::COLOR) == 0
-    }
-    pub fn is_black(&self) -> bool {
-        (self.flags & Self::COLOR) == 0
-    }
-
-    pub fn set_in_code_order(&mut self) {
-        self.flags |= Self::IN_CODE_ORDER;
-    }
-
-    pub fn clear_in_code_order(&mut self) {
-        self.flags &= !Self::IN_CODE_ORDER;
-    }
-
-    pub fn is_in_code_order(&self) -> bool {
-        (self.flags & Self::IN_CODE_ORDER) != 0
-    }
-
-    pub fn new(loc: usize, block: BasicBlock<'ctx>) -> Self {
+    fn new(loc: usize, block: BasicBlock<'ctx>) -> Self {
         Self {
             block,
             low: loc,
             high: loc,
-            max: usize::MAX,
 
             stack_state: vec![].into_boxed_slice(),
-            flags: 0,
         }
     }
 }
@@ -124,19 +38,18 @@ pub struct Compiler<'a, 'ctx> {
     pub builder: &'a Builder<'ctx>,
     pub fpm: &'a PassManager<FunctionValue<'ctx>>,
     pub module: &'a Module<'ctx>,
-    pub proc: &'a CompiledProc,
+    pub proc: CompiledProc,
 
     bindings: Vec<IntValue<'ctx>>,
     operand_stack: Vec<IntValue<'ctx>>,
-    instr_index: usize,
     ungenerated: Vec<ProcBlock<'ctx>>,
     current_block: Option<ProcBlock<'ctx>>,
-    blocks: BTreeMap<u32, BasicBlock<'ctx>>,
-    end_of_basic_block: bool,
-    fallthrough: bool,
-    runoff: usize,
+    blocks: BTreeMap<usize, BasicBlock<'ctx>>,
+    end_of_block: bool,
 
     proc_value: Option<FunctionValue<'ctx>>,
+    labels: FnvHashMap<Mangled, usize>,
+    ret_slot: Option<PointerValue<'ctx>>,
 
     vid: usize,
     bid: usize,
@@ -148,8 +61,22 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         builder: &'a Builder<'ctx>,
         pass_manager: &'a PassManager<FunctionValue<'ctx>>,
         module: &'a Module<'ctx>,
-        proc: &'a CompiledProc,
+        mut proc: CompiledProc,
     ) -> Result<FunctionValue<'ctx>, &'static str> {
+        let mut labels: FnvHashMap<_, _> = Default::default();
+        proc.code = proc
+            .code
+            .into_iter()
+            .enumerate()
+            .map(|(i, spanned)| {
+                let SpannedOp { op, span: _ } = &spanned;
+                if let Op::Label(l) = op {
+                    labels.insert(l.clone(), i);
+                }
+                spanned
+            })
+            .collect();
+
         let mut this = Self {
             ctx: context,
             builder,
@@ -159,15 +86,14 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
             bindings: Vec::new(),
             operand_stack: Vec::new(),
-            instr_index: 0,
             ungenerated: Default::default(),
             current_block: Default::default(),
             blocks: Default::default(),
-            end_of_basic_block: false,
-            fallthrough: false,
-            runoff: usize::MAX,
+            end_of_block: false,
 
             proc_value: None,
+            labels,
+            ret_slot: None,
 
             vid: 0,
             bid: 0,
@@ -186,6 +112,10 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         SmolStr::new_inline(&bid.to_string())
     }
 
+    fn ret_slot(&self) -> PointerValue<'ctx> {
+        self.ret_slot.unwrap()
+    }
+
     fn compile_fn(&mut self) -> Result<FunctionValue<'ctx>, &'static str> {
         let proc_name = &*self.proc.name;
 
@@ -194,7 +124,11 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             .collect();
 
         let rets = self.proc.outs.len() as u32;
-        let ret_ty = self.ctx.i64_type().array_type(rets);
+        let ret_ty = self
+            .ctx
+            .i64_type()
+            .array_type(rets)
+            .ptr_type(AddressSpace::Generic);
 
         let proc_type = ret_ty.fn_type(&params, false);
         let proc = self.module.add_function(proc_name, proc_type, None);
@@ -205,6 +139,12 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
         let entry = self.ctx.append_basic_block(proc, "entry");
         self.builder.position_at_end(entry);
+        let ret_slot = self.builder.build_array_alloca(
+            self.ctx.i64_type(),
+            self.ctx.i64_type().const_int(rets as _, false),
+            "outs",
+        );
+        self.ret_slot = Some(ret_slot);
 
         self.blocks.insert(0, entry);
         let block = ProcBlock::new(0, entry);
@@ -215,12 +155,8 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         self.compile_from(0)?;
 
         while let Some(block) = self.ungenerated.pop() {
-            println!(
-                "generate {:?} (stack {})",
-                block.block,
-                block.stack_state.len()
-            );
             self.operand_stack.clear();
+            self.operand_stack.extend_from_slice(&*block.stack_state);
             self.current_block = Some(block);
 
             self.compile_from(self.block().low)?;
@@ -242,22 +178,18 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         &self.proc.code
     }
 
-    fn get_or_create_block(&mut self, offset: u32) -> BasicBlock<'ctx> {
-        self.end_of_basic_block = true;
-        // *self.blocks.entry(offset).or_insert_with(|| {
-        //     let bid = &*self.bid();
-        //     let block = self.ctx.append_basic_block(self.func(), bid);
-        //     let mut pb = ProcBlock::new(offset as _, block);
-        //     pb.stack_state = self.operand_stack.clone().into_boxed_slice();
-        //     self.ungenerated.push(pb);
-        //     block
-        // })
-        // Because commented out version triggers borrowchecker
+    fn get_or_create_block(
+        &mut self,
+        offset: usize,
+        name: Option<&'static str>,
+    ) -> BasicBlock<'ctx> {
+        self.end_of_block = true;
         #[allow(clippy::map_entry)]
         if self.blocks.contains_key(&offset) {
             *self.blocks.get(&offset).unwrap()
         } else {
-            let bid = &*self.bid();
+            let bid = self.bid();
+            let bid = if let Some(name) = name { name } else { &*bid };
             let block = self.ctx.append_basic_block(self.func(), bid);
             self.blocks.insert(offset, block);
 
@@ -270,11 +202,9 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
     fn compile_from(&mut self, mut index: usize) -> Result<(), &'static str> {
         self.builder.position_at_end(self.block().block);
-        self.end_of_basic_block = false;
-        self.fallthrough = false;
+        self.end_of_block = false;
         self.block_mut().high = index;
         loop {
-            self.instr_index = index;
             let SpannedOp { op, span: _ } = &self.code()[index];
             index += 1;
 
@@ -365,35 +295,72 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 Op::Le => todo!(),
                 Op::Gt => todo!(),
                 Op::Ge => todo!(),
-                Op::Label(_) => todo!(),
-                Op::Jump(_) => todo!(),
-                Op::JumpF(_) => todo!(),
-                Op::JumpT(_) => todo!(),
+                Op::Label(_) => {}
+                Op::Jump(target) => {
+                    let target = self.labels[target];
+                    let target = self.get_or_create_block(target, None);
+                    self.builder.build_unconditional_branch(target);
+                }
+                Op::JumpF(target) => {
+                    let target = self.labels[target];
+
+                    let x = self.operand_stack.pop().unwrap();
+                    let x = self
+                        .builder
+                        .build_cast(InstructionOpcode::Trunc, x, self.ctx.bool_type(), "cond")
+                        .into_int_value();
+                    let target = self.get_or_create_block(target, None);
+                    let else_block = self.get_or_create_block(index, None);
+
+                    self.builder.build_conditional_branch(x, else_block, target);
+                }
+                Op::JumpT(target) => {
+                    let target = self.labels[target];
+
+                    let x = self.operand_stack.pop().unwrap();
+                    let x = self
+                        .builder
+                        .build_cast(InstructionOpcode::Trunc, x, self.ctx.bool_type(), "cond")
+                        .into_int_value();
+                    let target = self.get_or_create_block(target, Some("True"));
+                    let else_block = self.get_or_create_block(index, Some("Else"));
+
+                    self.builder.build_conditional_branch(x, target, else_block);
+                }
                 Op::Call(_) => todo!(),
                 Op::Return => {
-                    let ret = self.builder.build_array_alloca(
-                        self.ctx.i64_type(),
-                        self.ctx.i64_type().const_int(4, false),
-                        "outs",
-                    );
+                    let ret = self.ret_slot();
+                    for (i, _) in self.proc.outs.iter().enumerate() {
+                        let value = self.operand_stack.pop().unwrap();
+                        let slot = unsafe {
+                            self.builder.build_gep(
+                                ret,
+                                &[self.ctx.i64_type().const_int(i as _, false)],
+                                "build_ret",
+                            )
+                        };
+                        self.builder.build_store(slot, value);
+                    }
+
+                    let ret = self
+                        .builder
+                        .build_bitcast(
+                            ret,
+                            self.ctx
+                                .i64_type()
+                                .array_type(2)
+                                .ptr_type(AddressSpace::Generic),
+                            "cast_ret",
+                        )
+                        .into_pointer_value();
+
                     self.builder.build_return(Some(&ret));
+                    self.end_of_block = true;
                 }
                 Op::Exit => todo!(),
             }
 
-            // This isn't in the original code, but without it the index overflows array bounds
-            if index == self.code().len() {
-                return Ok(());
-            }
-            if !self.end_of_basic_block && index == self.runoff {
-                self.end_of_basic_block = true;
-                self.fallthrough = true;
-            }
-            if self.end_of_basic_block {
-                if self.fallthrough {
-                    let block = self.get_or_create_block(index as _);
-                    self.builder.build_unconditional_branch(block);
-                }
+            if self.end_of_block {
                 return Ok(());
             }
         }
@@ -402,14 +369,40 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
 #[test]
 fn test() {
-    use crate::lir::spanify;
-    use Op::*;
+    use crate::ops;
+    use rotth_analysis::inference::ReifiedType;
+    use rotth_parser::{ast::Literal, types::Primitive};
     let u64 = ReifiedType::Primitive(Primitive::U64);
     let proc = CompiledProc {
         ins: vec![u64.clone(), u64.clone()],
-        outs: vec![u64],
-        name: "add".into(),
-        code: spanify([Add, Push(Literal::Num(69)), Add, Return]),
+        outs: vec![u64.clone(), u64],
+        name: "test".into(),
+        blocks: vec![Block {
+            code: vec![ops![
+                JumpT(Mangled("t1".to_string())),
+                Push(Literal::Num(60)),
+                Push(Literal::Num(9)),
+                Add,
+                Jump(Mangled("p1".to_string())),
+                Label(Mangled("t1".to_string())),
+                Push(Literal::Num(400)),
+                Push(Literal::Num(20)),
+                Add,
+                Label(Mangled("p1".to_string())),
+                Swap,
+                JumpT(Mangled("t2".to_string())),
+                Push(Literal::Num(60)),
+                Push(Literal::Num(9)),
+                Add,
+                Jump(Mangled("p2".to_string())),
+                Label(Mangled("t2".to_string())),
+                Push(Literal::Num(400)),
+                Push(Literal::Num(20)),
+                Add,
+                Label(Mangled("p2".to_string())),
+                Return,
+            ]],
+        }],
     };
     let context = Context::create();
     let module = context.create_module("temp");
@@ -417,6 +410,7 @@ fn test() {
     let fpm = PassManager::create(&module);
     fpm.initialize();
 
-    let res = Compiler::compile(&context, &builder, &fpm, &module, &proc).unwrap();
+    let res = Compiler::compile(&context, &builder, &fpm, &module, proc).unwrap();
     res.print_to_stderr();
+    assert!(res.verify(true));
 }

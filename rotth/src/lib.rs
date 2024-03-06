@@ -1,13 +1,26 @@
 #![feature(assert_matches)]
 #![feature(iter_intersperse)]
-#![feature(box_syntax, box_patterns)]
+#![feature(box_patterns)]
 #![feature(string_remove_matches)]
 #![feature(type_alias_impl_trait)]
 #![feature(array_windows)]
 
 pub mod emit;
-pub mod eval;
-pub mod lir;
+// pub mod eval;
+// pub mod lir;
+pub mod lir2;
+
+#[macro_export]
+macro_rules! ops {
+    [$($op:ident $(($($arg:expr),+))?),* $(,)?] => {
+        vec![$(
+            SpannedOp {
+                op: Op::$op $(($($arg),+))?,
+                span: None,
+            },
+        )*]
+    }
+}
 
 use rotth_analysis::ctir::ConcreteError;
 use rotth_analysis::Error as TypecheckError;

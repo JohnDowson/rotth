@@ -16,7 +16,7 @@ use spanner::Span;
 use Op::*;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Mangled(String);
+pub struct Mangled(pub String);
 
 impl std::fmt::Display for Mangled {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -105,13 +105,14 @@ pub struct CompiledProc {
     pub ins: Vec<ReifiedType>,
     pub outs: Vec<ReifiedType>,
     pub name: SmolStr,
-    pub code: Vec<SpannedOp>,
+    pub blocks: Vec<Block>,
 }
 
 impl std::fmt::Debug for CompiledProc {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (i, op) in self.code.iter().enumerate() {
-            writeln!(f, "{}:\t{:?}", i, op)?;
+        for (i, block) in self.blocks.iter().enumerate() {
+            writeln!(f, "{i}:")?;
+            block.fmt(f)?;
         }
         Ok(())
     }
@@ -142,9 +143,23 @@ impl std::fmt::Debug for SpannedOp {
     }
 }
 
+pub struct Block {
+    pub code: Vec<SpannedOp>,
+}
+
+impl std::fmt::Debug for Block {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, op) in self.code.iter().enumerate() {
+            writeln!(f, "{}:\t{:?}", i, op)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 pub struct Compiler {
     label: usize,
+    current_block: usize,
     mangle_table: FnvHashMap<ItemPathBuf, Mangled>,
     unmangle_table: FnvHashMap<Mangled, ItemPathBuf>,
     proc_id: usize,
@@ -220,6 +235,7 @@ impl Compiler {
 
     fn compile_proc(&mut self, name: Mangled, proc: CProc) {
         self.label = 0;
+        self.current_block = 0;
         self.current_name = name.clone();
         self.result.insert(
             name.clone(),
@@ -227,7 +243,7 @@ impl Compiler {
                 ins: proc.ins,
                 outs: proc.outs,
                 name: name.0.into(),
-                code: Default::default(),
+                blocks: Default::default(),
             },
         );
 
@@ -563,17 +579,13 @@ impl Compiler {
     }
 
     fn emit_unspanned(&mut self, op: Op) {
-        self.result
-            .get_mut(&self.current_name)
-            .unwrap()
+        self.result.get_mut(&self.current_name).unwrap().blocks[self.current_block]
             .code
             .push(SpannedOp { op, span: None })
     }
 
     fn emit(&mut self, op: Op, span: Span) {
-        self.result
-            .get_mut(&self.current_name)
-            .unwrap()
+        self.result.get_mut(&self.current_name).unwrap().blocks[self.current_block]
             .code
             .push(SpannedOp {
                 op,

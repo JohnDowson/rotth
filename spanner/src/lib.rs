@@ -120,7 +120,7 @@ impl ariadne::Span for Span {
     }
 }
 
-impl chumsky::Span for Span {
+impl chumsky::span::Span for Span {
     type Context = &'static Path;
 
     type Offset = usize;

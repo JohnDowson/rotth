@@ -1,7 +1,7 @@
 use ariadne::{Color, FileCache, Fmt, Label, Report, ReportKind, Span};
-use chumsky::error::SimpleReason;
+use chumsky::error::RichReason;
 use clap::{Parser, ValueEnum};
-use rotth::{emit, lir, Error};
+use rotth::{emit, lir2, Error};
 use rotth_analysis::{ctir, tir};
 use rotth_parser::hir;
 use somok::Somok;
@@ -48,7 +48,7 @@ fn main() -> std::result::Result<(), ()> {
 fn report_errors(e: Error) {
     let mut sources = FileCache::default();
     match e {
-        Error::IO(e) => eprintln!("{}", e),
+        Error::IO(e) => eprintln!("{e}"),
         Error::Lexer => {}
         Error::Parser(rotth_parser::ParserError(es)) => {
             for e in es {
@@ -58,7 +58,7 @@ fn report_errors(e: Error) {
                             Report::build(ReportKind::Error, e.span().source(), e.span().start);
 
                         let report = match e.reason() {
-                            SimpleReason::Unexpected => report
+                            RichReason::ExpectedFound { .. } => report
                                 .with_message(format!(
                                     "{}, expected {}",
                                     if e.found().is_some() {
@@ -265,9 +265,6 @@ fn compiler() -> Result<(), Error> {
 
     let ast = rotth_parser::ast::parse(tokens)?;
     let ast = rotth_parser::ast::resolve_includes(ast)?;
-    // let (structs, ast) = ast
-    //     .into_iter()
-    //     .partition::<FnvHashMap<_, _>, _>(|(_, i)| matches!(i, ast::TopLevel::Struct(_)));
 
     let parsed = Instant::now();
     if args.time {
@@ -315,7 +312,7 @@ fn compiler() -> Result<(), Error> {
         println!("{ctir:#?}");
     }
 
-    let (lir, strings, mems) = lir::Compiler::compile(ctir);
+    let (lir, strings, mems) = lir2::Compiler::compile(ctir);
 
     let transpiled = Instant::now();
     if args.time {
@@ -331,30 +328,30 @@ fn compiler() -> Result<(), Error> {
         println!();
     }
 
-    match args.backend {
-        Backend::Asm => {
-            emit::asm::compile(
-                lir,
-                strings,
-                mems,
-                BufWriter::new(
-                    OpenOptions::new()
-                        .create(true)
-                        .write(true)
-                        .truncate(true)
-                        .open(source.with_extension("asm"))?,
-                ),
-            )?;
-        }
-        Backend::Llvm => todo!(),
-        Backend::Cranelift => todo!(),
-    }
+    // match args.backend {
+    //     Backend::Asm => {
+    //         emit::asm::compile(
+    //             lir,
+    //             strings,
+    //             mems,
+    //             BufWriter::new(
+    //                 OpenOptions::new()
+    //                     .create(true)
+    //                     .write(true)
+    //                     .truncate(true)
+    //                     .open(source.with_extension("asm"))?,
+    //             ),
+    //         )?;
+    //     }
+    //     Backend::Llvm => todo!(),
+    //     Backend::Cranelift => todo!(),
+    // }
 
-    let compiled = Instant::now();
-    if args.time {
-        println!("Compiled in:\t{:?}", compiled - transpiled);
-        println!("Total:\t{:?}", compiled - start);
-    }
+    // let compiled = Instant::now();
+    // if args.time {
+    //     println!("Compiled in:\t{:?}", compiled - transpiled);
+    //     println!("Total:\t{:?}", compiled - start);
+    // }
 
     ().okay()
 }

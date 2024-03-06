@@ -13,4 +13,4 @@ rotth-lexer = { path = "../rotth-lexer" }
 rotth-parser = { path = "../rotth-parser" }
 spanner = { path = "../spanner" }
 thiserror = "1.0"
-smol_str = "0.1"
+smol_str = "0.2"

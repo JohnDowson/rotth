@@ -26,7 +26,7 @@ impl Type {
             Type::Ptr(box ty) => {
                 let mut name = ty.type_name();
                 if let Some(s) = name.segment_mut(0) {
-                    *s = format!("&>{}", s).into();
+                    *s = format!("&>{s}").into();
                 }
                 name
             }

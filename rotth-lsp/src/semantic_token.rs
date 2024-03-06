@@ -207,7 +207,7 @@ fn push_expr_tokens(node: &Spanned<Expr>, tokens: &mut Vec<CompleteSemanticToken
                 Literal::Bool(_) => SemanticTokenType::NUMBER,
                 Literal::Char(_) => SemanticTokenType::STRING,
                 Literal::String(_) => SemanticTokenType::STRING,
-                Literal::Num(_) => SemanticTokenType::NUMBER,
+                Literal::Int(_) | Literal::UInt(_) => SemanticTokenType::NUMBER,
             };
             push_token(node, tokens, ty);
         }

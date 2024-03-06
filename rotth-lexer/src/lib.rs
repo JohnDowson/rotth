@@ -48,7 +48,7 @@ pub enum Token {
     String(SmolStr),
     #[regex(r"'.'", to_char)]
     Char(char),
-    #[regex(r"[1-9][0-9]*|0", to_smol_str)]
+    #[regex(r"(-?[1-9][0-9]*)|0", to_smol_str)]
     Num(SmolStr),
     #[token(":")]
     SigSep,
@@ -97,22 +97,19 @@ pub enum Token {
 
     #[regex(r"\p{Whitespace}+", logos::skip)]
     Whitespace,
-
-    #[error]
-    Error,
 }
 
 impl std::fmt::Debug for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Token::Word(word) => write!(f, "W({})", word),
+            Token::Word(word) => write!(f, "W({word})"),
             Token::Read => write!(f, "@"),
             Token::Write => write!(f, "!"),
-            Token::Operator(op) => write!(f, "O({})", op),
-            Token::Bool(b) => write!(f, "{}", b),
-            Token::String(str) => write!(f, "{:?}", str),
-            Token::Char(c) => write!(f, "{:?}", c),
-            Token::Num(num) => write!(f, "{}", num),
+            Token::Operator(op) => write!(f, "O({op})"),
+            Token::Bool(b) => write!(f, "{b}"),
+            Token::String(str) => write!(f, "{str:?}"),
+            Token::Char(c) => write!(f, "{c:?}"),
+            Token::Num(num) => write!(f, "{num}"),
             Token::SigSep => write!(f, ":"),
             Token::PathSep => write!(f, "::"),
             Token::Ptr => write!(f, "&>"),

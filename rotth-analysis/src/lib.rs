@@ -1,6 +1,6 @@
 #![feature(assert_matches)]
 #![feature(iter_intersperse)]
-#![feature(box_syntax, box_patterns)]
+#![feature(box_patterns)]
 #![feature(string_remove_matches)]
 #![feature(type_alias_impl_trait)]
 #![feature(array_windows)]

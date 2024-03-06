@@ -1,6 +1,7 @@
-use chumsky::prelude::*;
+use chumsky::{input::ValueInput, prelude::*};
 use logos::Logos;
 use rotth_lexer::Token;
+use smol_str::SmolStr;
 use somok::Either;
 use spanner::{Span, Spanned};
 use std::path::{Path, PathBuf};
@@ -13,10 +14,27 @@ use super::{
     ProcSignature, Punctuation, Qualifiers, Read, Struct, TopLevel, Var, While, Word, Write,
 };
 
-pub(super) fn ty() -> impl Parser<Token, Spanned<Type>, Error = Simple<Token, Span>> + Clone {
+trait RParser<'i, I, O>
+where
+    I: Input<'i, Token = Token, Span = Span>,
+    Self: Parser<'i, I, Spanned<O>, extra::Err<Rich<'i, Token, Span>>> + Clone,
+{
+}
+
+impl<'i, I, O, T> RParser<'i, I, O> for T
+where
+    T: Parser<'i, I, Spanned<O>, extra::Err<Rich<'i, Token, Span>>> + Clone,
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+}
+
+pub(super) fn ty<'i, I>() -> impl RParser<'i, I, Type>
+where
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
     recursive(|ty| {
         let generic_params = lbracket()
-            .then(ty.clone().repeated().at_least(1))
+            .then(ty.repeated().at_least(1))
             .then(rbracket())
             .map_with_span(|((left_bracket, tys), right_bracket), span| Spanned {
                 span,
@@ -57,7 +75,7 @@ pub(super) fn ty() -> impl Parser<Token, Spanned<Type>, Error = Simple<Token, Sp
                     })
                 };
                 for _ in ptr {
-                    ty = Type::Ptr(box ty)
+                    ty = Type::Ptr(Box::new(ty))
                 }
 
                 Spanned { span, inner: ty }
@@ -65,66 +83,72 @@ pub(super) fn ty() -> impl Parser<Token, Spanned<Type>, Error = Simple<Token, Sp
     })
 }
 
-pub(super) fn parse_string(s: &str, path: &'static Path) -> Result<String, Simple<Token, Span>> {
+pub(super) fn parse_string<'i>(
+    s: &'i str,
+    path: &'static Path,
+) -> Result<SmolStr, Rich<'i, Token, Span>> {
     #[derive(Logos)]
     pub enum StrToken {
         #[regex(r"\\.", |l| l.slice().chars().nth(1))]
         Escaped(char),
-        #[regex(r"[^\\]", |l| l.slice().chars().next())]
+        #[regex(r#"[^\\"]"#, |l| l.slice().chars().next())]
         Char(char),
         #[token(r#"""#)]
         End,
-        #[error]
-        Error,
     }
 
     StrToken::lexer(s)
         .spanned()
-        .filter_map(|(t, s)| match t {
+        .filter_map(|(t, s)| match t.ok()? {
             StrToken::Escaped(c) => match c {
                 'n' => Some(Ok('\n')),
                 't' => Some(Ok('\t')),
                 '"' => Some(Ok('"')),
-                _ => Some(Err(Simple::custom(
+                _ => Some(Err(Rich::custom(
                     Span::new(path, s.start, s.end),
                     "Invalid character escape",
                 ))),
             },
             StrToken::Char(c) => Some(Ok(c)),
             StrToken::End => None,
-            StrToken::Error => Some(Err(Simple::custom(
-                Span::new(path, s.start, s.end),
-                "Invalid string character",
-            ))),
         })
         .collect()
 }
 
-pub(super) fn literal() -> impl Parser<Token, Spanned<Literal>, Error = Simple<Token, Span>> + Clone
+pub(super) fn literal<'i, I>() -> impl RParser<'i, I, Literal>
+where
+    I: ValueInput<'i, Token = Token, Span = Span>,
 {
     select! {
-        Token::Bool(b), span => Spanned { span, inner: Literal::Bool(b)},
-        Token::Num(n), span => Spanned{ span, inner: Literal::Num(n.parse().unwrap()) },
-        Token::String(s), span => Spanned{ span, inner: Literal::String(parse_string(&*s, span.context())?) },
-        Token::Char(c), span => Spanned { span, inner: Literal::Char(c) },
+        Token::Bool(b) = span => Spanned { span: span.span(), inner: Literal::Bool(b)},
+        Token::Num(n) = span => {
+            if let Ok(i) = n.parse::<i64>(){
+                Spanned{ span: span.span(),inner: Literal::Int(i) }
+            }
+            else {
+                Spanned{ span: span.span(), inner: Literal::UInt(n.parse().unwrap()) }
+            }
+        },
+        Token::String(s) = span => Spanned{ span: span.span(), inner: Literal::String(parse_string(&s, span.context())?) },
+        Token::Char(c) = span => Spanned { span: span.span(), inner: Literal::Char(c) },
     }
 }
 
-pub(super) fn literal_expr(
-) -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token, Span>> + Clone {
+pub(super) fn literal_expr<'i>(
+) -> impl Parser<'i, Token, Spanned<Expr>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     literal().map(|Spanned { span, inner }| Spanned {
         span,
         inner: Expr::Literal(inner),
     })
 }
 
-pub(super) fn include_path(
-) -> impl Parser<Token, Spanned<PathBuf>, Error = Simple<Token, Span>> + Clone {
+pub(super) fn include_path<'i>(
+) -> impl Parser<'i, Token, Spanned<PathBuf>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::String(s), span => Spanned {
+        Token::String(s) = span => Spanned {
             span,
             inner: {
-                let mut chars = (&*s).chars();
+                let mut chars = (*s).chars();
                 chars.next();
                 chars.next_back();
                 PathBuf::from(chars.as_str())
@@ -133,120 +157,123 @@ pub(super) fn include_path(
     }
 }
 
-pub(super) fn kw_include(
-) -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone {
+pub(super) fn kw_include<'i>(
+) -> impl Parser<'i, Token, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::KwInclude, span => Spanned { span, inner: Keyword::Include },
+        Token::KwInclude = span => Spanned { span, inner: Keyword::Include },
     }
 }
 
-pub(super) fn kw_from() -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn kw_from<'i>(
+) -> impl Parser<'i, Token, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::KwFrom, span => Spanned { span, inner: Keyword::From },
+        Token::KwFrom = span => Spanned { span, inner: Keyword::From },
     }
 }
 
-pub(super) fn kw_bind() -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn kw_bind<'i>(
+) -> impl Parser<'i, Token, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::KwBind, span => Spanned { span, inner: Keyword::Bind },
+        Token::KwBind = span => Spanned { span, inner: Keyword::Bind },
     }
 }
-pub(super) fn kw_while() -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn kw_while<'i>(
+) -> impl Parser<'i, Token, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::KwWhile, span => Spanned { span, inner: Keyword::While },
+        Token::KwWhile = span => Spanned { span, inner: Keyword::While },
     }
 }
-pub(super) fn kw_cond() -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn kw_cond<'i>(
+) -> impl Parser<'i, Token, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::KwCond, span => Spanned { span, inner: Keyword::Cond },
+        Token::KwCond = span => Spanned { span, inner: Keyword::Cond },
     }
 }
-pub(super) fn kw_if() -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone {
+pub(super) fn kw_if<'i>(
+) -> impl Parser<'i, Token, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::KwIf, span => Spanned { span, inner: Keyword::If },
+        Token::KwIf = span => Spanned { span, inner: Keyword::If },
     }
 }
-pub(super) fn kw_else() -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn kw_else<'i>(
+) -> impl Parser<'i, Token, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::KwElse, span => Spanned { span, inner: Keyword::Else },
+        Token::KwElse = span => Spanned { span, inner: Keyword::Else },
     }
 }
-pub(super) fn kw_do() -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone {
+pub(super) fn kw_do<'i>(
+) -> impl Parser<'i, Token, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::KwDo, span => Spanned { span, inner: Keyword::Do },
+        Token::KwDo = span => Spanned { span, inner: Keyword::Do },
     }
 }
-pub(super) fn kw_end() -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn kw_end<'i>(
+) -> impl Parser<'i, Token, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::KwEnd, span => Spanned { span, inner: Keyword::End },
+        Token::KwEnd = span => Spanned { span, inner: Keyword::End },
     }
 }
-pub(super) fn kw_ret() -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn kw_ret<'i>(
+) -> impl Parser<'i, Token, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::KwReturn, span => Spanned { span, inner: Keyword::Return },
+        Token::KwReturn = span => Spanned { span, inner: Keyword::Return },
     }
 }
-pub(super) fn kw_cast() -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn kw_cast<'i>(
+) -> impl Parser<'i, Token, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::KwCast, span => Spanned { span, inner: Keyword::Cast },
+        Token::KwCast = span => Spanned { span, inner: Keyword::Cast },
     }
 }
-pub(super) fn kw_proc() -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn kw_proc<'i>(
+) -> impl Parser<'i, Token, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::KwProc, span => Spanned { span, inner: Keyword::Proc },
+        Token::KwProc = span => Spanned { span, inner: Keyword::Proc },
     }
 }
-pub(super) fn kw_const() -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn kw_const<'i>(
+) -> impl Parser<'i, Token, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::KwConst, span => Spanned { span, inner: Keyword::Const },
+        Token::KwConst = span => Spanned { span, inner: Keyword::Const },
     }
 }
-pub(super) fn kw_mem() -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn kw_mem<'i>(
+) -> impl Parser<'i, Token, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::KwMem, span => Spanned { span, inner: Keyword::Mem },
+        Token::KwMem = span => Spanned { span, inner: Keyword::Mem },
     }
 }
-pub(super) fn kw_var() -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn kw_var<'i>(
+) -> impl Parser<'i, Token, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::KwVar, span => Spanned { span, inner: Keyword::Var },
+        Token::KwVar = span => Spanned { span, inner: Keyword::Var },
     }
 }
-pub(super) fn kw_struct(
-) -> impl Parser<Token, Spanned<Keyword>, Error = Simple<Token, Span>> + Clone {
+pub(super) fn kw_struct<'i>(
+) -> impl Parser<'i, Token, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::KwStruct, span => Spanned { span, inner: Keyword::Struct },
-    }
-}
-
-pub(super) fn word() -> impl Parser<Token, Spanned<Word>, Error = Simple<Token, Span>> + Clone {
-    select! {
-        Token::Word(w), span => Spanned { span, inner: Word(w) },
-        Token::Operator(w), span => Spanned { span, inner: Word(w) },
+        Token::KwStruct = span => Spanned { span, inner: Keyword::Struct },
     }
 }
 
-pub(super) fn word_expr() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn word<'i>(
+) -> impl Parser<'i, Token, Spanned<Word>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::Word(w), span => Spanned { span, inner: Expr::Word(Word(w)) },
-        Token::Operator(w), span => Spanned { span, inner: Expr::Word(Word(w)) },
+        Token::Word(w) = span => Spanned { span, inner: Word(w) },
+        Token::Operator(w) = span => Spanned { span, inner: Word(w) },
     }
 }
 
-pub(super) fn path() -> impl Parser<Token, Spanned<ItemPathBuf>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn word_expr<'i>(
+) -> impl Parser<'i, Token, Spanned<Expr>, extra::Err<Rich<'i, Token, Span>>> + Clone {
+    select! {
+        Token::Word(w) = span => Spanned { span, inner: Expr::Word(Word(w)) },
+        Token::Operator(w) = span => Spanned { span, inner: Expr::Word(Word(w)) },
+    }
+}
+
+pub(super) fn path<'i>(
+) -> impl Parser<'i, Token, Spanned<ItemPathBuf>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
         Token::Word(w) =>  w,
         Token::Operator(w) =>  w,
@@ -259,8 +286,8 @@ pub(super) fn path() -> impl Parser<Token, Spanned<ItemPathBuf>, Error = Simple<
     })
 }
 
-pub(super) fn path_expr() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn path_expr<'i>(
+) -> impl Parser<'i, Token, Spanned<Expr>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
         Token::Word(w) =>  w,
         Token::Operator(w) =>  w,
@@ -273,17 +300,17 @@ pub(super) fn path_expr() -> impl Parser<Token, Spanned<Expr>, Error = Simple<To
     })
 }
 
-pub(super) fn separator(
-) -> impl Parser<Token, Spanned<Punctuation>, Error = Simple<Token, Span>> + Clone {
+pub(super) fn separator<'i>(
+) -> impl Parser<'i, Token, Spanned<Punctuation>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        Token::SigSep, span => Spanned { span, inner: Punctuation::Colon },
+        Token::SigSep = span => Spanned { span, inner: Punctuation::Colon },
     }
 }
 
-pub(super) fn read_expr() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn read_expr<'i>(
+) -> impl Parser<'i, Token, Spanned<Expr>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        t @ Token::Read, span => Spanned { span, inner: t },
+        t @ Token::Read = span => Spanned { span, inner: t },
     }
     .then(ty())
     .map_with_span(|(read, ty), span| Spanned {
@@ -292,10 +319,10 @@ pub(super) fn read_expr() -> impl Parser<Token, Spanned<Expr>, Error = Simple<To
     })
 }
 
-pub(super) fn write_expr() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn write_expr<'i>(
+) -> impl Parser<'i, Token, Spanned<Expr>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     select! {
-        t @ Token::Write, span => Spanned { span, inner: t },
+        t @ Token::Write = span => Spanned { span, inner: t },
     }
     .then(ty())
     .map_with_span(|(write, ty), span| Spanned {
@@ -304,7 +331,8 @@ pub(super) fn write_expr() -> impl Parser<Token, Spanned<Expr>, Error = Simple<T
     })
 }
 
-pub(super) fn var() -> impl Parser<Token, Spanned<Var>, Error = Simple<Token, Span>> + Clone {
+pub(super) fn var<'i>(
+) -> impl Parser<'i, Token, Spanned<Var>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     kw_var()
         .then(word())
         .then(separator())
@@ -315,31 +343,32 @@ pub(super) fn var() -> impl Parser<Token, Spanned<Var>, Error = Simple<Token, Sp
         })
 }
 
-pub(super) fn var_toplevel(
-) -> impl Parser<Token, Spanned<TopLevel>, Error = Simple<Token, Span>> + Clone {
+pub(super) fn var_toplevel<'i>(
+) -> impl Parser<'i, Token, Spanned<TopLevel>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     var().map(|Spanned { span, inner }| Spanned {
         span,
         inner: TopLevel::Var(inner),
     })
 }
 
-pub(super) fn var_expr() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token, Span>> + Clone {
+pub(super) fn var_expr<'i>(
+) -> impl Parser<'i, Token, Spanned<Expr>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     var().map(|Spanned { span, inner }| Spanned {
         span,
         inner: Expr::Var(inner),
     })
 }
 
-pub(super) fn accessor(
-) -> impl Parser<Token, Spanned<Punctuation>, Error = Simple<Token, Span>> + Clone {
+pub(super) fn accessor<'i>(
+) -> impl Parser<'i, Token, Spanned<Punctuation>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     just(Token::FieldAccess).map_with_span(|_, span| Spanned {
         span,
         inner: Punctuation::RArrow,
     })
 }
 
-pub(super) fn expr<'d>(
-) -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token, Span>> + Clone + 'd {
+pub(super) fn expr<'i, 'd>(
+) -> impl Parser<'i, Token, Spanned<Expr>, extra::Err<Rich<'i, Token, Span>>> + Clone + 'd {
     recursive(|expr: Recursive<'_, Token, Spanned<Expr>, _>| {
         let bind = kw_bind()
             .then(
@@ -428,14 +457,14 @@ pub(super) fn expr<'d>(
             .map_with_span(
                 |(((((cond, pat), do_), body), branches), end), span| Spanned {
                     span,
-                    inner: Expr::Cond(box Cond {
+                    inner: Expr::Cond(Box::new(Cond {
                         cond,
                         pat,
                         do_,
                         body,
                         branches,
                         end,
-                    }),
+                    })),
                 },
             );
 
@@ -443,7 +472,7 @@ pub(super) fn expr<'d>(
             .then(word())
             .map_with_span(|(access, field), span| Spanned {
                 span,
-                inner: Expr::FieldAccess(box FieldAccess { access, field }),
+                inner: Expr::FieldAccess(Box::new(FieldAccess { access, field })),
             });
 
         let ret_expr = kw_ret().map(|Spanned { span, inner }| Spanned {
@@ -475,8 +504,8 @@ pub(super) fn expr<'d>(
     })
 }
 
-pub(super) fn proc_signature(
-) -> impl Parser<Token, Spanned<ProcSignature>, Error = Simple<Token, Span>> + Clone {
+pub(super) fn proc_signature<'i>(
+) -> impl Parser<'i, Token, Spanned<ProcSignature>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     ty().repeated()
         .then(separator().then(ty().repeated().at_least(1)).or_not())
         .map_with_span(|(ins, maybe_outs), span| {
@@ -492,22 +521,23 @@ pub(super) fn proc_signature(
         })
 }
 
-pub(super) fn lbracket(
-) -> impl Parser<Token, Spanned<Punctuation>, Error = Simple<Token, Span>> + Clone {
+pub(super) fn lbracket<'i>(
+) -> impl Parser<'i, Token, Spanned<Punctuation>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     just(Token::LBracket).map_with_span(|_, span| Spanned {
         span,
         inner: Punctuation::LBracket,
     })
 }
-pub(super) fn rbracket(
-) -> impl Parser<Token, Spanned<Punctuation>, Error = Simple<Token, Span>> + Clone {
+pub(super) fn rbracket<'i>(
+) -> impl Parser<'i, Token, Spanned<Punctuation>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     just(Token::RBracket).map_with_span(|_, span| Spanned {
         span,
         inner: Punctuation::RBracket,
     })
 }
 
-pub(super) fn generics() -> impl Parser<Token, Spanned<Generics>, Error = Simple<Token, Span>> {
+pub(super) fn generics<'i>(
+) -> impl Parser<'i, Token, Spanned<Generics>, extra::Err<Rich<'i, Token, Span>>> {
     lbracket()
         .then(word().repeated().at_least(1))
         .then(rbracket())
@@ -521,8 +551,8 @@ pub(super) fn generics() -> impl Parser<Token, Spanned<Generics>, Error = Simple
         })
 }
 
-pub(super) fn proc<'d>() -> impl Parser<Token, Spanned<TopLevel>, Error = Simple<Token, Span>> + 'd
-{
+pub(super) fn proc<'i, 'd>(
+) -> impl Parser<'i, Token, Spanned<TopLevel>, extra::Err<Rich<'i, Token, Span>>> + 'd {
     kw_proc()
         .debug("kw_proc")
         .then(generics().or_not().debug("Generics"))
@@ -548,8 +578,8 @@ pub(super) fn proc<'d>() -> impl Parser<Token, Spanned<TopLevel>, Error = Simple
         .debug("proc")
 }
 
-pub(super) fn const_signature(
-) -> impl Parser<Token, Spanned<ConstSignature>, Error = Simple<Token, Span>> + Clone {
+pub(super) fn const_signature<'i>(
+) -> impl Parser<'i, Token, Spanned<ConstSignature>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     separator()
         .then(ty().repeated().at_least(1))
         .map_with_span(|(sep, tys), span| Spanned {
@@ -558,8 +588,8 @@ pub(super) fn const_signature(
         })
 }
 
-pub(super) fn const_<'d>(
-) -> impl Parser<Token, Spanned<TopLevel>, Error = Simple<Token, Span>> + Clone + 'd {
+pub(super) fn const_<'i, 'd>(
+) -> impl Parser<'i, Token, Spanned<TopLevel>, extra::Err<Rich<'i, Token, Span>>> + Clone + 'd {
     kw_const()
         .then(word())
         .then(const_signature())
@@ -581,8 +611,8 @@ pub(super) fn const_<'d>(
         )
 }
 
-pub(super) fn mem<'d>(
-) -> impl Parser<Token, Spanned<TopLevel>, Error = Simple<Token, Span>> + Clone + 'd {
+pub(super) fn mem<'i, 'd>(
+) -> impl Parser<'i, Token, Spanned<TopLevel>, extra::Err<Rich<'i, Token, Span>>> + Clone + 'd {
     kw_mem()
         .then(word())
         .then(kw_do())
@@ -600,8 +630,8 @@ pub(super) fn mem<'d>(
         })
 }
 
-pub(super) fn name_type_pair(
-) -> impl Parser<Token, Spanned<NameTypePair>, Error = Simple<Token, Span>> + Clone {
+pub(super) fn name_type_pair<'i>(
+) -> impl Parser<'i, Token, Spanned<NameTypePair>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     word()
         .then(separator())
         .then(ty())
@@ -611,7 +641,8 @@ pub(super) fn name_type_pair(
         })
 }
 
-pub(super) fn struct_() -> impl Parser<Token, Spanned<TopLevel>, Error = Simple<Token, Span>> {
+pub(super) fn struct_<'i>(
+) -> impl Parser<'i, Token, Spanned<TopLevel>, extra::Err<Rich<'i, Token, Span>>> {
     kw_struct()
         .then(generics().or_not())
         .then(word())
@@ -633,8 +664,8 @@ pub(super) fn struct_() -> impl Parser<Token, Spanned<TopLevel>, Error = Simple<
         )
 }
 
-pub(super) fn include() -> impl Parser<Token, Spanned<TopLevel>, Error = Simple<Token, Span>> + Clone
-{
+pub(super) fn include<'i>(
+) -> impl Parser<'i, Token, Spanned<TopLevel>, extra::Err<Rich<'i, Token, Span>>> + Clone {
     kw_include()
         .then(path().repeated().then(kw_from()).or_not())
         .then(include_path())
@@ -652,7 +683,8 @@ pub(super) fn include() -> impl Parser<Token, Spanned<TopLevel>, Error = Simple<
         })
 }
 
-pub(super) fn file<'d>() -> impl Parser<Token, File, Error = Simple<Token, Span>> + 'd {
+pub(super) fn file<'i, 'd>() -> impl Parser<'i, Token, File, extra::Err<Rich<'i, Token, Span>>> + 'd
+{
     choice((
         include(),
         proc(),

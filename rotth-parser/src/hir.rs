@@ -114,14 +114,14 @@ impl std::fmt::Debug for If {
             writeln!(f, "If {{")?;
             writeln!(f, "\t{:#?}", &self.truth)?;
             if let Some(lie) = &self.lie {
-                writeln!(f, "\t{:#?}", lie)?;
+                writeln!(f, "\t{lie:#?}")?;
             }
             writeln!(f, "}}")
         } else {
             write!(f, "If {{")?;
             write!(f, "\t{:?}", &self.truth)?;
             if let Some(lie) = &self.lie {
-                write!(f, "\t{:?}", lie)?;
+                write!(f, "\t{lie:?}")?;
             }
             write!(f, "}}")
         }
@@ -388,7 +388,7 @@ impl Walker {
 
     fn walk_toplevel(&mut self, name: SmolStr, item: ResolvedItem) {
         match item {
-            ResolvedItem::Ref(path) => self.walk_ref(name, &*path),
+            ResolvedItem::Ref(path) => self.walk_ref(name, &path),
             ResolvedItem::Proc(_) => self.walk_proc(name),
             ResolvedItem::Const(_) => self.walk_const(name),
             ResolvedItem::Mem(_) => self.walk_mem(name),

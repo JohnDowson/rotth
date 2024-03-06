@@ -1,4 +1,5 @@
 [workspace]
+resolver = "2"
 members = [
   "rotth",
   "rotth-lexer",
@@ -7,4 +8,9 @@ members = [
   "rotth-lsp",
   "spanner",
   "simplearena",
+  "slate",
 ]
+
+[workspace.dependencies]
+chumsky = "1.0.0-alpha.6"
+logos = "0.14"

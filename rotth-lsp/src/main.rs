@@ -94,7 +94,7 @@ impl<'s> Backend {
                         let (message, span) = match error {
                             rotth_parser::Error::Parser(e) => match e.reason() {
                                 chumsky::error::SimpleReason::Unclosed { span, delimiter } => {
-                                    (format!("Unclosed delimiter {}", delimiter), *span)
+                                    (format!("Unclosed delimiter {delimiter}"), *span)
                                 }
                                 chumsky::error::SimpleReason::Unexpected => (
                                     format!(
@@ -387,7 +387,7 @@ impl LanguageServer for Backend {
 
         let definition = item.and_then(|item| {
             let span = &item.span;
-            let uri = Url::from_file_path(&span.file).unwrap();
+            let uri = Url::from_file_path(span.file).unwrap();
 
             let rope = &*self.document_map.get(span.file)?;
 
@@ -419,9 +419,9 @@ impl LanguageServer for Backend {
             let semantic_tokens = im_complete_tokens
                 .iter()
                 .filter_map(|token| {
-                    let line = rope.try_byte_to_line(token.start as usize).ok()? as u32;
+                    let line = rope.try_byte_to_line(token.start).ok()? as u32;
                     let first = rope.try_line_to_char(line as usize).ok()? as u32;
-                    let start = rope.try_byte_to_char(token.start as usize).ok()? as u32 - first;
+                    let start = rope.try_byte_to_char(token.start).ok()? as u32 - first;
                     let delta_line = line - pre_line;
                     let delta_start = if delta_line == 0 {
                         start - pre_start

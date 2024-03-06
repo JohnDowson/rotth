@@ -6,26 +6,26 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ariadne = "0.1.5"
+ariadne = "0.4"
 somok = "1.5.0"
-clap = { version = "3", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
 simplearena = { path = "../simplearena" }
-indoc = "1.0.4"
+indoc = "2.0"
 fnv = "1.0"
 rotth-lexer = { path = "../rotth-lexer" }
 rotth-parser = { path = "../rotth-parser" }
 rotth-analysis = { path = "../rotth-analysis" }
 spanner = { path = "../spanner" }
-chumsky = { git = "https://github.com/zesterer/chumsky.git" }
+chumsky = "1.0.0-alpha.6"
 thiserror = "1.0"
-smol_str = "0.1"
+smol_str = "0.2"
 inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = [
-  "llvm12-0",
+  "llvm15-0-force-dynamic",
 ] }
 
 target-lexicon = "0.12"
-cranelift = "0.84"
-cranelift-jit = "0.84"
-cranelift-module = "0.84"
-cranelift-preopt = "0.84"
-capstone = "0.11"
+cranelift = "0.105"
+cranelift-jit = "0.105"
+cranelift-module = "0.105"
+cranelift-preopt = "0.92"
+capstone = "0.12"

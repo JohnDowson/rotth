@@ -141,9 +141,9 @@ pub enum Type {
 impl std::fmt::Debug for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Type::Generic(i) => write!(f, "Generic({:?})", i),
+            Type::Generic(i) => write!(f, "Generic({i:?})"),
             Type::Concrete(t) => t.fmt(f),
-            Type::Ptr(box t) => write!(f, "&>{:?}", t),
+            Type::Ptr(box t) => write!(f, "&>{t:?}"),
         }
     }
 }
@@ -543,7 +543,7 @@ impl Walker {
     }
 
     fn typecheck_proc(&mut self, heap: &mut THeap, path: &ItemPath) -> Result<(), Error> {
-        let proc = self.known_procs.get(path).map(|p| (&**p).clone()).unwrap();
+        let proc = self.known_procs.get(path).map(|p| (**p).clone()).unwrap();
 
         let mut ins = TypeStack::from_iter(proc.ins.iter().copied(), heap);
         let outs = TypeStack::from_iter(proc.outs.iter().copied(), heap);
@@ -600,8 +600,8 @@ impl Walker {
         let (ins, outs) = {
             let generics = proc
                 .generics
-                .iter()
-                .map(|(_, g)| (*g, self.engine.insert(TypeInfo::Unknown)))
+                .values()
+                .map(|g| (*g, self.engine.insert(TypeInfo::Unknown)))
                 .collect();
             let expected_ins = proc
                 .ins
@@ -628,7 +628,7 @@ impl Walker {
                     return error(
                         span,
                         ErrorKind::NotEnoughData,
-                        format!("Not enough data in the stack for `{:?}` proc", proc_name),
+                        format!("Not enough data in the stack for `{proc_name:?}` proc"),
                     );
                 }
             }
@@ -781,7 +781,7 @@ impl Walker {
                     return error(
                         node.span,
                         ErrorKind::Undefined,
-                        format!("Undefined word `{:?}`", path),
+                        format!("Undefined word `{path:?}`"),
                     )
                 }
                 Hir::Intrinsic(i) => {
@@ -1599,7 +1599,11 @@ impl Walker {
                                     self.engine.insert(TypeInfo::Bool),
                                     TypedIr::Literal(l.clone()),
                                 ),
-                                Literal::Num(_) => (
+                                Literal::Int(_) => (
+                                    self.engine.insert(TypeInfo::I64),
+                                    TypedIr::Literal(l.clone()),
+                                ),
+                                Literal::UInt(_) => (
                                     self.engine.insert(TypeInfo::U64),
                                     TypedIr::Literal(l.clone()),
                                 ),
@@ -1692,7 +1696,12 @@ impl Walker {
                             ins.push(heap, bool);
                             w_outs.push(bool)
                         }
-                        Literal::Num(_) => {
+                        Literal::Int(_) => {
+                            let u64 = self.engine.insert(TypeInfo::I64);
+                            ins.push(heap, u64);
+                            w_outs.push(u64)
+                        }
+                        Literal::UInt(_) => {
                             let u64 = self.engine.insert(TypeInfo::U64);
                             ins.push(heap, u64);
                             w_outs.push(u64)
@@ -1797,7 +1806,7 @@ impl Walker {
                     },
                     generics,
                 )?;
-                Type::Ptr(box ty)
+                Type::Ptr(Box::new(ty))
             }
             types::Type::Primitive(ty) => Type::Concrete(self.engine.insert(*ty)),
 

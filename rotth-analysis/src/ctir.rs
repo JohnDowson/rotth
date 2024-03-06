@@ -102,7 +102,7 @@ pub struct CStruct {
 
 impl CStruct {
     pub fn size(&self) -> usize {
-        self.fields.iter().map(|(_, f)| f.ty.size()).sum()
+        self.fields.values().map(|f| f.ty.size()).sum()
     }
 }
 
@@ -518,7 +518,7 @@ impl Walker {
                 let mut subs = gensubs.iter().collect::<Vec<_>>();
                 subs.sort_by(|(i1, _), (i2, _)| i1.cmp(i2));
                 for (_, sub) in subs {
-                    write!(substr, "{:?}", sub).unwrap();
+                    write!(substr, "{sub:?}").unwrap();
                 }
                 let callee_name = if substr.is_empty() {
                     p.clone()

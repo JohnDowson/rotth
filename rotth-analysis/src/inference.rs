@@ -8,12 +8,6 @@ use crate::{
     tir::{GenId, KStruct, Type},
     typecheck::{THeap, TypeStack},
 };
-///! # Type inference in less than 100 lines of Rust
-///!
-///! - Do with it what you will
-///! - Licensed under (https://en.wikipedia.org/wiki/WTFPL)
-///!
-///! ~ zesterer
 
 /// A identifier to uniquely refer to our type terms
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
@@ -129,12 +123,12 @@ impl std::fmt::Debug for Engine {
 
         for (id, info) in self.vars.iter().enumerate() {
             if f.alternate() {
-                write!(f, "\t{:?}: ", id)?;
+                write!(f, "\t{id:?}: ")?;
                 self.write_info(info, f)?;
                 write!(f, ", ")?;
                 writeln!(f)?;
             } else {
-                write!(f, "{:?}: {:?},", id, info)?;
+                write!(f, "{id:?}: {info:?},")?;
             }
         }
 
@@ -310,6 +304,12 @@ impl Engine {
         self.insert(TypeInfo::Ptr(t))
     }
 
+    /// # Type inference in less than 100 lines of Rust
+    ///
+    /// - Do with it what you will
+    /// - Licensed under (https://en.wikipedia.org/wiki/WTFPL)
+    ///
+    /// ~ zesterer
     pub fn unify_stacks(
         &mut self,
         heap: &mut THeap,
@@ -454,7 +454,7 @@ impl Engine {
         match self.vars[id.0] {
             Unknown => todo!(),
             Ref(id) => self.reconstruct_lossy(id),
-            Ptr(id) => Type::Ptr(box self.reconstruct_lossy(id)),
+            Ptr(id) => Type::Ptr(Box::new(self.reconstruct_lossy(id))),
             Generic(g) => Type::Generic(g),
             Void => Type::Concrete(id),
             Bool => Type::Concrete(id),
@@ -480,7 +480,7 @@ impl Engine {
         match self.vars[id.0] {
             Unknown => Err("Cannot infer".to_string()),
             Ref(id) => self.reify(subs, id),
-            Ptr(v) => Ok(ReifiedType::Ptr(box self.reify(subs, v)?)),
+            Ptr(v) => Ok(ReifiedType::Ptr(Box::new(self.reify(subs, v)?))),
             Generic(id) => Ok(subs[&id].clone()),
             Void => Ok(ReifiedType::VOID),
             Bool => Ok(ReifiedType::BOOL),
@@ -549,7 +549,7 @@ impl Engine {
                     self.write_info(&self.vars[id.0], f)
                 }
             }
-            TypeInfo::Generic(g) => write!(f, "{:?}", g),
+            TypeInfo::Generic(g) => write!(f, "{g:?}"),
             TypeInfo::Void => write!(f, "void"),
             TypeInfo::Bool => write!(f, "bool"),
             TypeInfo::Char => write!(f, "char"),

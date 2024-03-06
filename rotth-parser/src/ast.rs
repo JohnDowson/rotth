@@ -1,6 +1,10 @@
 mod parsers;
 
-use chumsky::{prelude::Simple, Parser, Stream};
+use chumsky::{
+    input::Stream,
+    prelude::{Input, Rich},
+    Parser,
+};
 use fnv::FnvHashMap;
 use rotth_lexer::{lex, Token};
 use smol_str::SmolStr;
@@ -41,7 +45,7 @@ pub enum TopLevel {
 }
 
 impl TopLevel {
-    pub fn name(&self) -> Result<SmolStr, Simple<Token, Span>> {
+    pub fn name(&self) -> Result<SmolStr, Rich<Token, Span>> {
         match self {
             TopLevel::Proc(Proc {
                 name:
@@ -91,7 +95,7 @@ impl TopLevel {
                 .file_prefix()
                 .and_then(|n| n.to_str())
                 .map(Into::into)
-                .ok_or_else(|| Simple::custom(*span, "Invalid include path: not a file")),
+                .ok_or_else(|| Rich::custom(*span, "Invalid include path: not a file")),
         }
     }
 }
@@ -361,8 +365,9 @@ pub struct Bind {
 #[derive(Clone)]
 pub enum Literal {
     Bool(bool),
-    Num(u64),
-    String(String),
+    Int(i64),
+    UInt(u64),
+    String(SmolStr),
     Char(char),
 }
 
@@ -370,17 +375,18 @@ impl Debug for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Bool(arg0) => arg0.fmt(f),
-            Self::Num(arg0) => arg0.fmt(f),
+            Self::Int(arg0) => arg0.fmt(f),
+            Self::UInt(arg0) => arg0.fmt(f),
             Self::String(arg0) => arg0.fmt(f),
             Self::Char(arg0) => arg0.fmt(f),
         }
     }
 }
 
-pub fn parse(tokens: Vec<(Token, Span)>) -> Result<File, ParserError> {
-    let stream = Stream::from_iter(tokens.last().unwrap().1, tokens.into_iter());
-    let (r, e) = parsers::file().parse_recovery(stream);
-    r.ok_or_else(|| e.into())
+pub fn parse(tokens: Vec<(Token, Span)>) -> Result<File, ParserError<'static>> {
+    parsers::file()
+        .parse(Stream::from_iter(tokens.into_iter()).spanned(Span::point("".into(), tokens.len())))
+        .map_err(|e| e.into())
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -533,7 +539,7 @@ impl Debug for ItemPath {
         let segments = self.segments.iter();
         let iter = segments.intersperse(&separator);
         for s in iter {
-            write!(f, "{}", s)?
+            write!(f, "{s}")?
         }
         Ok(())
     }
@@ -606,12 +612,15 @@ pub struct ResolvedStruct {
     pub fields: FnvHashMap<SmolStr, Spanned<NameTypePair>>,
 }
 
-pub fn resolve_includes(root: File) -> Result<ResolvedFile, ParserError> {
+pub fn resolve_includes(root: File) -> Result<ResolvedFile, ParserError<'static>> {
     let path = Default::default();
     resolve_includes_from(path, root)
 }
 
-fn resolve_includes_from(path: ItemPathBuf, root: File) -> Result<ResolvedFile, ParserError> {
+fn resolve_includes_from(
+    path: ItemPathBuf,
+    root: File,
+) -> Result<ResolvedFile, ParserError<'static>> {
     let mut ast: FnvHashMap<SmolStr, Spanned<ResolvedItem>> = Default::default();
     let mut errors = Vec::new();
     for item in root.0 {
@@ -718,7 +727,7 @@ fn resolve_includes_from(path: ItemPathBuf, root: File) -> Result<ResolvedFile, 
     }
 }
 
-fn make_struct(s: Struct) -> Result<ResolvedStruct, Vec<Error>> {
+fn make_struct(s: Struct) -> Result<ResolvedStruct, Vec<Error<'static>>> {
     let mut errors = Vec::default();
     let mut fields: FnvHashMap<SmolStr, Spanned<NameTypePair>> = Default::default();
     for field in s.body {

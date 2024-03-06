@@ -1,38 +1,37 @@
-#![feature(box_patterns, box_syntax)]
+#![feature(box_patterns)]
 #![feature(iter_intersperse)]
-#![feature(generic_associated_types)]
 #![feature(path_file_prefix)]
 
 pub mod ast;
 pub mod hir;
 pub mod types;
 
-use chumsky::prelude::Simple;
+use chumsky::error::Rich;
 use rotth_lexer::Token;
 use spanner::Span;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 #[error("{0:?}")]
-pub struct ParserError(pub Vec<Error>);
+pub struct ParserError<'i>(pub Vec<Error<'i>>);
 
-impl From<Vec<Simple<Token, Span>>> for ParserError {
-    fn from(es: Vec<Simple<Token, Span>>) -> Self {
+impl<'i> From<Vec<Rich<'i, Token, Span>>> for ParserError<'i> {
+    fn from(es: Vec<Rich<'i, Token, Span>>) -> Self {
         Self(es.into_iter().map(Error::from).collect())
     }
 }
 #[derive(Debug, Error)]
-pub enum Error {
+pub enum Error<'i> {
     #[error("{0:?}")]
-    Parser(Simple<Token, Span>),
+    Parser(Rich<'i, Token, Span>),
     #[error("{0:?}")]
     Redefinition(#[from] Redefinition),
     #[error("UnresolvedInclude {0:?}")]
     UnresolvedInclude(Span),
 }
 
-impl From<Simple<Token, Span>> for Error {
-    fn from(e: Simple<Token, Span>) -> Self {
+impl<'i> From<Rich<'i, Token, Span>> for Error<'i> {
+    fn from(e: Rich<'i, Token, Span>) -> Self {
         Self::Parser(e)
     }
 }
