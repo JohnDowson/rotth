@@ -1,0 +1,4 @@
+proc main u64 &char: u64 do
+    bind argv argc
+    end
+end

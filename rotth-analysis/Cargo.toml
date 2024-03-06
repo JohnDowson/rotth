@@ -6,11 +6,4 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-somok = "1.5.0"
-simplearena = { path = "../simplearena" }
-fnv = "1.0"
-rotth-lexer = { path = "../rotth-lexer" }
-rotth-parser = { path = "../rotth-parser" }
-spanner = { path = "../spanner" }
 thiserror = "1.0"
-smol_str = "0.2"

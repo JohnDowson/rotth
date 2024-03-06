@@ -12,8 +12,6 @@ clap = { version = "4", features = ["derive"] }
 simplearena = { path = "../simplearena" }
 indoc = "2.0"
 fnv = "1.0"
-rotth-lexer = { path = "../rotth-lexer" }
-rotth-parser = { path = "../rotth-parser" }
 rotth-analysis = { path = "../rotth-analysis" }
 spanner = { path = "../spanner" }
 chumsky = "1.0.0-alpha.6"

@@ -1,14 +1,14 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+#![feature(iterator_try_collect)]
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+mod ast;
+mod lexer;
+mod parsers;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+#[test]
+fn test() {
+    use lexer::Token;
+    use logos::Logos as _;
+    let s = std::fs::read_to_string("../slate-examples/1.sr").unwrap();
+    let t = Token::lexer(&*s).try_collect::<Vec<Token>>().unwrap();
+    println!("{t:?}")
 }

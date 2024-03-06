@@ -1,16 +1,8 @@
 [workspace]
 resolver = "2"
-members = [
-  "rotth",
-  "rotth-lexer",
-  "rotth-parser",
-  "rotth-analysis",
-  "rotth-lsp",
-  "spanner",
-  "simplearena",
-  "slate",
-]
+members = ["rotth", "rotth-analysis", "spanner", "simplearena", "slate"]
 
 [workspace.dependencies]
 chumsky = "1.0.0-alpha.6"
 logos = "0.14"
+internment = "0.7"
