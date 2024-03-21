@@ -45,7 +45,7 @@ pub enum TopLevel {
 }
 
 impl TopLevel {
-    pub fn name(&self) -> Result<SmolStr, Rich<Token, Span>> {
+    pub fn name(&self) -> Result<SmolStr, Rich<'static, Token, Span>> {
         match self {
             TopLevel::Proc(Proc {
                 name:
@@ -384,8 +384,10 @@ impl Debug for Literal {
 }
 
 pub fn parse(tokens: Vec<(Token, Span)>) -> Result<File, ParserError<'static>> {
+    let len = tokens.len();
     parsers::file()
-        .parse(Stream::from_iter(tokens.into_iter()).spanned(Span::point("".into(), tokens.len())))
+        .parse(Stream::from_iter(tokens).spanned(Span::point(std::path::Path::new(""), len)))
+        .into_result()
         .map_err(|e| e.into())
 }
 

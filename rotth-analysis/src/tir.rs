@@ -744,7 +744,7 @@ impl Walker {
                         outs: vec![ty],
                     }
                 }
-                Hir::Path(path) if self.item_refs.get(path).is_some() => {
+                Hir::Path(path) if self.item_refs.contains_key(path) => {
                     match self.item_refs.get(path).cloned().unwrap() {
                         Ref::Proc(proc_name) => {
                             let proc = self.known_procs.get(&proc_name).cloned().unwrap();

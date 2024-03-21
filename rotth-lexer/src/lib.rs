@@ -32,12 +32,12 @@ pub enum Token {
     #[token("!")]
     Write,
     #[regex(
-        r"[()\{\}<>\|\\/!@#$%^&*\-=+?][()\{\}<>\|\\/!@#$%^&*\-=+?]?",
+        r"[()\{\}<>\|\\/#$%^&*\-=+?][()\{\}<>\|\\/!@#$%^&*\-=+?]?",
         to_smol_str
     )]
     Operator(SmolStr),
     #[regex(
-        r"[_A-Za-z][()\{\}<>\|\\/!@#$%^&*\-=+_?A-Za-z0-9]*",
+        r"[_A-Za-z][()\{\}<>\|\\/!#$%^&*\-=+_?A-Za-z0-9]*",
         to_smol_str,
         priority = 0
     )]
@@ -97,6 +97,8 @@ pub enum Token {
 
     #[regex(r"\p{Whitespace}+", logos::skip)]
     Whitespace,
+
+    Error,
 }
 
 impl std::fmt::Debug for Token {
@@ -133,9 +135,9 @@ impl std::fmt::Debug for Token {
             Token::KwStruct => write!(f, "struct"),
             Token::KwCast => write!(f, "cast"),
             Token::KwEnd => write!(f, "end"),
-            Token::Comment => write!(f, "Comment"),
-            Token::Whitespace => write!(f, "WS"),
-            Token::Error => write!(f, "Error"),
+            Token::Comment => write!(f, "<comment>"),
+            Token::Whitespace => write!(f, "<whitespace>"),
+            Token::Error => write!(f, "<error>"),
         }
     }
 }
@@ -149,6 +151,9 @@ impl std::fmt::Display for Token {
 pub fn lex(src: &str, path: &'static Path) -> Vec<(Token, Span)> {
     Token::lexer(src)
         .spanned()
-        .map(|(t, s)| (t, Span::new(path, s.start, s.end)))
+        .map(|(t, s)| match t {
+            Ok(t) => (t, Span::new(path, s.start, s.end)),
+            Err(()) => (Token::Error, Span::new(path, s.start, s.end)),
+        })
         .collect()
 }

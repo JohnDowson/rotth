@@ -28,25 +28,25 @@ use rotth_parser::ParserError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub enum Error<'i> {
     #[error("IO error {0}")]
     IO(#[from] std::io::Error),
     #[error("Lexer error")]
     Lexer,
     #[error("Parser error {0:?}")]
-    Parser(ParserError),
+    Parser(ParserError<'i>),
     #[error("Typecheck error {0:?}")]
     Typecheck(TypecheckError),
     #[error("Concretisation error {0:?}")]
     Concrete(ConcreteError),
 }
 
-impl From<ParserError> for Error {
-    fn from(e: ParserError) -> Self {
+impl<'i> From<ParserError<'i>> for Error<'i> {
+    fn from(e: ParserError<'i>) -> Self {
         Self::Parser(e)
     }
 }
-impl From<TypecheckError> for Error {
+impl<'i> From<TypecheckError> for Error<'i> {
     fn from(e: TypecheckError) -> Self {
         Self::Typecheck(e)
     }

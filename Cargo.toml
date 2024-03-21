@@ -14,3 +14,4 @@ members = [
 [workspace.dependencies]
 chumsky = "1.0.0-alpha.6"
 logos = "0.14"
+ariadne = "0.4"

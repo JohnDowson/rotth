@@ -6,7 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ariadne = "0.4"
 somok = "1.5.0"
 clap = { version = "4", features = ["derive"] }
 simplearena = { path = "../simplearena" }
@@ -16,7 +15,8 @@ rotth-lexer = { path = "../rotth-lexer" }
 rotth-parser = { path = "../rotth-parser" }
 rotth-analysis = { path = "../rotth-analysis" }
 spanner = { path = "../spanner" }
-chumsky = "1.0.0-alpha.6"
+chumsky.workspace = true
+ariadne.workspace = true
 thiserror = "1.0"
 smol_str = "0.2"
 inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = [

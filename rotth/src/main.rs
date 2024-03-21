@@ -1,11 +1,11 @@
 use ariadne::{Color, FileCache, Fmt, Label, Report, ReportKind, Span};
 use chumsky::error::RichReason;
 use clap::{Parser, ValueEnum};
-use rotth::{emit, lir2, Error};
+use rotth::{lir2, Error};
 use rotth_analysis::{ctir, tir};
 use rotth_parser::hir;
 use somok::Somok;
-use std::{fs::OpenOptions, io::BufWriter, path::PathBuf, time::Instant};
+use std::{path::PathBuf, time::Instant};
 
 #[derive(Parser)]
 struct Args {
@@ -70,16 +70,13 @@ fn report_errors(e: Error) {
                                         "something else".to_string()
                                     } else {
                                         e.expected()
-                                            .map(|expected| match expected {
-                                                Some(expected) => expected.to_string(),
-                                                None => "end of input".to_string(),
-                                            })
+                                            .map(|expected| expected.to_string())
                                             .collect::<Vec<_>>()
                                             .join(", ")
                                     }
                                 ))
                                 .with_label(
-                                    Label::new(e.span())
+                                    Label::new(*e.span())
                                         .with_message(format!(
                                             "Unexpected token {}",
                                             e.found()
@@ -89,15 +86,12 @@ fn report_errors(e: Error) {
                                         ))
                                         .with_color(Color::Red),
                                 ),
-                            SimpleReason::Custom(msg) => report.with_message(msg).with_label(
-                                Label::new(e.span())
+                            RichReason::Custom(msg) => report.with_message(msg).with_label(
+                                Label::new(*e.span())
                                     .with_message(format!("{}", msg.fg(Color::Red)))
                                     .with_color(Color::Red),
                             ),
-                            SimpleReason::Unclosed {
-                                span: _,
-                                delimiter: _,
-                            } => todo!(),
+                            RichReason::Many(_es) => todo!(),
                         };
                         report.finish().print(&mut sources).unwrap();
                     }
@@ -242,7 +236,7 @@ fn report_errors(e: Error) {
     }
 }
 
-fn compiler() -> Result<(), Error> {
+fn compiler<'i>() -> Result<(), Error<'i>> {
     let args = Args::parse();
 
     let start = Instant::now();

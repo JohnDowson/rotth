@@ -1,3 +1,4 @@
+use chumsky::error::RichReason;
 use dashmap::DashMap;
 use ropey::Rope;
 use rotth_lexer::lex;
@@ -65,7 +66,7 @@ impl<'s> Backend {
                     let path = parent.parent().unwrap().join(&*inc.path);
                     self.include_map
                         .entry(parent.clone())
-                        .or_insert_with(Default::default)
+                        .or_default()
                         .insert(path.clone());
                     (parent, path).some()
                 } else {
@@ -93,10 +94,7 @@ impl<'s> Backend {
                     .filter_map(|error| {
                         let (message, span) = match error {
                             rotth_parser::Error::Parser(e) => match e.reason() {
-                                chumsky::error::SimpleReason::Unclosed { span, delimiter } => {
-                                    (format!("Unclosed delimiter {delimiter}"), *span)
-                                }
-                                chumsky::error::SimpleReason::Unexpected => (
+                                RichReason::ExpectedFound { .. } => (
                                     format!(
                                         "{}, expected {}",
                                         if e.found().is_some() {
@@ -108,19 +106,15 @@ impl<'s> Backend {
                                             "something else".to_string()
                                         } else {
                                             e.expected()
-                                                .map(|expected| match expected {
-                                                    Some(expected) => expected.to_string(),
-                                                    None => "end of input".to_string(),
-                                                })
+                                                .map(ToString::to_string)
                                                 .collect::<Vec<_>>()
                                                 .join(", ")
                                         }
                                     ),
-                                    e.span(),
+                                    *e.span(),
                                 ),
-                                chumsky::error::SimpleReason::Custom(msg) => {
-                                    (msg.to_string(), e.span())
-                                }
+                                RichReason::Custom(msg) => (msg.to_string(), *e.span()),
+                                RichReason::Many(_) => todo!(),
                             },
                             rotth_parser::Error::Redefinition(e) => {
                                 ("This item is redefined elsewhere".into(), e.redefined_item)
@@ -170,7 +164,7 @@ impl<'s> Backend {
                     let path = parent.parent().unwrap().join(&*inc.path);
                     self.include_map
                         .entry(parent.clone())
-                        .or_insert_with(Default::default)
+                        .or_default()
                         .insert(path.clone());
                     (parent, path).some()
                 } else {
@@ -180,8 +174,7 @@ impl<'s> Backend {
             .collect::<Vec<_>>();
         self.ast_map.insert(params.uri.to_file_path().unwrap(), ast);
 
-        while !includes.is_empty() {
-            let (parent, path) = includes.pop().unwrap();
+        while let Some((parent, path)) = includes.pop() {
             let extend = self.parse_file(Some(&parent), &path).await.unwrap();
             includes.extend(extend)
         }
