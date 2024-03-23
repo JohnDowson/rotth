@@ -1,14 +1,20 @@
+use crate::eval::eval;
+
 use self::cfg::{Block, BlockId, ProcBuilder};
 use fnv::FnvHashMap;
 use rotth_analysis::{
     ctir::{CConst, CMem, CProc, ConcreteNode, ConcreteProgram, Intrinsic},
     inference::ReifiedType,
-    tir::{If, TypedIr},
+    tir::{Bind, Cond, CondBranch, FieldAccess, If, TypedIr, While},
 };
-use rotth_parser::ast::{ItemPath, ItemPathBuf, Literal};
+use rotth_parser::{
+    ast::{ItemPath, ItemPathBuf, Literal},
+    hir::Binding,
+};
 use smol_str::SmolStr;
+use spanner::Spanned;
 
-mod cfg;
+pub mod cfg;
 
 pub struct CompiledProc {
     pub ins: Vec<ReifiedType>,
@@ -113,8 +119,8 @@ impl Compiler {
     fn compile_proc(
         &mut self,
         CProc {
-            generics,
-            vars,
+            generics: _,
+            vars: _,
             ins,
             outs,
             body,
@@ -122,14 +128,17 @@ impl Compiler {
     ) -> CompiledProc {
         let mut proc = ProcBuilder::new();
         self.compile_body(&mut proc, body);
+        proc.jump(proc.exit);
+
+        proc.dbg_graph("./proc.dot").unwrap();
 
         let ProcBuilder {
             blocks,
-            current_block,
+            current_block: _,
             entry: _,
             exit: _,
-            bindings,
-            locals,
+            bindings: _,
+            locals: _,
         } = proc;
         CompiledProc { ins, outs, blocks }
     }
@@ -156,19 +165,76 @@ impl Compiler {
         proc.switch_block(after);
     }
 
+    fn compile_cond(
+        &mut self,
+        proc: &mut ProcBuilder,
+        Cond { branches }: Cond<ReifiedType, Intrinsic>,
+    ) {
+        let phi_b = proc.new_block();
+        let n_branches = branches.len() - 1;
+        let mut this_pat_b = proc.new_block();
+        proc.jump(this_pat_b);
+        for (i, CondBranch { pattern, body }) in branches.into_iter().enumerate() {
+            proc.switch_block(this_pat_b);
+            match pattern.node {
+                TypedIr::ConstUse(_) => todo!(),
+                TypedIr::Literal(l) => match l {
+                    Literal::Bool(b) => proc.push(Value::Bool(b)),
+                    Literal::Int(i) => proc.push(Value::Int(i)),
+                    Literal::UInt(u) => proc.push(Value::UInt(u)),
+                    Literal::String(s) => proc.push(Value::String(s)),
+                    Literal::Char(c) => proc.push(Value::Char(c)),
+                },
+                TypedIr::IgnorePattern => proc.dup(),
+                _ => unreachable!(),
+            }
+            let body_b = proc.new_block();
+            proc.eq();
+            if i < n_branches {
+                this_pat_b = proc.new_block();
+                proc.branch(body_b, this_pat_b);
+            } else {
+                proc.jump(body_b)
+            }
+            proc.switch_block(body_b);
+            self.compile_body(proc, body);
+            proc.jump(phi_b);
+        }
+        proc.switch_block(phi_b);
+    }
+
     fn compile_body(&mut self, proc: &mut ProcBuilder, body: Vec<ConcreteNode>) {
         for node in body {
             let _span = node.span;
             match node.node {
-                TypedIr::MemUse(_) => proc.push_mem(),
-                TypedIr::GVarUse(_) => todo!(),
+                TypedIr::MemUse(name) => {
+                    self.compile_mem(&name);
+                    let mangled = self.mangle_table.get(&name).unwrap().clone();
+                    proc.push_mem(mangled);
+                }
+                TypedIr::GVarUse(name) => {
+                    let mangled = self.mangle_table.get(&name).unwrap().clone();
+                    proc.push_mem(mangled);
+                }
                 TypedIr::LVarUse(lvar) => {
                     let lvar = proc.locals.get(&lvar).unwrap();
                     proc.push_lvar(*lvar);
                 }
-                TypedIr::BindingUse(_) => todo!(),
+                TypedIr::BindingUse(name) => {
+                    let offset = proc
+                        .bindings
+                        .iter()
+                        .flatten()
+                        .rev()
+                        .position(|b| b == &name)
+                        .unwrap();
+                    proc.use_binding(offset);
+                }
                 TypedIr::ConstUse(_) => todo!(),
-                TypedIr::Call(_) => todo!(),
+                TypedIr::Call(name) => {
+                    let mangled = self.mangle_table.get(&name).unwrap();
+                    proc.call(mangled.clone())
+                }
                 TypedIr::Intrinsic(i) => match i {
                     Intrinsic::Drop => proc.drop(),
                     Intrinsic::Dup => proc.dup(),
@@ -189,10 +255,40 @@ impl Compiler {
                     Intrinsic::Ge => proc.ge(),
                     i => todo!("{i:?}"),
                 },
-                TypedIr::Bind(_) => todo!(),
-                TypedIr::While(_) => todo!(),
+                TypedIr::Bind(Bind { bindings, body }) => {
+                    proc.bindings.push(Vec::new());
+                    for Spanned {
+                        span: _,
+                        inner: binding,
+                    } in &bindings
+                    {
+                        match binding {
+                            Binding::Ignore => (),
+                            Binding::Bind { name, ty: _ } => {
+                                proc.bind();
+                                proc.bindings.last_mut().unwrap().push(name.clone());
+                            }
+                        }
+                    }
+                    self.compile_body(proc, body);
+                    for _ in proc.bindings.pop().unwrap() {
+                        proc.unbind();
+                    }
+                }
+                TypedIr::While(While { cond, body }) => {
+                    let cond_b = proc.new_block();
+                    let body_b = proc.new_block();
+                    let after = proc.new_block();
+                    proc.switch_block(cond_b);
+                    self.compile_body(proc, cond);
+                    proc.branch(body_b, after);
+                    proc.switch_block(body_b);
+                    self.compile_body(proc, body);
+                    proc.jump(cond_b);
+                    proc.switch_block(after)
+                }
                 TypedIr::If(if_) => self.compile_if(proc, if_),
-                TypedIr::Cond(_) => todo!(),
+                TypedIr::Cond(cond) => self.compile_cond(proc, cond),
                 TypedIr::Literal(lit) => {
                     let v = match lit {
                         Literal::Bool(b) => Value::Bool(b),
@@ -211,7 +307,16 @@ impl Compiler {
                     }
                     proc.return_()
                 }
-                TypedIr::FieldAccess(_) => todo!(),
+                TypedIr::FieldAccess(FieldAccess {
+                    ty: ReifiedType::Custom(ty),
+                    field,
+                }) => {
+                    let size = ty.fields.get(&field).unwrap().ty.size();
+                    proc.read(size);
+                }
+                TypedIr::FieldAccess(_) => {
+                    unreachable!()
+                }
             }
         }
     }
@@ -234,9 +339,30 @@ impl Compiler {
     fn inc_proc_id(&mut self) {
         self.proc_id += 1;
     }
+
+    fn compile_mem(&mut self, name: &ItemPath) {
+        let CMem { body } = match self.mems.get(name) {
+            Some(ComMem::Compiled(_)) => return,
+            Some(ComMem::NotCompiled(mem)) => mem.clone(),
+            None => unreachable!(),
+        };
+
+        let mut proc = ProcBuilder::new();
+
+        self.compile_body(&mut proc, body);
+        proc.return_();
+
+        let size = match eval(&proc.blocks, true) {
+            Some(Value::UInt(size)) => size as usize,
+            Some(Value::Int(size)) => size as usize,
+            Some(_) => unreachable!(),
+            None => todo!(),
+        };
+        self.mems.insert(name.to_owned(), ComMem::Compiled(size));
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Value {
     Bool(bool),
     Int(i64),
@@ -290,4 +416,6 @@ pub enum Op {
     Branch(BlockId, BlockId),
     Call(Mangled),
     Return,
+
+    Syscall(u8),
 }

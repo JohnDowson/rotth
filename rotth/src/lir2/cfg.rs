@@ -63,7 +63,7 @@ impl ProcBuilder {
 
         for (c, blk) in self.blocks.iter().enumerate() {
             for &child in &blk.children {
-                writeln!(f, "\t{c} -> {child:?}")?;
+                writeln!(f, "\t{c} -> {}", child.0)?;
             }
         }
 
@@ -74,12 +74,14 @@ impl ProcBuilder {
     pub fn push(&mut self, const_: Value) {
         self.blocks[self.current_block.0].ops.push(Op::Push(const_))
     }
-    pub fn push_mem(&mut self) {}
+    pub fn push_mem(&mut self, sym: Mangled) {
+        self.blocks[self.current_block.0].ops.push(Op::PushMem(sym))
+    }
     pub fn drop(&mut self) {
         self.blocks[self.current_block.0].ops.push(Op::Drop)
     }
     pub fn dup(&mut self) {
-        self.blocks[self.current_block.0].ops.push(Op::Drop)
+        self.blocks[self.current_block.0].ops.push(Op::Dup)
     }
     pub fn swap(&mut self) {
         self.blocks[self.current_block.0].ops.push(Op::Swap)

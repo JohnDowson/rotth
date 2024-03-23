@@ -562,7 +562,7 @@ impl Walker {
         if let Err(msg) = self.engine.unify_stacks(heap, outs, ins) {
             return error(
                 proc.span,
-                ErrorKind::UnificationError(msg),
+                ErrorKind::UnificationError(dbg! {msg}),
                 "Expected proc outputs do not match actual outputs",
             );
         }

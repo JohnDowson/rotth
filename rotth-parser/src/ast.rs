@@ -385,8 +385,9 @@ impl Debug for Literal {
 
 pub fn parse(tokens: Vec<(Token, Span)>) -> Result<File, ParserError<'static>> {
     let len = tokens.len();
+    let path = tokens.first().unwrap().1.file;
     parsers::file()
-        .parse(Stream::from_iter(tokens).spanned(Span::point(std::path::Path::new(""), len)))
+        .parse(Stream::from_iter(tokens).spanned(Span::point(path, len)))
         .into_result()
         .map_err(|e| e.into())
 }

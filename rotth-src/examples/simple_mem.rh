@@ -1,0 +1,6 @@
+mem foo do "nonsense" end
+
+proc main: u64 do
+ 1 foo cast &>i64 !i64
+ 1 cast u64
+end

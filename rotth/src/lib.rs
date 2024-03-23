@@ -6,7 +6,7 @@
 #![feature(array_windows)]
 
 pub mod emit;
-// pub mod eval;
+pub mod eval;
 // pub mod lir;
 pub mod lir2;
 
