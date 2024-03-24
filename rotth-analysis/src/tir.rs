@@ -1,6 +1,7 @@
 use fnv::FnvHashMap;
+use itempath::{ItemPath, ItemPathBuf};
 use rotth_parser::{
-    ast::{ItemPath, ItemPathBuf, Literal},
+    ast::Literal,
     hir::{self, Hir, Intrinsic},
     types::{self, StructIndex},
 };

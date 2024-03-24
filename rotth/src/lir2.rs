@@ -2,15 +2,13 @@ use crate::eval::eval;
 
 use self::cfg::{Block, BlockId, ProcBuilder};
 use fnv::FnvHashMap;
+use itempath::{ItemPath, ItemPathBuf};
 use rotth_analysis::{
     ctir::{CConst, CMem, CProc, ConcreteNode, ConcreteProgram, Intrinsic},
     inference::ReifiedType,
     tir::{Bind, Cond, CondBranch, FieldAccess, If, TypedIr, While},
 };
-use rotth_parser::{
-    ast::{ItemPath, ItemPathBuf, Literal},
-    hir::Binding,
-};
+use rotth_parser::{ast::Literal, hir::Binding};
 use smol_str::SmolStr;
 use spanner::Spanned;
 
@@ -129,6 +127,8 @@ impl Compiler {
         let mut proc = ProcBuilder::new();
         self.compile_body(&mut proc, body);
         proc.jump(proc.exit);
+        proc.switch_block(proc.exit);
+        proc.return_();
 
         proc.dbg_graph("./proc.dot").unwrap();
 

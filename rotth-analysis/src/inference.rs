@@ -1,5 +1,6 @@
 use fnv::FnvHashMap;
-use rotth_parser::{ast::ItemPathBuf, types::Primitive};
+use itempath::ItemPathBuf;
+use rotth_parser::types::Primitive;
 use smol_str::SmolStr;
 use std::{fmt::Write, rc::Rc};
 

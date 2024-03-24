@@ -1,0 +1,8 @@
+[package]
+name = "itempath"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+smol_str.workspace = true
+serde.workspace = true

@@ -62,10 +62,10 @@ impl<'s> Backend {
             .iter()
             .filter_map(|i| {
                 if let TopLevel::Include(inc) = &**i {
-                    let parent = i.span.file.to_owned();
+                    let parent = i.span.file.to_path_buf();
                     let path = parent.parent().unwrap().join(&*inc.path);
                     self.include_map
-                        .entry(parent.clone())
+                        .entry(parent.to_path_buf())
                         .or_default()
                         .insert(path.clone());
                     (parent, path).some()
@@ -380,7 +380,7 @@ impl LanguageServer for Backend {
 
         let definition = item.and_then(|item| {
             let span = &item.span;
-            let uri = Url::from_file_path(span.file).unwrap();
+            let uri = Url::from_file_path(&*span.file).unwrap();
 
             let rope = &*self.document_map.get(span.file)?;
 

@@ -1,8 +1,6 @@
-use crate::{
-    ast::{GenericParams, ItemPath, ItemPathBuf},
-    path,
-};
+use crate::ast::GenericParams;
 use fnv::FnvHashMap;
+use itempath::{path, ItemPath, ItemPathBuf};
 use smol_str::SmolStr;
 use spanner::Spanned;
 use std::fmt::Write;

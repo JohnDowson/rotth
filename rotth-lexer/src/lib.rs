@@ -1,7 +1,8 @@
+use internment::Intern;
 use logos::{Lexer, Logos};
 use smol_str::SmolStr;
 use spanner::Span;
-use std::path::Path;
+use std::path::PathBuf;
 
 fn to_char(l: &'_ mut Lexer<'_, Token>) -> Option<char> {
     l.slice().chars().nth(1)
@@ -59,8 +60,10 @@ pub enum Token {
     #[token("]")]
     RBracket,
 
-    #[token("include")]
-    KwInclude,
+    #[token("module")]
+    KwModule,
+    #[token("use")]
+    KwUse,
     #[token("from")]
     KwFrom,
     #[token("return")]
@@ -81,8 +84,6 @@ pub enum Token {
     KwBind,
     #[token("const")]
     KwConst,
-    #[token("mem")]
-    KwMem,
     #[token("var")]
     KwVar,
     #[token("struct")]
@@ -119,7 +120,8 @@ impl std::fmt::Debug for Token {
             Token::FieldAccess => write!(f, "->"),
             Token::LBracket => write!(f, "["),
             Token::RBracket => write!(f, "]"),
-            Token::KwInclude => write!(f, "include"),
+            Token::KwUse => write!(f, "use"),
+            Token::KwModule => write!(f, "module"),
             Token::KwFrom => write!(f, "from"),
             Token::KwReturn => write!(f, "return"),
             Token::KwCond => write!(f, "cond"),
@@ -130,7 +132,6 @@ impl std::fmt::Debug for Token {
             Token::KwDo => write!(f, "do"),
             Token::KwBind => write!(f, "bind"),
             Token::KwConst => write!(f, "const"),
-            Token::KwMem => write!(f, "mem"),
             Token::KwVar => write!(f, "var"),
             Token::KwStruct => write!(f, "struct"),
             Token::KwCast => write!(f, "cast"),
@@ -148,7 +149,7 @@ impl std::fmt::Display for Token {
     }
 }
 
-pub fn lex(src: &str, path: &'static Path) -> Vec<(Token, Span)> {
+pub fn lex(src: &str, path: Intern<PathBuf>) -> Vec<(Token, Span)> {
     Token::lexer(src)
         .spanned()
         .map(|(t, s)| match t {

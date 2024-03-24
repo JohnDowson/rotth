@@ -1,8 +1,10 @@
 use std::{
     fmt::Debug,
     ops::{Deref, DerefMut, Range},
-    path::Path,
+    path::{Path, PathBuf},
 };
+
+use internment::Intern;
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
 pub struct Spanned<T> {
@@ -57,16 +59,16 @@ impl<T> DerefMut for Spanned<T> {
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
 pub struct Span {
-    pub file: &'static Path,
+    pub file: Intern<PathBuf>,
     pub start: usize,
     pub end: usize,
 }
 
 impl Span {
-    pub fn new(file: &'static Path, start: usize, end: usize) -> Self {
+    pub fn new(file: Intern<PathBuf>, start: usize, end: usize) -> Self {
         Self { file, start, end }
     }
-    pub fn point(file: &'static Path, point: usize) -> Self {
+    pub fn point(file: Intern<PathBuf>, point: usize) -> Self {
         Self {
             file,
             start: point,
@@ -108,7 +110,7 @@ impl ariadne::Span for Span {
     type SourceId = Path;
 
     fn source(&self) -> &Self::SourceId {
-        self.file
+        &self.file
     }
 
     fn start(&self) -> usize {
@@ -121,7 +123,7 @@ impl ariadne::Span for Span {
 }
 
 impl chumsky::span::Span for Span {
-    type Context = &'static Path;
+    type Context = Intern<PathBuf>;
 
     type Offset = usize;
 

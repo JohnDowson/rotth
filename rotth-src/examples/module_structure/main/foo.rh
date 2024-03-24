@@ -1,0 +1,1 @@
+proc bar: i64 do 0 end

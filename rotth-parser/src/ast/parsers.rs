@@ -1,17 +1,18 @@
 use chumsky::{input::ValueInput, prelude::*};
+use internment::Intern;
 use logos::Logos;
 use rotth_lexer::Token;
 use smol_str::SmolStr;
 use somok::Either;
 use spanner::{Span, Spanned};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::types::{Custom, Primitive, Type};
 
 use super::{
     Bind, Cast, Cond, CondBranch, Const, ConstSignature, Else, Expr, FieldAccess, File,
-    GenericParams, Generics, If, Include, ItemPathBuf, Keyword, Literal, Mem, NameTypePair, Proc,
-    ProcSignature, Punctuation, Qualifiers, Read, Struct, TopLevel, Var, While, Word, Write,
+    GenericParams, Generics, If, ItemPathBuf, Keyword, Literal, ModuleDef, NameTypePair, Proc,
+    ProcSignature, Punctuation, Read, Struct, TopLevel, Use, Var, While, Word, Write,
 };
 
 trait RParser<'i, I, O>
@@ -51,7 +52,7 @@ where
             .map_with(|(ptr, (ty, params)), span| {
                 let mut ty = if let Some(type_name) = ty.only() {
                     match type_name {
-                        "()" => Type::Primitive(Primitive::Void),
+                        "void" => Type::Primitive(Primitive::Void),
                         "bool" => Type::Primitive(Primitive::Bool),
                         "char" => Type::Primitive(Primitive::Char),
 
@@ -87,10 +88,10 @@ where
     })
 }
 
-pub(super) fn parse_string<'i>(
-    s: &'i str,
-    path: &'static Path,
-) -> Result<SmolStr, Rich<'i, Token, Span>> {
+pub(super) fn parse_string(
+    s: &str,
+    path: Intern<PathBuf>,
+) -> Result<SmolStr, Rich<'_, Token, Span>> {
     #[derive(Logos)]
     pub enum StrToken {
         #[regex(r"\\.", |l| l.slice().chars().nth(1))]
@@ -134,8 +135,9 @@ where
             }
         },
         Token::String(s) = span => {
-            let span = span.span();
-            Spanned{ span, inner: Literal::String(parse_string(&s, span.context()).ok()?) }},
+            let span: spanner::Span = span.span();
+            let s = parse_string(&s, span.context()).ok()?;
+            Spanned{ span, inner: Literal::String(s) }},
         Token::Char(c) = span => Spanned { span: span.span(), inner: Literal::Char(c) },
     }
 }
@@ -151,31 +153,23 @@ where
     })
 }
 
-pub(super) fn include_path<'i, I>(
-) -> impl Parser<'i, I, Spanned<PathBuf>, extra::Err<Rich<'i, Token, Span>>> + Clone
-where
-    I: ValueInput<'i, Token = Token, Span = Span>,
-{
-    select! {
-        Token::String(s) = span => Spanned {
-            span: span.span(),
-            inner: {
-                let mut chars = (*s).chars();
-                chars.next();
-                chars.next_back();
-                PathBuf::from(chars.as_str())
-            }
-        },
-    }
-}
-
-pub(super) fn kw_include<'i, I>(
+pub(super) fn kw_module<'i, I>(
 ) -> impl Parser<'i, I, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
     select! {
-        Token::KwInclude = span => Spanned { span: span.span(), inner: Keyword::Include },
+        Token::KwModule = span => Spanned { span: span.span(), inner: Keyword::Module },
+    }
+}
+
+pub(super) fn kw_use<'i, I>(
+) -> impl Parser<'i, I, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone
+where
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+    select! {
+        Token::KwUse= span => Spanned { span: span.span(), inner: Keyword::Use },
     }
 }
 
@@ -279,6 +273,7 @@ where
         Token::KwProc = span => Spanned { span: span.span(), inner: Keyword::Proc },
     }
 }
+
 pub(super) fn kw_const<'i, I>(
 ) -> impl Parser<'i, I, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone
 where
@@ -288,15 +283,7 @@ where
         Token::KwConst = span => Spanned { span: span.span(), inner: Keyword::Const },
     }
 }
-pub(super) fn kw_mem<'i, I>(
-) -> impl Parser<'i, I, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone
-where
-    I: ValueInput<'i, Token = Token, Span = Span>,
-{
-    select! {
-        Token::KwMem = span => Spanned { span: span.span(), inner: Keyword::Mem },
-    }
-}
+
 pub(super) fn kw_var<'i, I>(
 ) -> impl Parser<'i, I, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone
 where
@@ -306,6 +293,7 @@ where
         Token::KwVar = span => Spanned { span: span.span(), inner: Keyword::Var },
     }
 }
+
 pub(super) fn kw_struct<'i, I>(
 ) -> impl Parser<'i, I, Spanned<Keyword>, extra::Err<Rich<'i, Token, Span>>> + Clone
 where
@@ -732,28 +720,6 @@ where
         )
 }
 
-pub(super) fn mem<'i: 'd, 'd, I>(
-) -> impl Parser<'i, I, Spanned<TopLevel>, extra::Err<Rich<'i, Token, Span>>> + Clone + 'd
-where
-    I: ValueInput<'i, Token = Token, Span = Span>,
-{
-    kw_mem()
-        .then(word())
-        .then(kw_do())
-        .then(expr().repeated().collect())
-        .then(kw_end())
-        .map_with(|((((mem, name), do_), body), end), span| Spanned {
-            span: span.span(),
-            inner: TopLevel::Mem(Mem {
-                mem,
-                name,
-                do_,
-                body,
-                end,
-            }),
-        })
-}
-
 pub(super) fn name_type_pair<'i, I>(
 ) -> impl Parser<'i, I, Spanned<NameTypePair>, extra::Err<Rich<'i, Token, Span>>> + Clone
 where
@@ -794,26 +760,35 @@ where
         )
 }
 
-pub(super) fn include<'i, I>(
+pub(super) fn module<'i, I>(
 ) -> impl Parser<'i, I, Spanned<TopLevel>, extra::Err<Rich<'i, Token, Span>>> + Clone
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
-    kw_include()
-        .then(path().repeated().collect().then(kw_from()).or_not())
-        .then(include_path())
-        .map_with(|((include, qualifiers), path), span| Spanned {
+    kw_module()
+        .then(word())
+        .map_with(|(module, name), span| Spanned {
             span: span.span(),
-            inner: TopLevel::Include(Include {
-                include,
-                qualifiers: if let Some((items, from)) = qualifiers {
-                    Some(Qualifiers { items, from })
-                } else {
-                    None
-                },
+            inner: TopLevel::Module(ModuleDef { module, name }),
+        })
+}
+
+pub(super) fn use_<'i, I>(
+) -> impl Parser<'i, I, Spanned<TopLevel>, extra::Err<Rich<'i, Token, Span>>> + Clone
+where
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+    kw_use().then(word().then(kw_from())).then(path()).map_with(
+        |((use_, (name, from)), path), span| Spanned {
+            span: span.span(),
+            inner: TopLevel::Use(Use {
+                use_,
+                name,
+                from,
                 path,
             }),
-        })
+        },
+    )
 }
 
 pub(super) fn file<'i: 'd, 'd, I>(
@@ -822,12 +797,12 @@ where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
     choice((
-        include(),
+        module(),
         proc(),
         const_(),
-        mem(),
         var_toplevel(),
         struct_(),
+        use_(),
     ))
     .repeated()
     .collect()

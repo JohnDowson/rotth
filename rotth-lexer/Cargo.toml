@@ -7,5 +7,6 @@ edition = "2021"
 
 [dependencies]
 logos.workspace = true
-smol_str = "0.2"
+smol_str.workspace = true
+internment.workspace = true
 spanner = { path = "../spanner" }

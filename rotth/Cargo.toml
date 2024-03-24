@@ -6,8 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-somok = "1.5.0"
-clap = { version = "4", features = ["derive"] }
+clap.workspace = true
 simplearena = { path = "../simplearena" }
 indoc = "2.0"
 fnv = "1.0"
@@ -15,17 +14,19 @@ rotth-lexer = { path = "../rotth-lexer" }
 rotth-parser = { path = "../rotth-parser" }
 rotth-analysis = { path = "../rotth-analysis" }
 spanner = { path = "../spanner" }
+itempath = { path = "../itempath" }
 chumsky.workspace = true
 ariadne.workspace = true
-thiserror = "1.0"
-smol_str = "0.2"
+smol_str.workspace = true
+internment.workspace = true
+thiserror.workspace = true
 inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = [
   "llvm15-0-force-dynamic",
 ] }
 
 target-lexicon = "0.12"
-cranelift = "0.105"
-cranelift-jit = "0.105"
-cranelift-module = "0.105"
+cranelift = "0.106"
+cranelift-jit = "0.106"
+cranelift-module = "0.106"
 cranelift-preopt = "0.92"
 capstone = "0.12"

@@ -1,27 +1,29 @@
 mod parsers;
 
-use chumsky::{
-    input::Stream,
-    prelude::{Input, Rich},
-    Parser,
-};
+use chumsky::{input::Stream, prelude::Input, Parser};
 use fnv::FnvHashMap;
+use internment::Intern;
+use itempath::{path, ItemPath, ItemPathBuf};
 use rotth_lexer::{lex, Token};
 use smol_str::SmolStr;
-use somok::{Either, Leaksome};
+use somok::Either;
 use spanner::{Span, Spanned};
-use std::{
-    borrow::Borrow,
-    fmt::Debug,
-    ops::{Deref, DerefMut},
-    path::PathBuf,
-    rc::Rc,
-};
+use std::{fmt::Debug, rc::Rc};
 
 use crate::{types::Type, Error, ParserError, Redefinition};
 
 #[derive(Debug, Clone)]
 pub struct File(pub Vec<Spanned<TopLevel>>);
+
+// #[derive(Debug, Clone)]
+// pub struct Module {
+//     procs: Vec<Spanned<Proc>>,
+//     consts: Vec<Spanned<Const>>,
+//     vars: Vec<Spanned<Var>>,
+//     structs: Vec<Spanned<Struct>>,
+//     modules: Vec<Spanned<ModuleDef>>,
+//     uses: Vec<Spanned<Use>>,
+// }
 
 #[derive(Debug, Clone)]
 pub struct Word(pub SmolStr);
@@ -38,14 +40,14 @@ pub enum Punctuation {
 pub enum TopLevel {
     Proc(Proc),
     Const(Const),
-    Mem(Mem),
     Var(Var),
     Struct(Struct),
-    Include(Include),
+    Use(Use),
+    Module(ModuleDef),
 }
 
 impl TopLevel {
-    pub fn name(&self) -> Result<SmolStr, Rich<'static, Token, Span>> {
+    pub fn name(&self) -> SmolStr {
         match self {
             TopLevel::Proc(Proc {
                 name:
@@ -54,7 +56,7 @@ impl TopLevel {
                         inner: Word(name),
                     },
                 ..
-            }) => Ok(name.clone()),
+            }) => name.clone(),
             TopLevel::Const(Const {
                 name:
                     Spanned {
@@ -62,15 +64,7 @@ impl TopLevel {
                         inner: Word(name),
                     },
                 ..
-            }) => Ok(name.clone()),
-            TopLevel::Mem(Mem {
-                name:
-                    Spanned {
-                        span: _,
-                        inner: Word(name),
-                    },
-                ..
-            }) => Ok(name.clone()),
+            }) => name.clone(),
             TopLevel::Var(Var {
                 name:
                     Spanned {
@@ -78,7 +72,7 @@ impl TopLevel {
                         inner: Word(name),
                     },
                 ..
-            }) => Ok(name.clone()),
+            }) => name.clone(),
             TopLevel::Struct(Struct {
                 name:
                     Spanned {
@@ -86,16 +80,25 @@ impl TopLevel {
                         inner: Word(name),
                     },
                 ..
-            }) => Ok(name.clone()),
-            TopLevel::Include(Include {
-                include: _,
-                qualifiers: _,
-                path: Spanned { span, inner: name },
-            }) => name
-                .file_prefix()
-                .and_then(|n| n.to_str())
-                .map(Into::into)
-                .ok_or_else(|| Rich::custom(*span, "Invalid include path: not a file")),
+            }) => name.clone(),
+            TopLevel::Use(Use {
+                use_: _,
+                name:
+                    Spanned {
+                        span: _,
+                        inner: Word(name),
+                    },
+                from: _,
+                path: _,
+            }) => name.clone(),
+            TopLevel::Module(ModuleDef {
+                module: _,
+                name:
+                    Spanned {
+                        span: _,
+                        inner: Word(name),
+                    },
+            }) => name.clone(),
         }
     }
 }
@@ -103,12 +106,12 @@ impl TopLevel {
 impl Debug for TopLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Proc(arg0) => arg0.fmt(f),
-            Self::Const(arg0) => arg0.fmt(f),
-            Self::Mem(arg0) => arg0.fmt(f),
-            Self::Var(arg0) => arg0.fmt(f),
-            Self::Struct(arg0) => arg0.fmt(f),
-            Self::Include(arg0) => arg0.fmt(f),
+            TopLevel::Proc(arg0) => arg0.fmt(f),
+            TopLevel::Const(arg0) => arg0.fmt(f),
+            TopLevel::Var(arg0) => arg0.fmt(f),
+            TopLevel::Struct(arg0) => arg0.fmt(f),
+            TopLevel::Use(arg0) => arg0.fmt(f),
+            TopLevel::Module(arg0) => arg0.fmt(f),
         }
     }
 }
@@ -124,15 +127,10 @@ pub struct Proc {
     pub end: Spanned<Keyword>,
 }
 
-// (T . (c . (T . ())))
-// pub struct SeparatedList<V, S> {
-//     val: V,
-//     next: Option<Box<SeparatedList<S, V>>>,
-// }
-
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Keyword {
-    Include,
+    Module,
+    Use,
     From,
     Return,
     Cond,
@@ -186,10 +184,17 @@ pub struct Const {
 }
 
 #[derive(Debug, Clone)]
-pub struct Include {
-    pub include: Spanned<Keyword>,
-    pub qualifiers: Option<Qualifiers>,
-    pub path: Spanned<PathBuf>,
+pub struct ModuleDef {
+    pub module: Spanned<Keyword>,
+    pub name: Spanned<Word>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Use {
+    pub use_: Spanned<Keyword>,
+    pub name: Spanned<Word>,
+    pub from: Spanned<Keyword>,
+    pub path: Spanned<ItemPathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -392,168 +397,6 @@ pub fn parse(tokens: Vec<(Token, Span)>) -> Result<File, ParserError<'static>> {
         .map_err(|e| e.into())
 }
 
-#[derive(PartialEq, Eq, Hash)]
-#[repr(transparent)]
-pub struct ItemPath {
-    segments: [SmolStr],
-}
-
-impl PartialEq<&ItemPath> for ItemPathBuf {
-    fn eq(&self, other: &&ItemPath) -> bool {
-        self.segments == other.segments
-    }
-}
-
-impl PartialEq<ItemPath> for ItemPathBuf {
-    fn eq(&self, other: &ItemPath) -> bool {
-        self.segments == other.segments
-    }
-}
-
-impl PartialEq<ItemPathBuf> for ItemPath {
-    fn eq(&self, other: &ItemPathBuf) -> bool {
-        self.segments == other.segments
-    }
-}
-
-impl ItemPath {
-    pub fn iter(&'_ self) -> impl Iterator<Item = &'_ SmolStr> {
-        self.segments.iter()
-    }
-
-    pub fn only(&self) -> Option<&str> {
-        self.segments.first().map(SmolStr::as_str)
-    }
-
-    pub fn last(&self) -> Option<SmolStr> {
-        self.segments.last().cloned()
-    }
-
-    pub fn segment_mut(&mut self, n: usize) -> Option<&mut SmolStr> {
-        self.segments.get_mut(n)
-    }
-
-    pub fn drop_first(&self) -> Option<&Self> {
-        self.segments
-            .split_first()
-            .and_then(|(_, b)| if b.is_empty() { None } else { Some(b) })
-            .map(|s| unsafe { std::mem::transmute::<&[SmolStr], &ItemPath>(s) })
-    }
-
-    pub fn parent(&self) -> Option<&ItemPath> {
-        if self.segments.is_empty() {
-            None
-        } else {
-            let segments = &self.segments[..self.segments.len() - 1];
-            let parent = unsafe { std::mem::transmute::<&[SmolStr], &ItemPath>(segments) };
-            Some(parent)
-        }
-    }
-
-    pub fn join(&self, other: &Self) -> ItemPathBuf {
-        let mut segments = self.segments.to_owned();
-        segments.extend_from_slice(&other.segments);
-        ItemPathBuf { segments }
-    }
-
-    pub fn child(&self, segment: impl Into<SmolStr>) -> ItemPathBuf {
-        let mut segments = self.segments.to_owned();
-        segments.push(segment.into());
-        ItemPathBuf { segments }
-    }
-}
-
-#[macro_export]
-macro_rules! path {
-    ( $( $s:tt )::+ ) => {{
-        let mut path = ItemPathBuf::new();
-        $(path.push(stringify!($s));)*
-        path
-    }};
-    () => {{
-        ItemPathBuf::new()
-    }};
-}
-
-#[derive(PartialEq, Eq, Hash, Default, Clone)]
-#[repr(transparent)]
-pub struct ItemPathBuf {
-    segments: Vec<SmolStr>,
-}
-
-impl Deref for ItemPathBuf {
-    type Target = ItemPath;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { std::mem::transmute::<&[SmolStr], &ItemPath>(&*self.segments) }
-    }
-}
-
-impl DerefMut for ItemPathBuf {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { std::mem::transmute::<&mut [SmolStr], &mut ItemPath>(&mut *self.segments) }
-    }
-}
-
-impl<T: Into<SmolStr>> From<Vec<T>> for ItemPathBuf {
-    fn from(segments: Vec<T>) -> Self {
-        Self {
-            segments: segments.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<SmolStr> for ItemPathBuf {
-    fn from(segment: SmolStr) -> Self {
-        Self {
-            segments: vec![segment],
-        }
-    }
-}
-
-impl Borrow<ItemPath> for ItemPathBuf {
-    fn borrow(&self) -> &ItemPath {
-        self.deref()
-    }
-}
-
-impl ToOwned for ItemPath {
-    type Owned = ItemPathBuf;
-
-    fn to_owned(&self) -> Self::Owned {
-        let segments = self.segments.to_owned();
-        Self::Owned { segments }
-    }
-}
-
-impl ItemPathBuf {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn push(&mut self, segment: impl Into<SmolStr>) {
-        self.segments.push(segment.into())
-    }
-}
-
-impl Debug for ItemPath {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let separator = SmolStr::from("::");
-        let segments = self.segments.iter();
-        let iter = segments.intersperse(&separator);
-        for s in iter {
-            write!(f, "{s}")?
-        }
-        Ok(())
-    }
-}
-
-impl Debug for ItemPathBuf {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.deref().fmt(f)
-    }
-}
-
 #[derive(Clone)]
 pub enum ResolvedItem {
     Ref(Rc<ItemPathBuf>),
@@ -616,7 +459,7 @@ pub struct ResolvedStruct {
 }
 
 pub fn resolve_includes(root: File) -> Result<ResolvedFile, ParserError<'static>> {
-    let path = Default::default();
+    let path = path!();
     resolve_includes_from(path, root)
 }
 
@@ -627,17 +470,11 @@ fn resolve_includes_from(
     let mut ast: FnvHashMap<SmolStr, Spanned<ResolvedItem>> = Default::default();
     let mut errors = Vec::new();
     for item in root.0 {
-        let name = match item.name().map_err(Error::Parser) {
-            Ok(name) => name,
-            Err(e) => {
-                errors.push(e);
-                continue;
-            }
-        };
+        let src_file = item.span.file;
+        let name = item.inner.name();
         let resolved_item = match item.inner {
             TopLevel::Proc(p) => ResolvedItem::Proc(Rc::new(p)),
             TopLevel::Const(c) => ResolvedItem::Const(Rc::new(c)),
-            TopLevel::Mem(m) => ResolvedItem::Mem(Rc::new(m)),
             TopLevel::Var(v) => ResolvedItem::Var(Rc::new(v)),
             TopLevel::Struct(s) => match make_struct(s) {
                 Ok(s) => ResolvedItem::Struct(Rc::new(s)),
@@ -646,63 +483,33 @@ fn resolve_includes_from(
                     continue;
                 }
             },
-            TopLevel::Include(Include {
-                include: _,
-                qualifiers,
-                path: file_path,
+            TopLevel::Use(Use {
+                use_: _,
+                name: _,
+                from: _,
+                path:
+                    Spanned {
+                        span: _,
+                        inner: from,
+                    },
             }) => {
-                let file_span = file_path.span;
-                let file_name = match file_path
-                    .file_prefix()
-                    .and_then(|f| f.to_str())
-                    .map(SmolStr::from)
-                    .ok_or(Error::UnresolvedInclude(file_span))
-                {
-                    Ok(n) => n,
-                    Err(e) => {
-                        errors.push(e);
-                        continue;
-                    }
-                };
-                let parent = file_path.span.file;
-                let file_path = parent.parent().unwrap().join(file_path.inner);
-                let file_path = &*file_path.into_boxed_path().leak();
-                let src = match std::fs::read_to_string(file_path)
-                    .map_err(|_| Error::UnresolvedInclude(file_span))
-                {
-                    Ok(s) => s,
-                    Err(e) => {
-                        errors.push(e);
-                        continue;
-                    }
-                };
-                let tokens = lex(&src, file_path);
+                todo!()
+            }
+            TopLevel::Module(ModuleDef { module: _, name: _ }) => {
+                let mut module_file = (*src_file).to_owned();
+                module_file.set_extension("");
+                module_file.push(&*name);
+                module_file.set_extension("rh");
+
+                let module_src = std::fs::read_to_string(dbg! { &module_file }).unwrap();
+                let tokens = lex(&module_src, Intern::new(module_file));
+
+                let mut module_path = path.clone();
+                module_path.push(&*name);
 
                 let module_ast = parse(tokens)?;
-                let resolved = resolve_includes_from(path.child(file_name), module_ast)?;
-                if let Some(Qualifiers { items, from: _ }) = qualifiers {
-                    for qualifier in items {
-                        let span = qualifier.span;
-                        let item = qualifier.inner;
-                        let item_path = resolved.path.join(&item);
+                let resolved = resolve_includes_from(module_path, module_ast)?;
 
-                        let i = resolved.find(&item);
-                        match i {
-                            Some(Spanned { span: _, inner: _ }) => {
-                                ast.insert(
-                                    item.last().unwrap(),
-                                    Spanned {
-                                        span,
-                                        inner: ResolvedItem::Ref(Rc::new(item_path)),
-                                    },
-                                );
-                            }
-                            None => {
-                                todo!("Reject importing nonexistant items")
-                            }
-                        }
-                    }
-                }
                 ResolvedItem::Module(Rc::new(resolved))
             }
         };

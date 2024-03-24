@@ -1,0 +1,4 @@
+module foo
+; use bar from foo
+
+proc main: i64 do 1 end

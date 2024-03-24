@@ -1,5 +1,5 @@
 use fnv::FnvHashMap;
-use rotth_parser::{hir, path, types::Primitive};
+use rotth_parser::{hir, types::Primitive};
 use smol_str::SmolStr;
 use std::fmt::Write;
 
@@ -12,7 +12,7 @@ use crate::{
     },
     Error, ErrorKind,
 };
-use rotth_parser::ast::ItemPathBuf;
+use itempath::{path, ItemPathBuf};
 
 #[derive(Debug)]
 pub enum ConcreteError {

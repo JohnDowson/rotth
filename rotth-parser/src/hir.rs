@@ -3,12 +3,12 @@ use std::rc::Rc;
 use crate::{
     ast::Keyword,
     ast::{
-        self, Cast, Expr, ItemPath, ItemPathBuf, Literal, ProcSignature, ResolvedFile,
-        ResolvedItem, ResolvedStruct, Word,
+        self, Cast, Expr, Literal, ProcSignature, ResolvedFile, ResolvedItem, ResolvedStruct, Word,
     },
     types::{Custom, StructIndex, Type},
 };
 use fnv::FnvHashMap;
+use itempath::{ItemPath, ItemPathBuf};
 use smol_str::SmolStr;
 use somok::{Either, Somok};
 use spanner::{Span, Spanned};

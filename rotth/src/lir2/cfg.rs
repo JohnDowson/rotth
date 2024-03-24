@@ -1,5 +1,5 @@
 use fnv::{FnvHashMap, FnvHashSet};
-use rotth_parser::ast::ItemPathBuf;
+use itempath::ItemPathBuf;
 
 use super::{Mangled, Op, Value};
 
@@ -77,6 +77,7 @@ impl ProcBuilder {
     pub fn push_mem(&mut self, sym: Mangled) {
         self.blocks[self.current_block.0].ops.push(Op::PushMem(sym))
     }
+    #[allow(clippy::should_implement_trait)]
     pub fn drop(&mut self) {
         self.blocks[self.current_block.0].ops.push(Op::Drop)
     }

@@ -1,10 +1,10 @@
 use ariadne::{Color, FileCache, Fmt, Label, Report, ReportKind, Span};
 use chumsky::error::RichReason;
 use clap::{Parser, ValueEnum};
+use internment::Intern;
 use rotth::{lir2, Error};
 use rotth_analysis::{ctir, tir};
 use rotth_parser::hir;
-use somok::Somok;
 use std::{path::PathBuf, time::Instant};
 
 #[derive(Parser)]
@@ -37,10 +37,10 @@ enum Backend {
 
 fn main() -> std::result::Result<(), ()> {
     match compiler() {
-        Ok(_) => ().okay(),
+        Ok(_) => Ok(()),
         Err(e) => {
             report_errors(e);
-            ().error()
+            Err(())
         }
     }
 }
@@ -241,11 +241,11 @@ fn compiler<'i>() -> Result<(), Error<'i>> {
 
     let start = Instant::now();
 
-    let source = Box::leak(args.source.canonicalize()?.into_boxed_path());
+    let source = args.source.canonicalize()?;
 
     let src_text = Box::leak(std::fs::read_to_string(&source)?.into_boxed_str());
 
-    let tokens = rotth_lexer::lex(src_text, source);
+    let tokens = rotth_lexer::lex(src_text, Intern::new(source));
 
     let tokenized = Instant::now();
     if args.time {
@@ -341,11 +341,11 @@ fn compiler<'i>() -> Result<(), Error<'i>> {
     //     Backend::Cranelift => todo!(),
     // }
 
-    // let compiled = Instant::now();
-    // if args.time {
-    //     println!("Compiled in:\t{:?}", compiled - transpiled);
-    //     println!("Total:\t{:?}", compiled - start);
-    // }
+    let compiled = Instant::now();
+    if args.time {
+        println!("Compiled in:\t{:?}", compiled - transpiled);
+        println!("Total:\t{:?}", compiled - start);
+    }
 
-    ().okay()
+    Ok(())
 }

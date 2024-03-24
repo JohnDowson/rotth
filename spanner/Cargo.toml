@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 chumsky.workspace = true
 ariadne.workspace = true
+internment.workspace = true
