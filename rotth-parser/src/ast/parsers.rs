@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use crate::types::{Custom, Primitive, Type};
 
 use super::{
-    Bind, Cast, Cond, CondBranch, Const, ConstSignature, Else, Expr, FieldAccess, File,
-    GenericParams, Generics, If, ItemPathBuf, Keyword, Literal, ModuleDef, NameTypePair, Proc,
+    Bind, Cast, Cond, CondBranch, Const, ConstSignature, Else, Expr, FieldAccess, GenericParams,
+    Generics, If, ItemPathBuf, Keyword, Literal, Module, ModuleDef, NameTypePair, Proc,
     ProcSignature, Punctuation, Read, Struct, TopLevel, Use, Var, While, Word, Write,
 };
 
@@ -50,7 +50,7 @@ where
             .collect::<Vec<_>>()
             .then(path().then(generic_params.or_not()))
             .map_with(|(ptr, (ty, params)), span| {
-                let mut ty = if let Some(type_name) = ty.only() {
+                let mut ty = if let Some(type_name) = ty.inner.only() {
                     match type_name {
                         "void" => Type::Primitive(Primitive::Void),
                         "bool" => Type::Primitive(Primitive::Bool),
@@ -565,13 +565,7 @@ where
             inner: Expr::Keyword(inner),
         });
 
-        let comp_stop = just(Token::CompStop).map_with(|_, span| Spanned {
-            span: span.span(),
-            inner: Expr::CompStop,
-        });
-
         choice((
-            comp_stop,
             literal_expr(),
             var_expr(),
             path_expr(),
@@ -792,7 +786,7 @@ where
 }
 
 pub(super) fn file<'i: 'd, 'd, I>(
-) -> impl Parser<'i, I, File, extra::Err<Rich<'i, Token, Span>>> + 'd
+) -> impl Parser<'i, I, Module, extra::Err<Rich<'i, Token, Span>>> + 'd
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -808,5 +802,45 @@ where
     .collect()
     .then_ignore(end())
     .or(end().to(vec![]))
-    .map(File)
+    .map(|items| {
+        let mut module = Module {
+            procs: Vec::new(),
+            consts: Vec::new(),
+            vars: Vec::new(),
+            structs: Vec::new(),
+            modules: Vec::new(),
+            uses: Vec::new(),
+        };
+
+        for item in items {
+            match item.inner {
+                TopLevel::Proc(p) => module.procs.push(Spanned {
+                    span: item.span,
+                    inner: p,
+                }),
+                TopLevel::Const(c) => module.consts.push(Spanned {
+                    span: item.span,
+                    inner: c,
+                }),
+                TopLevel::Var(v) => module.vars.push(Spanned {
+                    span: item.span,
+                    inner: v,
+                }),
+                TopLevel::Struct(s) => module.structs.push(Spanned {
+                    span: item.span,
+                    inner: s,
+                }),
+                TopLevel::Use(u) => module.uses.push(Spanned {
+                    span: item.span,
+                    inner: u,
+                }),
+                TopLevel::Module(m) => module.modules.push(Spanned {
+                    span: item.span,
+                    inner: m,
+                }),
+            }
+        }
+
+        module
+    })
 }

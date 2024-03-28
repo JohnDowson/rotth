@@ -18,7 +18,6 @@ pub enum TopLevel {
     Ref(ItemPathBuf),
     Proc(Proc),
     Const(Const),
-    Mem(Mem),
     Var(Var),
 }
 impl TopLevel {
@@ -50,7 +49,6 @@ impl TopLevel {
             TopLevel::Ref(_) => todo!(),
             TopLevel::Proc(p) => p.span,
             TopLevel::Const(c) => c.span,
-            TopLevel::Mem(m) => m.span,
             TopLevel::Var(v) => v.span,
         }
     }
@@ -168,21 +166,6 @@ pub enum Intrinsic<T> {
     Read(Spanned<T>),
     Write(Spanned<T>),
 
-    CompStop,
-    Dump,
-    Print,
-
-    Syscall0,
-    Syscall1,
-    Syscall2,
-    Syscall3,
-    Syscall4,
-    Syscall5,
-    Syscall6,
-
-    Argc,
-    Argv,
-
     Add,
     Sub,
     Divmod,
@@ -230,13 +213,6 @@ impl Walker {
                 }
                 .some()
             }
-            Expr::CompStop => {
-                return Spanned {
-                    span: ast.span,
-                    inner: Hir::Intrinsic(Intrinsic::CompStop),
-                }
-                .some()
-            }
             Expr::Path(p) => p.only()?,
             Expr::Word(Word(w)) => w.as_str(),
 
@@ -261,20 +237,6 @@ impl Walker {
             "dup" => Intrinsic::Dup,
             "swap" => Intrinsic::Swap,
             "over" => Intrinsic::Over,
-
-            "&?" => Intrinsic::Dump,
-            "print" => Intrinsic::Print,
-
-            "syscall0" => Intrinsic::Syscall0,
-            "syscall1" => Intrinsic::Syscall1,
-            "syscall2" => Intrinsic::Syscall2,
-            "syscall3" => Intrinsic::Syscall3,
-            "syscall4" => Intrinsic::Syscall4,
-            "syscall5" => Intrinsic::Syscall5,
-            "syscall6" => Intrinsic::Syscall6,
-
-            "argc" => Intrinsic::Argc,
-            "argv" => Intrinsic::Argv,
 
             "+" => Intrinsic::Add,
             "-" => Intrinsic::Sub,
@@ -340,7 +302,7 @@ impl Walker {
         let generics = generics.iter().map(|t| t.map_ref(|t| t.clone())).collect();
         let mut builder = self.types.new_struct(name, generics);
         for (name, ty) in fields {
-            let span = ty.ty.span;
+            let span = ty.inner.ty.span;
             let ty = ty.inner.ty.inner.clone();
 
             fn resolve_field(current_path: &ItemPath, ty: Type) -> Type {
@@ -391,7 +353,6 @@ impl Walker {
             ResolvedItem::Ref(path) => self.walk_ref(name, &path),
             ResolvedItem::Proc(_) => self.walk_proc(name),
             ResolvedItem::Const(_) => self.walk_const(name),
-            ResolvedItem::Mem(_) => self.walk_mem(name),
             ResolvedItem::Var(v) => {
                 self.items.insert(
                     self.current_path.child(name),
@@ -404,31 +365,6 @@ impl Walker {
             ResolvedItem::Struct(_) => self.walk_struct(name),
             ResolvedItem::Module(module) => self.walk_module(module),
         }
-    }
-
-    fn walk_mem(&mut self, name: SmolStr) {
-        let path = self.current_path.child(name.clone());
-        let mem = if let Some(Spanned {
-            span: _,
-            inner: ResolvedItem::Mem(m),
-        }) = self.ast.find(&path)
-        {
-            m
-        } else {
-            unreachable!()
-        };
-        let body = mem
-            .body
-            .iter()
-            .map(|ast| self.walk_node(ast).unwrap())
-            .collect::<Vec<_>>();
-        self.items.insert(
-            self.current_path.child(name),
-            TopLevel::Mem(Mem {
-                body,
-                span: mem.mem.span.merge(mem.end.span),
-            }),
-        );
     }
 
     fn walk_const(&mut self, name: SmolStr) {

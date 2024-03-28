@@ -13,17 +13,14 @@ use std::{fmt::Debug, rc::Rc};
 use crate::{types::Type, Error, ParserError, Redefinition};
 
 #[derive(Debug, Clone)]
-pub struct File(pub Vec<Spanned<TopLevel>>);
-
-// #[derive(Debug, Clone)]
-// pub struct Module {
-//     procs: Vec<Spanned<Proc>>,
-//     consts: Vec<Spanned<Const>>,
-//     vars: Vec<Spanned<Var>>,
-//     structs: Vec<Spanned<Struct>>,
-//     modules: Vec<Spanned<ModuleDef>>,
-//     uses: Vec<Spanned<Use>>,
-// }
+pub struct Module {
+    procs: Vec<Spanned<Proc>>,
+    consts: Vec<Spanned<Const>>,
+    vars: Vec<Spanned<Var>>,
+    structs: Vec<Spanned<Struct>>,
+    modules: Vec<Spanned<ModuleDef>>,
+    uses: Vec<Spanned<Use>>,
+}
 
 #[derive(Debug, Clone)]
 pub struct Word(pub SmolStr);
@@ -217,7 +214,6 @@ pub struct Write {
 
 #[derive(Clone)]
 pub enum Expr {
-    CompStop,
     Keyword(Keyword),
     Type(Type),
 
@@ -244,7 +240,6 @@ pub enum Expr {
 impl Debug for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expr::CompStop => write!(f, "&?&"),
             Expr::Read(r) => write!(f, "@{:?}", r.ty),
             Expr::Write(w) => write!(f, "@{:?}", w.ty),
             Expr::Keyword(arg0) => arg0.fmt(f),
@@ -388,7 +383,7 @@ impl Debug for Literal {
     }
 }
 
-pub fn parse(tokens: Vec<(Token, Span)>) -> Result<File, ParserError<'static>> {
+pub fn parse(tokens: Vec<(Token, Span)>) -> Result<Module, ParserError<'static>> {
     let len = tokens.len();
     let path = tokens.first().unwrap().1.file;
     parsers::file()
@@ -402,7 +397,6 @@ pub enum ResolvedItem {
     Ref(Rc<ItemPathBuf>),
     Proc(Rc<Proc>),
     Const(Rc<Const>),
-    Mem(Rc<Mem>),
     Var(Rc<Var>),
     Struct(Rc<ResolvedStruct>),
     Module(Rc<ResolvedFile>),
@@ -411,13 +405,12 @@ pub enum ResolvedItem {
 impl Debug for ResolvedItem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Ref(arg0) => f.debug_tuple("Ref").field(arg0).finish(),
-            Self::Proc(arg0) => arg0.fmt(f),
-            Self::Const(arg0) => arg0.fmt(f),
-            Self::Mem(arg0) => arg0.fmt(f),
-            Self::Var(arg0) => arg0.fmt(f),
-            Self::Struct(arg0) => arg0.fmt(f),
-            Self::Module(arg0) => arg0.fmt(f),
+            ResolvedItem::Ref(arg0) => f.debug_tuple("Ref").field(arg0).finish(),
+            ResolvedItem::Proc(arg0) => arg0.fmt(f),
+            ResolvedItem::Const(arg0) => arg0.fmt(f),
+            ResolvedItem::Var(arg0) => arg0.fmt(f),
+            ResolvedItem::Struct(arg0) => arg0.fmt(f),
+            ResolvedItem::Module(arg0) => arg0.fmt(f),
         }
     }
 }
@@ -435,11 +428,10 @@ impl ResolvedFile {
         let item = segment.and_then(|s| self.ast.get(s));
         if let Some(path) = path.drop_first() {
             match item {
-                Some(i) => match &**i {
+                Some(i) => match &i.inner {
                     ResolvedItem::Ref(_) => return None,
                     ResolvedItem::Proc(_) => return None,
                     ResolvedItem::Const(_) => return None,
-                    ResolvedItem::Mem(_) => return None,
                     ResolvedItem::Var(_) => return None,
                     ResolvedItem::Struct(_) => return None,
                     ResolvedItem::Module(f) => return f.find(path),
@@ -458,80 +450,185 @@ pub struct ResolvedStruct {
     pub fields: FnvHashMap<SmolStr, Spanned<NameTypePair>>,
 }
 
-pub fn resolve_includes(root: File) -> Result<ResolvedFile, ParserError<'static>> {
+pub fn resolve_includes(root: Module) -> Result<ResolvedFile, ParserError<'static>> {
     let path = path!();
     resolve_includes_from(path, root)
 }
 
 fn resolve_includes_from(
     path: ItemPathBuf,
-    root: File,
+    root: Module,
 ) -> Result<ResolvedFile, ParserError<'static>> {
-    let mut ast: FnvHashMap<SmolStr, Spanned<ResolvedItem>> = Default::default();
+    let mut ast = ResolvedFile {
+        path: path.clone(),
+        ast: Default::default(),
+    };
     let mut errors = Vec::new();
-    for item in root.0 {
-        let src_file = item.span.file;
-        let name = item.inner.name();
-        let resolved_item = match item.inner {
-            TopLevel::Proc(p) => ResolvedItem::Proc(Rc::new(p)),
-            TopLevel::Const(c) => ResolvedItem::Const(Rc::new(c)),
-            TopLevel::Var(v) => ResolvedItem::Var(Rc::new(v)),
-            TopLevel::Struct(s) => match make_struct(s) {
-                Ok(s) => ResolvedItem::Struct(Rc::new(s)),
-                Err(mut es) => {
-                    errors.append(&mut es);
-                    continue;
-                }
-            },
-            TopLevel::Use(Use {
-                use_: _,
-                name: _,
-                from: _,
-                path:
-                    Spanned {
-                        span: _,
-                        inner: from,
-                    },
-            }) => {
-                todo!()
-            }
-            TopLevel::Module(ModuleDef { module: _, name: _ }) => {
-                let mut module_file = (*src_file).to_owned();
-                module_file.set_extension("");
-                module_file.push(&*name);
-                module_file.set_extension("rh");
+    for Spanned {
+        span,
+        inner: ModuleDef { module: _, name },
+    } in root.modules
+    {
+        let mut module_file = (*span.file).to_owned();
+        module_file.set_extension("");
+        module_file.push(&*name.inner.0);
+        module_file.set_extension("rh");
 
-                let module_src = std::fs::read_to_string(dbg! { &module_file }).unwrap();
-                let tokens = lex(&module_src, Intern::new(module_file));
+        let module_src = std::fs::read_to_string(&module_file).unwrap();
+        let tokens = lex(&module_src, Intern::new(module_file));
 
-                let mut module_path = path.clone();
-                module_path.push(&*name);
+        let mut module_path = path.clone();
+        module_path.push(&*name.inner.0);
 
-                let module_ast = parse(tokens)?;
-                let resolved = resolve_includes_from(module_path, module_ast)?;
+        let module_ast = parse(tokens)?;
+        let resolved = resolve_includes_from(module_path, module_ast)?;
 
-                ResolvedItem::Module(Rc::new(resolved))
-            }
-        };
+        let resolved = ResolvedItem::Module(Rc::new(resolved));
 
-        if let Some(redefined) = ast.get(&name) {
+        if let Some(redefined) = ast.ast.get(&name.inner.0) {
             errors.push(Error::Redefinition(Redefinition {
-                redefining_item: item.span,
+                redefining_item: span,
                 redefined_item: redefined.span,
             }))
         } else {
-            ast.insert(
+            ast.ast.insert(
+                name.inner.0,
+                Spanned {
+                    span,
+                    inner: resolved,
+                },
+            );
+        }
+    }
+
+    for Spanned {
+        span,
+        inner:
+            Use {
+                use_: _,
+                name,
+                from: _,
+                path,
+            },
+    } in root.uses
+    {
+        let name = name.inner.0.clone();
+        let mut path = path.inner;
+        path.push(name.clone());
+        if let Some(Spanned { span: _, inner: _ }) = ast.find(&path) {
+            if let Some(redefined) = ast.ast.get(&name) {
+                errors.push(Error::Redefinition(Redefinition {
+                    redefining_item: span,
+                    redefined_item: redefined.span,
+                }))
+            } else {
+                ast.ast.insert(
+                    name,
+                    Spanned {
+                        span,
+                        inner: ResolvedItem::Ref(Rc::new(path)),
+                    },
+                );
+            }
+        }
+    }
+
+    for Spanned { span, inner: proc } in root.procs {
+        let name = proc.name.inner.0.clone();
+        let resolved = ResolvedItem::Proc(Rc::new(proc));
+
+        if let Some(redefined) = ast.ast.get(&name) {
+            errors.push(Error::Redefinition(Redefinition {
+                redefining_item: span,
+                redefined_item: redefined.span,
+            }))
+        } else {
+            ast.ast.insert(
                 name,
                 Spanned {
-                    span: item.span,
-                    inner: resolved_item,
+                    span,
+                    inner: resolved,
+                },
+            );
+        }
+    }
+
+    for Spanned {
+        span,
+        inner: const_,
+    } in root.consts
+    {
+        let name = const_.name.inner.0.clone();
+        let resolved = ResolvedItem::Const(Rc::new(const_));
+
+        if let Some(redefined) = ast.ast.get(&name) {
+            errors.push(Error::Redefinition(Redefinition {
+                redefining_item: span,
+                redefined_item: redefined.span,
+            }))
+        } else {
+            ast.ast.insert(
+                name,
+                Spanned {
+                    span,
+                    inner: resolved,
+                },
+            );
+        }
+    }
+
+    for Spanned { span, inner: var } in root.vars {
+        let name = var.name.inner.0.clone();
+        let resolved = ResolvedItem::Var(Rc::new(var));
+
+        if let Some(redefined) = ast.ast.get(&name) {
+            errors.push(Error::Redefinition(Redefinition {
+                redefining_item: span,
+                redefined_item: redefined.span,
+            }))
+        } else {
+            ast.ast.insert(
+                name,
+                Spanned {
+                    span,
+                    inner: resolved,
+                },
+            );
+        }
+    }
+
+    for Spanned {
+        span,
+        inner: struct_,
+    } in root.structs
+    {
+        let name = struct_.name.inner.0.clone();
+        let resolved = match make_struct(struct_) {
+            Ok(s) => ResolvedItem::Struct(Rc::new(s)),
+            Err(mut es) => {
+                errors.append(&mut es);
+                continue;
+            }
+        };
+
+        if let Some(redefined) = ast.ast.get(&name) {
+            errors.push(Error::Redefinition(Redefinition {
+                redefining_item: span,
+                redefined_item: redefined.span,
+            }))
+        } else {
+            ast.ast.insert(
+                name,
+                Spanned {
+                    span,
+                    inner: resolved,
                 },
             );
         }
     }
 
     if errors.is_empty() {
-        Ok(ResolvedFile { path, ast })
+        Ok(ast)
     } else {
         Err(ParserError(errors))
     }
@@ -541,7 +638,7 @@ fn make_struct(s: Struct) -> Result<ResolvedStruct, Vec<Error<'static>>> {
     let mut errors = Vec::default();
     let mut fields: FnvHashMap<SmolStr, Spanned<NameTypePair>> = Default::default();
     for field in s.body {
-        let Word(name) = &*field.name;
+        let Word(name) = &field.inner.name.inner;
 
         if let Some(redefined) = fields.get(name) {
             errors.push(Error::Redefinition(Redefinition {

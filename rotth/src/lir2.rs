@@ -1,23 +1,23 @@
-use crate::eval::eval;
-
 use self::cfg::{Block, BlockId, ProcBuilder};
 use fnv::FnvHashMap;
 use itempath::{ItemPath, ItemPathBuf};
 use rotth_analysis::{
-    ctir::{CConst, CMem, CProc, ConcreteNode, ConcreteProgram, Intrinsic},
+    ctir::{CConst, CProc, ConcreteNode, ConcreteProgram, Intrinsic},
     inference::ReifiedType,
     tir::{Bind, Cond, CondBranch, FieldAccess, If, TypedIr, While},
 };
 use rotth_parser::{ast::Literal, hir::Binding};
-use smol_str::SmolStr;
+use smol_str::{SmolStr, ToSmolStr};
 use spanner::Spanned;
 
 pub mod cfg;
 
 pub struct CompiledProc {
+    pub name: SmolStr,
     pub ins: Vec<ReifiedType>,
     pub outs: Vec<ReifiedType>,
     pub blocks: Vec<Block>,
+    pub entry: BlockId,
 }
 
 impl std::fmt::Debug for CompiledProc {
@@ -37,10 +37,7 @@ pub enum ComConst {
 }
 
 #[derive(Clone)]
-pub enum ComMem {
-    Compiled(usize),
-    NotCompiled(CMem),
-}
+pub struct ComMem(usize);
 
 #[derive(Clone)]
 pub enum ComVar {
@@ -75,29 +72,29 @@ impl Compiler {
             this.consts.insert(name, ComConst::NotCompiled(const_));
         }
 
-        for (name, mem) in program.mems {
-            let mangled = this.mangle(&name);
-            this.mangle_table.insert(name.clone(), mangled.clone());
-            this.unmangle_table.insert(mangled.clone(), name.clone());
-            this.mems.insert(name, ComMem::NotCompiled(mem));
-        }
-
         for (name, var) in program.vars {
             let mangled = this.mangle(&name);
             this.mangle_table.insert(name.clone(), mangled.clone());
             this.unmangle_table.insert(mangled.clone(), name.clone());
-            this.mems.insert(name, ComMem::Compiled(var.ty.size()));
+            this.mems.insert(name, ComMem(var.ty.size()));
         }
 
-        let procs = program
+        let procs: Vec<_> = program
             .procs
             .into_iter()
             .map(|(name, proc)| {
-                this.inc_proc_id();
                 let mangled = this.mangle(&name);
                 this.mangle_table.insert(name.clone(), mangled.clone());
-                this.unmangle_table.insert(mangled.clone(), name);
-                let proc = this.compile_proc(proc);
+                this.unmangle_table.insert(mangled.clone(), name.clone());
+                (name, mangled, proc)
+            })
+            .collect();
+
+        let procs = procs
+            .into_iter()
+            .map(|(name, mangled, proc)| {
+                this.inc_proc_id();
+                let proc = this.compile_proc(proc, name.to_smolstr());
                 (mangled, proc)
             })
             .collect();
@@ -106,8 +103,7 @@ impl Compiler {
             .mems
             .into_iter()
             .map(|(n, m)| match m {
-                ComMem::Compiled(c) => (this.mangle_table.get(&n).unwrap().clone(), c),
-                _ => todo!(),
+                ComMem(c) => (this.mangle_table.get(&n).unwrap().clone(), c),
             })
             .collect();
 
@@ -122,7 +118,9 @@ impl Compiler {
             ins,
             outs,
             body,
+            callees: _,
         }: CProc,
+        name: SmolStr,
     ) -> CompiledProc {
         let mut proc = ProcBuilder::new();
         self.compile_body(&mut proc, body);
@@ -135,12 +133,18 @@ impl Compiler {
         let ProcBuilder {
             blocks,
             current_block: _,
-            entry: _,
+            entry,
             exit: _,
             bindings: _,
             locals: _,
         } = proc;
-        CompiledProc { ins, outs, blocks }
+        CompiledProc {
+            name,
+            ins,
+            outs,
+            blocks,
+            entry,
+        }
     }
 
     fn compile_if(&mut self, proc: &mut ProcBuilder, If { truth, lie }: If<ConcreteNode>) {
@@ -205,13 +209,7 @@ impl Compiler {
 
     fn compile_body(&mut self, proc: &mut ProcBuilder, body: Vec<ConcreteNode>) {
         for node in body {
-            let _span = node.span;
             match node.node {
-                TypedIr::MemUse(name) => {
-                    self.compile_mem(&name);
-                    let mangled = self.mangle_table.get(&name).unwrap().clone();
-                    proc.push_mem(mangled);
-                }
                 TypedIr::GVarUse(name) => {
                     let mangled = self.mangle_table.get(&name).unwrap().clone();
                     proc.push_mem(mangled);
@@ -338,27 +336,6 @@ impl Compiler {
 
     fn inc_proc_id(&mut self) {
         self.proc_id += 1;
-    }
-
-    fn compile_mem(&mut self, name: &ItemPath) {
-        let CMem { body } = match self.mems.get(name) {
-            Some(ComMem::Compiled(_)) => return,
-            Some(ComMem::NotCompiled(mem)) => mem.clone(),
-            None => unreachable!(),
-        };
-
-        let mut proc = ProcBuilder::new();
-
-        self.compile_body(&mut proc, body);
-        proc.return_();
-
-        let size = match eval(&proc.blocks, true) {
-            Some(Value::UInt(size)) => size as usize,
-            Some(Value::Int(size)) => size as usize,
-            Some(_) => unreachable!(),
-            None => todo!(),
-        };
-        self.mems.insert(name.to_owned(), ComMem::Compiled(size));
     }
 }
 

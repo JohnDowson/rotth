@@ -45,11 +45,11 @@ impl Type {
                 let mut base = name.clone();
                 if let Some(params) = params {
                     let mut paramstr = String::from("[");
-                    for (i, param) in params.tys.iter().enumerate() {
+                    for (i, param) in params.inner.tys.iter().enumerate() {
                         if i == 0 {
-                            write!(paramstr, "{:?}", param.type_name()).unwrap();
+                            write!(paramstr, "{:?}", param.inner.type_name()).unwrap();
                         } else {
-                            write!(paramstr, " {:?}", param.type_name()).unwrap();
+                            write!(paramstr, " {:?}", param.inner.type_name()).unwrap();
                         }
                     }
                     write!(paramstr, "]").unwrap();

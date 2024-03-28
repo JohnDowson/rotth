@@ -93,7 +93,6 @@ pub struct FieldAccess<T> {
 
 #[derive(Clone)]
 pub enum TypedIr<T: TypeRepr, I> {
-    MemUse(ItemPathBuf),
     GVarUse(ItemPathBuf),
     LVarUse(ItemPathBuf),
     BindingUse(ItemPathBuf),
@@ -115,7 +114,6 @@ impl<T: TypeRepr + std::fmt::Debug, I: std::fmt::Debug> std::fmt::Debug for Type
         match self {
             Self::GVarUse(arg0) => f.debug_tuple("GVarUse").field(arg0).finish(),
             Self::LVarUse(arg0) => f.debug_tuple("LVarUse").field(arg0).finish(),
-            Self::MemUse(arg0) => f.debug_tuple("MemUse").field(arg0).finish(),
             Self::BindingUse(arg0) => f.debug_tuple("BindingUse").field(arg0).finish(),
             Self::ConstUse(arg0) => f.debug_tuple("ConstUse").field(arg0).finish(),
             Self::Call(arg0) => f.debug_tuple("Call").field(arg0).finish(),
@@ -170,11 +168,7 @@ pub struct KConst<T> {
     pub span: Span,
     pub body: Vec<T>,
 }
-#[derive(Debug, Clone)]
-pub struct KMem<T> {
-    pub span: Span,
-    pub body: Vec<T>,
-}
+
 #[derive(Debug, Clone)]
 
 pub struct Var<T> {
@@ -191,7 +185,6 @@ pub struct KStruct {
 #[derive(Debug, Clone)]
 pub enum Ref {
     Proc(ItemPathBuf),
-    Mem(ItemPathBuf),
     Const(ItemPathBuf),
     Struct(ItemPathBuf),
     Var,
@@ -201,7 +194,6 @@ pub enum Ref {
 pub struct Walker {
     known_procs: FnvHashMap<ItemPathBuf, Rc<KProc<Spanned<Hir>>>>,
     known_gvars: FnvHashMap<ItemPathBuf, TermId>,
-    known_mems: FnvHashMap<ItemPathBuf, Rc<KMem<TirNode>>>,
     known_structs: FnvHashMap<ItemPathBuf, Rc<KStruct>>,
     checked_consts: FnvHashMap<ItemPathBuf, Rc<KConst<TirNode>>>,
     checked_procs: FnvHashMap<ItemPathBuf, KProc<TypedNode<TermId, Intrinsic<TermId>>>>,
@@ -216,7 +208,6 @@ pub struct Walker {
 pub struct TypecheckedProgram {
     pub procs: FnvHashMap<ItemPathBuf, KProc<TypedNode<TermId, Intrinsic<TermId>>>>,
     pub consts: FnvHashMap<ItemPathBuf, KConst<TirNode>>,
-    pub mems: FnvHashMap<ItemPathBuf, KMem<TirNode>>,
     pub vars: FnvHashMap<ItemPathBuf, ReifiedType>,
     pub structs: FnvHashMap<ItemPathBuf, KStruct>,
     pub engine: Engine,
@@ -231,7 +222,6 @@ impl Walker {
             checked_consts: Default::default(),
             known_procs: Default::default(),
             known_gvars: Default::default(),
-            known_mems: Default::default(),
             known_structs: Default::default(),
             structs,
             item_refs: Default::default(),
@@ -273,7 +263,6 @@ impl Walker {
                     hir::TopLevel::Ref(_) => Ternary::Third,
                     hir::TopLevel::Proc(_) => Ternary::Third,
                     hir::TopLevel::Const(_) => Ternary::First,
-                    hir::TopLevel::Mem(_) => Ternary::Second,
                     hir::TopLevel::Var(_) => Ternary::Second,
                 });
         for (path, def) in consts {
@@ -284,7 +273,6 @@ impl Walker {
         }
         for (path, def) in mems_vars {
             match def {
-                hir::TopLevel::Mem(mem) => this.register_mem(path, mem)?,
                 hir::TopLevel::Var(var) => this.register_var(path, var)?,
                 _ => unreachable!(),
             }
@@ -307,7 +295,6 @@ impl Walker {
             checked_consts,
             checked_procs,
             engine,
-            known_mems,
             known_gvars,
             ..
         } = this;
@@ -315,10 +302,6 @@ impl Walker {
         TypecheckedProgram {
             procs: checked_procs,
             consts: checked_consts
-                .into_iter()
-                .map(|(a, b)| (a, Rc::try_unwrap(b).unwrap()))
-                .collect(),
-            mems: known_mems
                 .into_iter()
                 .map(|(a, b)| (a, Rc::try_unwrap(b).unwrap()))
                 .collect(),
@@ -339,8 +322,6 @@ impl Walker {
             Ref::Proc(referee)
         } else if self.checked_consts.get(&referee).cloned().is_some() {
             Ref::Const(referee)
-        } else if self.known_mems.get(&referee).cloned().is_some() {
-            Ref::Mem(referee)
         } else if self.known_structs.get(&referee).cloned().is_some() {
             Ref::Struct(referee)
         } else if let Some(reference) = self.unresloved_item_refs.get(&referee).cloned() {
@@ -408,74 +389,6 @@ impl Walker {
 
         self.known_procs.insert(path, Rc::new(known_proc));
         ().okay()
-    }
-
-    fn register_mem(&mut self, path: ItemPathBuf, mem: hir::Mem) -> Result<(), Error> {
-        if self.known_mems.contains_key(&path) {
-            return Ok(());
-        }
-        let hir::Mem { body, span } = mem;
-
-        let mut heap = THeap::default();
-        let mut ts = TypeStack::default();
-        let mut expected_outs = TypeStack::default();
-        let u64 = self.engine.insert(TypeInfo::U64);
-        expected_outs.push(&mut heap, u64);
-        let body = self.typecheck_body(
-            &mut ts,
-            &mut heap,
-            &body,
-            &Default::default(),
-            Default::default(),
-            Default::default(),
-            Some(&expected_outs),
-            true,
-        )?;
-
-        self.known_mems.insert(path, Rc::new(KMem { span, body }));
-        Ok(())
-    }
-
-    fn typecheck_syscall(
-        &mut self,
-        i: usize,
-        span: Span,
-        ins: &mut TypeStack,
-        heap: &mut THeap,
-        w_ins: &mut Vec<TermId>,
-        w_outs: &mut Vec<TermId>,
-    ) -> Result<(), Error> {
-        if let Some(ty) = ins.pop(heap) {
-            let u64 = self.engine.insert(TypeInfo::U64);
-            if let Err(msg) = self.engine.unify(u64, ty) {
-                return error(
-                    span,
-                    ErrorKind::UnificationError(msg),
-                    "`syscall1` intrinsic expects a u64 as it's input",
-                );
-            }
-            w_ins.push(ty);
-            for _ in 0..i {
-                if let Some(ty) = ins.pop(heap) {
-                    w_ins.push(ty);
-                } else {
-                    return error(
-                        span,
-                        ErrorKind::NotEnoughData,
-                        "Not enough data in the stack for `syscall1` intrinsic",
-                    );
-                }
-            }
-            w_outs.push(u64);
-            ins.push(heap, u64);
-            Ok(())
-        } else {
-            error(
-                span,
-                ErrorKind::NotEnoughData,
-                "Not enough data in the stack for `print` intrinsic",
-            )
-        }
     }
 
     fn register_var(&mut self, path: ItemPathBuf, var: hir::Var) -> Result<(), Error> {
@@ -666,16 +579,10 @@ impl Walker {
             .map(|term| self.engine.insert(term))
             .collect();
 
-        // dbg! {const_name};
-        // dbg! {&const_.outs};
-
         for ty in &outs {
             ins.push(heap, *ty);
         }
 
-        // dbg! {&outs};
-        // eprintln!();
-        // eprintln!();
         TypedNode {
             span,
             node: TypedIr::ConstUse(const_name.to_owned()),
@@ -723,17 +630,6 @@ impl Walker {
                         outs: vec![ty],
                     }
                 }
-                Hir::Path(path) if self.is_mem(path) => {
-                    let ty = self.engine.insert(TypeInfo::U8);
-                    let ty = self.engine.insert(TypeInfo::Ptr(ty));
-                    ins.push(heap, ty);
-                    TypedNode {
-                        span: node.span,
-                        node: TypedIr::MemUse(path.clone()),
-                        ins: vec![],
-                        outs: vec![ty],
-                    }
-                }
                 Hir::Path(path) if self.is_var(path) => {
                     let var = self.known_gvars.get(path).unwrap();
                     let ty = self.engine.insert(TypeInfo::Ptr(*var));
@@ -750,17 +646,6 @@ impl Walker {
                         Ref::Proc(proc_name) => {
                             let proc = self.known_procs.get(&proc_name).cloned().unwrap();
                             self.typecheck_call(ins, heap, proc, &proc_name, node.span, in_const)?
-                        }
-                        Ref::Mem(_) => {
-                            let ty = self.engine.insert(TypeInfo::U8);
-                            let ty = self.engine.insert(TypeInfo::Ptr(ty));
-                            ins.push(heap, ty);
-                            TypedNode {
-                                span: node.span,
-                                node: TypedIr::MemUse(path.clone()),
-                                ins: vec![],
-                                outs: vec![ty],
-                            }
                         }
                         Ref::Const(const_name) => {
                             let const_ = self.checked_consts.get(&const_name).cloned().unwrap();
@@ -953,125 +838,6 @@ impl Walker {
                                     "Not enough data in the stack for `!u64` intrinsic",
                                 );
                             }
-                        }
-                        Intrinsic::CompStop => {
-                            dbg! {&self.engine};
-                            return error(
-                                node.span,
-                                ErrorKind::CompStop,
-                                format!(
-                                    "Stack at this point:\n{:?}",
-                                    ins.clone()
-                                        .into_vec(heap)
-                                        .into_iter()
-                                        .map(|t| self.engine.term_to_string(t))
-                                        .collect::<Vec<_>>()
-                                ),
-                            );
-                        }
-                        Intrinsic::Dump => todo!(),
-                        Intrinsic::Print => {
-                            if let Some(ty) = ins.pop(heap) {
-                                w_ins.push(ty);
-                                Intrinsic::Print
-                            } else {
-                                return error(
-                                    node.span,
-                                    ErrorKind::NotEnoughData,
-                                    "Not enough data in the stack for `print` intrinsic",
-                                );
-                            }
-                        }
-                        Intrinsic::Syscall0 => {
-                            self.typecheck_syscall(
-                                0,
-                                node.span,
-                                ins,
-                                heap,
-                                &mut w_ins,
-                                &mut w_outs,
-                            )?;
-                            Intrinsic::Syscall0
-                        }
-                        Intrinsic::Syscall1 => {
-                            self.typecheck_syscall(
-                                1,
-                                node.span,
-                                ins,
-                                heap,
-                                &mut w_ins,
-                                &mut w_outs,
-                            )?;
-                            Intrinsic::Syscall1
-                        }
-                        Intrinsic::Syscall2 => {
-                            self.typecheck_syscall(
-                                2,
-                                node.span,
-                                ins,
-                                heap,
-                                &mut w_ins,
-                                &mut w_outs,
-                            )?;
-                            Intrinsic::Syscall2
-                        }
-                        Intrinsic::Syscall3 => {
-                            self.typecheck_syscall(
-                                3,
-                                node.span,
-                                ins,
-                                heap,
-                                &mut w_ins,
-                                &mut w_outs,
-                            )?;
-                            Intrinsic::Syscall3
-                        }
-                        Intrinsic::Syscall4 => {
-                            self.typecheck_syscall(
-                                4,
-                                node.span,
-                                ins,
-                                heap,
-                                &mut w_ins,
-                                &mut w_outs,
-                            )?;
-                            Intrinsic::Syscall4
-                        }
-                        Intrinsic::Syscall5 => {
-                            self.typecheck_syscall(
-                                5,
-                                node.span,
-                                ins,
-                                heap,
-                                &mut w_ins,
-                                &mut w_outs,
-                            )?;
-                            Intrinsic::Syscall5
-                        }
-                        Intrinsic::Syscall6 => {
-                            self.typecheck_syscall(
-                                6,
-                                node.span,
-                                ins,
-                                heap,
-                                &mut w_ins,
-                                &mut w_outs,
-                            )?;
-                            Intrinsic::Syscall6
-                        }
-                        Intrinsic::Argc => {
-                            let ty = self.engine.insert(TypeInfo::U64);
-                            ins.push(heap, ty);
-                            w_outs.push(ty);
-                            Intrinsic::Argc
-                        }
-                        Intrinsic::Argv => {
-                            let char = self.engine.insert(TypeInfo::Char);
-                            let charp = self.engine.insert(TypeInfo::Ptr(char));
-                            let charpp = self.engine.insert(TypeInfo::Ptr(charp));
-                            ins.push(heap, charpp);
-                            w_outs.push(charpp);
-                            Intrinsic::Argv
                         }
                         Intrinsic::Add => {
                             if let Some(a) = ins.pop(heap) {
@@ -1866,7 +1632,7 @@ impl Walker {
                     let subs = ty
                         .generics
                         .iter()
-                        .zip(params.tys.iter())
+                        .zip(params.inner.tys.iter())
                         .map(|(gen, param)| {
                             let ty = self.abstract_to_concrete_type(param, generics)?;
                             let ty = self.engine.insert(&ty);
@@ -1886,92 +1652,12 @@ impl Walker {
         kind.okay()
     }
 
-    // fn instantiate_type(
-    //     &mut self,
-    //     name: &ItemPath,
-    //     params: impl Iterator<Item = types::Type>,
-    // ) -> Result<Type, Error> {
-    //     fn substitute_and_rename(
-    //         proto: &types::Struct,
-    //         params: impl Iterator<Item = types::Type>,
-    //     ) -> types::Struct {
-    //         fn find_generic(t: &mut types::Type, gen: &str, param: types::Type) {
-    //             match t {
-    //                 types::Type::Ptr(box r) => find_generic(r, gen, param),
-    //                 types::Type::Custom(types::Custom { name, params: None }) => {
-    //                     if let Some(n) = name.only() {
-    //                         if n == gen {
-    //                             *t = param;
-    //                         }
-    //                     }
-    //                 }
-    //                 types::Type::Custom(types::Custom {
-    //                     name: _,
-    //                     params: Some(_),
-    //                 }) => {
-    //                     todo!()
-    //                 }
-    //                 types::Type::Primitive(_) => (),
-    //             }
-    //         }
-    //         let mut proto2 = proto.clone();
-    //         let mut paramstr = String::from("[");
-    //         for (i, (param, gen)) in params.zip(proto.generics.iter()).enumerate() {
-    //             if i == 0 {
-    //                 write!(paramstr, "{:?}", param).unwrap();
-    //             } else {
-    //                 write!(paramstr, " {:?}", param).unwrap();
-    //             }
-    //             for t in proto2.fields.values_mut() {
-    //                 find_generic(t, &*gen.inner, param.clone())
-    //             }
-    //         }
-    //         write!(paramstr, "]").unwrap();
-    //         proto2.name.push(paramstr);
-    //         proto2
-    //     }
-
-    //     let proto = self.structs.get(name).unwrap();
-    //     let proto2 = substitute_and_rename(proto, params);
-    //     let mut fields = FnvHashMap::default();
-    //     for (n, ty) in proto2.fields {
-    //         let ty = self.abstract_to_concrete_type(&ty, None)?;
-    //         fields.insert(n, ty);
-    //     }
-    //     let id = if let Some(s) = self.known_structs.get(&proto2.name) {
-    //         s.id
-    //     } else {
-    //         let generics = proto2
-    //             .generics
-    //             .iter()
-    //             .map(|s| (s.inner.clone(), self.gen_id()))
-    //             .collect();
-    //         let id = self.type_id();
-    //         self.known_structs.insert(
-    //             proto2.name.clone(),
-    //             Rc::new(KStruct {
-    //                 fields,
-    //                 typename: proto2.name,
-    //                 generics,
-    //             }),
-    //         );
-    //         id
-    //     };
-
-    //     Ok(Type::Concrete(ConcreteType::Custom(id)))
-    //     todo!()
-    // }
-
     fn is_proc(&self, name: &ItemPath) -> bool {
         self.known_procs.contains_key(name)
     }
 
     fn is_const(&self, name: &ItemPath) -> bool {
         self.checked_consts.contains_key(name)
-    }
-
-    fn is_mem(&self, name: &ItemPath) -> bool {
-        self.known_mems.contains_key(name)
     }
 
     fn is_var(&self, name: &ItemPath) -> bool {

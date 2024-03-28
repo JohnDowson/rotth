@@ -5,7 +5,7 @@ use internment::Intern;
 use rotth::{lir2, Error};
 use rotth_analysis::{ctir, tir};
 use rotth_parser::hir;
-use std::{path::PathBuf, time::Instant};
+use std::{fs::OpenOptions, io::Write, path::PathBuf, time::Instant};
 
 #[derive(Parser)]
 struct Args {
@@ -159,9 +159,6 @@ fn report_errors(e: Error) {
                         "While body must not alter types on the stack".fg(Color::Red),
                     ))
                 }
-                rotth_analysis::ErrorKind::CompStop => {
-                    report.with_label(Label::new(span).with_message("Compilation stopped here"))
-                }
                 rotth_analysis::ErrorKind::Unexpected => {
                     report.with_label(Label::new(span).with_message("Unexpected word"))
                 }
@@ -245,7 +242,7 @@ fn compiler<'i>() -> Result<(), Error<'i>> {
 
     let src_text = Box::leak(std::fs::read_to_string(&source)?.into_boxed_str());
 
-    let tokens = rotth_lexer::lex(src_text, Intern::new(source));
+    let tokens = rotth_lexer::lex(src_text, Intern::new(source.clone()));
 
     let tokenized = Instant::now();
     if args.time {
@@ -306,44 +303,36 @@ fn compiler<'i>() -> Result<(), Error<'i>> {
         println!("{ctir:#?}");
     }
 
-    let (lir, strings, mems) = lir2::Compiler::compile(ctir);
-
-    let transpiled = Instant::now();
-    if args.time {
-        println!("Transpiled in:\t{:?}", transpiled - typechecked);
-    }
-
-    if args.dump_lir {
-        println!("LIR:");
-        for (name, proc) in lir.iter() {
-            println!("{name}:");
-            println!("{proc:?}");
+    match args.backend {
+        Backend::Asm => {
+            // emit::asm::compile(
+            //     lir,
+            //     strings,
+            //     mems,
+            //     BufWriter::new(
+            //         OpenOptions::new()
+            //             .create(true)
+            //             .write(true)
+            //             .truncate(true)
+            //             .open(source.with_extension("asm"))?,
+            //     ),
+            // )?;
         }
-        println!();
+        Backend::Llvm => todo!(),
+        Backend::Cranelift => {
+            let object = rotth::emit::cranelift2::compile(ctir).unwrap();
+            let mut file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(source.with_extension("o"))?;
+            file.write_all(&object).unwrap();
+        }
     }
-
-    // match args.backend {
-    //     Backend::Asm => {
-    //         emit::asm::compile(
-    //             lir,
-    //             strings,
-    //             mems,
-    //             BufWriter::new(
-    //                 OpenOptions::new()
-    //                     .create(true)
-    //                     .write(true)
-    //                     .truncate(true)
-    //                     .open(source.with_extension("asm"))?,
-    //             ),
-    //         )?;
-    //     }
-    //     Backend::Llvm => todo!(),
-    //     Backend::Cranelift => todo!(),
-    // }
 
     let compiled = Instant::now();
     if args.time {
-        println!("Compiled in:\t{:?}", compiled - transpiled);
+        println!("Compiled in:\t{:?}", compiled - concretized);
         println!("Total:\t{:?}", compiled - start);
     }
 

@@ -1,5 +1,5 @@
-use capstone::arch::BuildsCapstoneSyntax;
 use codegen::isa;
+use cranelift::codegen::control::ControlPlane;
 use cranelift::codegen::ir::StackSlot;
 use cranelift::prelude::StackSlotData;
 use cranelift::prelude::{codegen::isa::*, Signature};
@@ -23,17 +23,14 @@ use cranelift::{
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module};
 use rotth_parser::ast::Literal;
-use std::cell::{Ref, RefCell, RefMut};
 use std::collections::BTreeMap;
-use std::ops::Deref;
-use std::ptr::null_mut;
-use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use target_lexicon::Triple;
 
-use crate::lir::Op;
+use crate::lir2::{Op, Value};
 
-fn get_isa() -> Box<dyn TargetIsa + 'static> {
+fn get_isa() -> Arc<dyn TargetIsa + 'static> {
     let mut flags_builder = codegen::settings::builder();
     flags_builder.set("opt_level", "speed").unwrap();
     flags_builder.set("is_pic", "false").unwrap();
@@ -226,19 +223,23 @@ impl<'a> Stack2SSA<'a> {
             let mut s = None;
             match code {
                 Op::Push(value) => match value {
-                    Literal::Bool(value) => {
-                        let x = self.builder.ins().iconst(types::I64, (*value) as i64);
+                    Value::Bool(b) => {
+                        let x = self.builder.ins().iconst(types::I64, (*b) as i64);
                         self.operand_stack.push(x);
                     }
-                    Literal::Num(value) => {
-                        let x = self.builder.ins().iconst(types::I64, (*value) as i64);
+                    Value::Int(i) => {
+                        let x = self.builder.ins().iconst(types::I64, *i);
                         self.operand_stack.push(x);
                     }
-                    Literal::String(_) => todo!(),
-                    Literal::Char(value) => {
-                        let x = self.builder.ins().iconst(types::I64, (*value) as i64);
+                    Value::UInt(u) => {
+                        let x = self
+                            .builder
+                            .ins()
+                            .iconst(types::I64, unsafe { std::mem::transmute::<u64, i64>(*u) });
                         self.operand_stack.push(x);
                     }
+                    Value::String(_) => todo!(),
+                    Value::Char(_) => todo!(),
                 },
                 Op::Add => {
                     let y = self.operand_stack.pop().unwrap();
@@ -251,7 +252,6 @@ impl<'a> Stack2SSA<'a> {
                     self.end_of_basic_block = true;
                     s = Some(self.builder.ins().return_(&[v]));
                 }
-                Op::PushStr(_) => todo!(),
                 Op::PushMem(_) => todo!(),
                 Op::Drop => {
                     self.operand_stack.pop().unwrap();
@@ -285,24 +285,12 @@ impl<'a> Stack2SSA<'a> {
                 Op::Unbind => {
                     self.bindings.pop();
                 }
-                Op::ReadU64 => todo!(),
-                Op::ReadU8 => todo!(),
-                Op::WriteU64 => todo!(),
-                Op::WriteU8 => todo!(),
+                Op::Read(_) => todo!(),
+                Op::Write(_) => todo!(),
                 Op::ReserveLocals(_) => todo!(),
                 Op::FreeLocals(_) => todo!(),
                 Op::PushLvar(_) => todo!(),
-                Op::Dump => todo!(),
-                Op::Print => todo!(),
-                Op::Syscall0 => todo!(),
-                Op::Syscall1 => todo!(),
-                Op::Syscall2 => todo!(),
-                Op::Syscall3 => todo!(),
-                Op::Syscall4 => todo!(),
-                Op::Syscall5 => todo!(),
-                Op::Syscall6 => todo!(),
-                Op::Argc => todo!(),
-                Op::Argv => todo!(),
+                Op::Syscall(_) => todo!(),
                 Op::Sub => todo!(),
                 Op::Divmod => todo!(),
                 Op::Mul => todo!(),
@@ -312,12 +300,9 @@ impl<'a> Stack2SSA<'a> {
                 Op::Le => todo!(),
                 Op::Gt => todo!(),
                 Op::Ge => todo!(),
-                Op::Label(_) => todo!(),
                 Op::Jump(_) => todo!(),
-                Op::JumpF(_) => todo!(),
-                Op::JumpT(_) => todo!(),
+                Op::Branch(_, _) => todo!(),
                 Op::Call(_) => todo!(),
-                Op::Exit => todo!(),
             };
 
             dbg! {self.end_of_basic_block};
@@ -365,7 +350,7 @@ impl JIT {
         }
     }
 
-    pub fn compile(&mut self, code: &Vec<Op>, argc: usize, locals: usize) -> *mut u8 {
+    pub fn compile(&mut self, code: &Vec<Op>, argc: usize, locals: usize) -> *const u8 {
         self.module.clear_context(&mut self.ctx);
         for _ in 0..argc {
             self.ctx
@@ -374,7 +359,6 @@ impl JIT {
                 .params
                 .push(AbiParam::new(types::I64));
         }
-
         self.ctx
             .func
             .signature
@@ -390,7 +374,7 @@ impl JIT {
         let mut bmap = BTreeMap::new();
         bmap.insert(0, entry_block);
         let current_block = BasicBlock::new(0, entry_block);
-        let locals = builder.create_stack_slot(StackSlotData::new(
+        let locals = builder.create_sized_stack_slot(StackSlotData::new(
             cranelift::prelude::StackSlotKind::ExplicitSlot,
             locals as u32 * 4,
         ));
@@ -411,7 +395,6 @@ impl JIT {
 
         compiler.generate();
         compiler.builder.seal_all_blocks();
-        cranelift_preopt::optimize(&mut self.ctx, &*get_isa()).unwrap();
         println!("IR: \n{}", self.ctx.func.display());
         let name = get_jit_name();
         let id = self
@@ -423,24 +406,24 @@ impl JIT {
             )
             .unwrap();
 
-        let info = self.ctx.compile(&*get_isa()).unwrap();
-        let mut code_ = vec![0; info.total_size as usize];
-        unsafe {
-            self.ctx.emit_to_memory(&mut code_[0]);
-        }
+        let mut code_ = vec![];
+        self.ctx
+            .compile_and_emit(&*get_isa(), &mut code_, &mut ControlPlane::default())
+            .unwrap();
+
         self.module.define_function(id, &mut self.ctx).unwrap();
         self.module.clear_context(&mut self.ctx);
-        self.module.finalize_definitions();
+        self.module.finalize_definitions().unwrap();
         let code = self.module.get_finalized_function(id);
 
         println!("Disassembly: ",);
-        let cs = disasm();
+        let cs = crate::emit::disasm();
         let insns = cs.disasm_all(&code_, code as _);
         for ins in insns.unwrap().iter() {
             println!("{}", ins);
         }
 
-        code as *mut u8
+        code
     }
 }
 
@@ -449,37 +432,13 @@ impl Default for JIT {
         Self::new()
     }
 }
-fn disasm() -> capstone::Capstone {
-    use capstone::arch::BuildsCapstone;
-    let cs = capstone::prelude::Capstone::new();
-    #[cfg(target_arch = "aarch64")]
-    {
-        let mut cs = cs
-            .arm64()
-            .mode(capstone::prelude::arch::arm64::ArchMode::Arm)
-            .detail(true)
-            .build()
-            .unwrap();
-        cs.set_skipdata(true).unwrap();
-        cs
-    }
-    #[cfg(target_arch = "x86_64")]
-    {
-        cs.x86()
-            .mode(capstone::prelude::arch::x86::ArchMode::Mode64)
-            .syntax(capstone::prelude::arch::x86::ArchSyntax::Att)
-            .detail(true)
-            .build()
-            .unwrap()
-    }
-}
 
 #[test]
 fn test() {
     let mut jit = JIT::new();
 
     let code = vec![
-        Op::Push(Literal::Num(1)),
+        Op::Push(Value::UInt(1)),
         Op::Bind,
         Op::UseBinding(0),
         Op::Return,

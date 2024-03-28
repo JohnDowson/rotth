@@ -55,7 +55,6 @@ pub enum ErrorKind {
     Undefined,
     InvalidMain,
     InvalidWhile,
-    CompStop,
     Unexpected,
     CallInConst,
     Concrete(ConcreteError),

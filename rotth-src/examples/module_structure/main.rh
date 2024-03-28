@@ -1,4 +1,4 @@
 module foo
-; use bar from foo
+use baz from foo::bar
 
-proc main: i64 do 1 end
+proc main: i64 do foo::foo2 end

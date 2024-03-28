@@ -1,1 +1,5 @@
-proc bar: i64 do 0 end
+module bar
+
+proc foo2: i64 do
+    bar::baz
+end

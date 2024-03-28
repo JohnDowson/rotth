@@ -43,20 +43,6 @@ impl<T> Spanned<T> {
     }
 }
 
-impl<T> Deref for Spanned<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl<T> DerefMut for Spanned<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
-}
-
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
 pub struct Span {
     pub file: Intern<PathBuf>,

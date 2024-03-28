@@ -26,8 +26,6 @@ pub enum Token {
     FieldAccess,
     #[token("&>", priority = 1000000)]
     Ptr,
-    #[token("&?&")]
-    CompStop,
     #[token("@")]
     Read,
     #[token("!")]
@@ -116,7 +114,6 @@ impl std::fmt::Debug for Token {
             Token::SigSep => write!(f, ":"),
             Token::PathSep => write!(f, "::"),
             Token::Ptr => write!(f, "&>"),
-            Token::CompStop => write!(f, "&?&"),
             Token::FieldAccess => write!(f, "->"),
             Token::LBracket => write!(f, "["),
             Token::RBracket => write!(f, "]"),

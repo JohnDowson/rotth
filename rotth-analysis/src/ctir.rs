@@ -1,4 +1,4 @@
-use fnv::FnvHashMap;
+use fnv::{FnvHashMap, FnvHashSet};
 use rotth_parser::{hir, types::Primitive};
 use smol_str::SmolStr;
 use std::fmt::Write;
@@ -38,21 +38,6 @@ pub enum Intrinsic {
     Read(ReifiedType),
     Write(ReifiedType),
 
-    CompStop,
-    Dump,
-    Print,
-
-    Syscall0,
-    Syscall1,
-    Syscall2,
-    Syscall3,
-    Syscall4,
-    Syscall5,
-    Syscall6,
-
-    Argc,
-    Argv,
-
     Add,
     Sub,
     Divmod,
@@ -71,18 +56,12 @@ pub struct CConst {
     pub outs: Vec<ReifiedType>,
     pub body: Vec<ConcreteNode>,
 }
-#[derive(Debug, Clone)]
-pub struct CMem {
-    pub body: Vec<ConcreteNode>,
-}
 
 #[derive(Debug)]
 pub struct ConcreteProgram {
     pub procs: FnvHashMap<ItemPathBuf, CProc>,
     pub consts: FnvHashMap<ItemPathBuf, CConst>,
-    pub mems: FnvHashMap<ItemPathBuf, CMem>,
     pub vars: FnvHashMap<ItemPathBuf, Var<ReifiedType>>,
-    // pub structs: FnvHashMap<TypeId, CStruct>,
 }
 
 fn substitutions(subs: &mut FnvHashMap<GenId, ReifiedType>, g: &Type, c: &ReifiedType) {
@@ -119,6 +98,7 @@ pub struct CProc {
     pub ins: Vec<ReifiedType>,
     pub outs: Vec<ReifiedType>,
     pub body: Vec<ConcreteNode>,
+    pub callees: FnvHashMap<ItemPathBuf, (usize, usize)>,
 }
 
 #[derive(Default)]
@@ -126,7 +106,6 @@ pub struct Walker {
     procs: FnvHashMap<ItemPathBuf, Option<CProc>>,
     // structs: FnvHashMap<TypeId, CStruct>,
     consts: FnvHashMap<ItemPathBuf, Option<CConst>>,
-    mems: FnvHashMap<ItemPathBuf, Option<CMem>>,
     vars: FnvHashMap<ItemPathBuf, Option<Var<ReifiedType>>>,
 }
 
@@ -194,22 +173,6 @@ impl Walker {
                 })
                 .collect::<Result<_, _>>()?;
 
-            let mems = this
-                .mems
-                .into_iter()
-                .map(|(p, i)| {
-                    if let Some(i) = i {
-                        Ok((p, i))
-                    } else {
-                        concrete_error(
-                            None,
-                            ConcreteError::IncompleteMem(p),
-                            "Main can not be a generic proc",
-                        )
-                    }
-                })
-                .collect::<Result<_, _>>()?;
-
             let vars = this
                 .vars
                 .into_iter()
@@ -229,9 +192,7 @@ impl Walker {
             Ok(ConcreteProgram {
                 procs,
                 consts,
-                mems,
                 vars,
-                // structs: this.structs,
             })
         } else {
             concrete_error(None, ConcreteError::NoEntry, "Couldn't find an entrypoint")
@@ -245,7 +206,8 @@ impl Walker {
         gensubs: &FnvHashMap<GenId, ReifiedType>,
     ) -> Result<CProc, Error> {
         let proc = program.procs.get(path).unwrap();
-        let body = self.walk_body(program, &proc.body, &proc.vars, gensubs)?;
+        let mut callees = FnvHashMap::default();
+        let body = self.walk_body(program, &proc.body, &proc.vars, gensubs, &mut callees)?;
 
         let vars = proc
             .vars
@@ -300,6 +262,7 @@ impl Walker {
             ins,
             outs,
             body,
+            callees,
         })
     }
 
@@ -309,10 +272,11 @@ impl Walker {
         body: &[TirNode],
         local_vars: &FnvHashMap<ItemPathBuf, Var<TermId>>,
         gensubs: &FnvHashMap<GenId, ReifiedType>,
+        callees: &mut FnvHashMap<ItemPathBuf, (usize, usize)>,
     ) -> Result<Vec<ConcreteNode>, Error> {
         let mut concrete_body = Vec::new();
         for node in body {
-            let node = self.walk_node(program, node, local_vars, gensubs)?;
+            let node = self.walk_node(program, node, local_vars, gensubs, callees)?;
             concrete_body.push(node)
         }
         Ok(concrete_body)
@@ -324,6 +288,7 @@ impl Walker {
         node: &TirNode,
         local_vars: &FnvHashMap<ItemPathBuf, Var<TermId>>,
         gensubs: &FnvHashMap<GenId, ReifiedType>,
+        callees: &mut FnvHashMap<ItemPathBuf, (usize, usize)>,
     ) -> Result<ConcreteNode, Error> {
         match &node.node {
             TypedIr::GVarUse(var_name) => {
@@ -385,36 +350,6 @@ impl Walker {
                     unreachable!("{:?}", var_name)
                 }
             }
-            TypedIr::MemUse(mem_name) => {
-                let mem = program.mems.get(mem_name).unwrap();
-                let ins = node
-                    .ins
-                    .iter()
-                    .map(|t| program.engine.reify(gensubs, *t))
-                    .collect::<Result<Vec<_>, _>>()
-                    .unwrap();
-                let outs = node
-                    .outs
-                    .iter()
-                    .map(|t| program.engine.reify(gensubs, *t))
-                    .collect::<Result<Vec<_>, _>>()
-                    .unwrap();
-
-                if !self.mems.contains_key(mem_name) {
-                    self.mems.insert(mem_name.clone(), None);
-                    let body: Vec<ConcreteNode> =
-                        self.walk_body(program, &mem.body, local_vars, &Default::default())?;
-                    let mem = CMem { body };
-                    self.mems.insert(mem_name.clone(), Some(mem));
-                }
-
-                Ok(TypedNode {
-                    span: node.span,
-                    node: TypedIr::MemUse(mem_name.clone()),
-                    ins,
-                    outs,
-                })
-            }
             TypedIr::BindingUse(p) => {
                 let ins = node
                     .ins
@@ -455,8 +390,13 @@ impl Walker {
 
                 if !self.consts.contains_key(const_name) {
                     self.consts.insert(const_name.clone(), None);
-                    let body: Vec<ConcreteNode> =
-                        self.walk_body(program, &const_.body, local_vars, &Default::default())?;
+                    let body: Vec<ConcreteNode> = self.walk_body(
+                        program,
+                        &const_.body,
+                        local_vars,
+                        &Default::default(),
+                        &mut Default::default(),
+                    )?;
                     let const_ = CConst {
                         outs: outs.clone(),
                         body,
@@ -532,6 +472,7 @@ impl Walker {
                     self.procs.insert(callee_name.clone(), Some(callee));
                 }
 
+                callees.insert(callee_name.clone(), (callee.ins.len(), callee.outs.len()));
                 Ok(TypedNode {
                     span: node.span,
                     node: TypedIr::Call(callee_name),
@@ -557,18 +498,6 @@ impl Walker {
                     hir::Intrinsic::Dup => Intrinsic::Dup,
                     hir::Intrinsic::Swap => Intrinsic::Swap,
                     hir::Intrinsic::Over => Intrinsic::Over,
-                    hir::Intrinsic::CompStop => Intrinsic::CompStop,
-                    hir::Intrinsic::Dump => Intrinsic::Dump,
-                    hir::Intrinsic::Print => Intrinsic::Print,
-                    hir::Intrinsic::Syscall0 => Intrinsic::Syscall0,
-                    hir::Intrinsic::Syscall1 => Intrinsic::Syscall1,
-                    hir::Intrinsic::Syscall2 => Intrinsic::Syscall2,
-                    hir::Intrinsic::Syscall3 => Intrinsic::Syscall3,
-                    hir::Intrinsic::Syscall4 => Intrinsic::Syscall4,
-                    hir::Intrinsic::Syscall5 => Intrinsic::Syscall5,
-                    hir::Intrinsic::Syscall6 => Intrinsic::Syscall6,
-                    hir::Intrinsic::Argc => Intrinsic::Argc,
-                    hir::Intrinsic::Argv => Intrinsic::Argv,
                     hir::Intrinsic::Add => Intrinsic::Add,
                     hir::Intrinsic::Sub => Intrinsic::Sub,
                     hir::Intrinsic::Divmod => Intrinsic::Divmod,
@@ -613,7 +542,8 @@ impl Walker {
                     .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
-                let body: Vec<ConcreteNode> = self.walk_body(program, body, local_vars, gensubs)?;
+                let body: Vec<ConcreteNode> =
+                    self.walk_body(program, body, local_vars, gensubs, callees)?;
 
                 Ok(ConcreteNode {
                     span: node.span,
@@ -638,8 +568,8 @@ impl Walker {
                     .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
-                let cond = self.walk_body(program, cond, local_vars, gensubs)?;
-                let body = self.walk_body(program, body, local_vars, gensubs)?;
+                let cond = self.walk_body(program, cond, local_vars, gensubs, callees)?;
+                let body = self.walk_body(program, body, local_vars, gensubs, callees)?;
 
                 Ok(TypedNode {
                     span: node.span,
@@ -661,9 +591,9 @@ impl Walker {
                     .map(|t| program.engine.reify(gensubs, *t))
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
-                let truth = self.walk_body(program, truth, local_vars, gensubs)?;
+                let truth = self.walk_body(program, truth, local_vars, gensubs, callees)?;
                 let lie = if let Some(lie) = lie {
-                    Some(self.walk_body(program, lie, local_vars, gensubs)?)
+                    Some(self.walk_body(program, lie, local_vars, gensubs, callees)?)
                 } else {
                     None
                 };
@@ -690,8 +620,8 @@ impl Walker {
                     .unwrap();
                 let mut concrete_branches = Vec::new();
                 for CondBranch { pattern, body } in branches {
-                    let pattern = self.walk_node(program, pattern, local_vars, gensubs)?;
-                    let body = self.walk_body(program, body, local_vars, gensubs)?;
+                    let pattern = self.walk_node(program, pattern, local_vars, gensubs, callees)?;
+                    let body = self.walk_body(program, body, local_vars, gensubs, callees)?;
                     concrete_branches.push(CondBranch { pattern, body })
                 }
                 Ok(TypedNode {

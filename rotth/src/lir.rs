@@ -472,8 +472,6 @@ impl Compiler {
 
                     Intrinsic::Argc => self.emit(Argc, span),
                     Intrinsic::Argv => self.emit(Argv, span),
-
-                    Intrinsic::CompStop => return,
                 },
                 TypedIr::If(cond) => self.compile_if(cond, span),
                 TypedIr::While(while_) => self.compile_while(while_, span),

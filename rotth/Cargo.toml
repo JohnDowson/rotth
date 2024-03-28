@@ -26,7 +26,6 @@ inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", feat
 
 target-lexicon = "0.12"
 cranelift = "0.106"
-cranelift-jit = "0.106"
+cranelift-object = "0.106"
 cranelift-module = "0.106"
-cranelift-preopt = "0.92"
 capstone = "0.12"
