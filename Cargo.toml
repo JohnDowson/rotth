@@ -10,10 +10,11 @@ members = [
   "simplearena",
   "chisel",
   "itempath",
+  "slate-frontend",
 ]
 
 [workspace.dependencies]
-chumsky = "1.0.0-alpha.6"
+chumsky = { version = "1.0.0-alpha.6", features = ["pratt"] }
 logos = "0.14"
 ariadne = "0.4"
 clap = { version = "4", features = ["derive"] }
@@ -22,3 +23,5 @@ thiserror = "1.0"
 serde = { version = "1.0.197", features = ["derive"] }
 tokio = { version = "1.36.0", features = ["fs", "rt-multi-thread"] }
 internment = "0.7.4"
+somok = "1.5.0"
+fnv = "1.0.7"

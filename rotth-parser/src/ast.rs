@@ -23,7 +23,7 @@ pub struct Module {
 }
 
 #[derive(Debug, Clone)]
-pub struct Word(pub SmolStr);
+pub struct Word(pub Intern<String>);
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Punctuation {
@@ -44,7 +44,7 @@ pub enum TopLevel {
 }
 
 impl TopLevel {
-    pub fn name(&self) -> SmolStr {
+    pub fn name(&self) -> Intern<String> {
         match self {
             TopLevel::Proc(Proc {
                 name:
@@ -418,7 +418,7 @@ impl Debug for ResolvedItem {
 #[derive(Debug, Clone)]
 pub struct ResolvedFile {
     pub path: ItemPathBuf,
-    pub ast: FnvHashMap<SmolStr, Spanned<ResolvedItem>>,
+    pub ast: FnvHashMap<Intern<String>, Spanned<ResolvedItem>>,
 }
 
 impl ResolvedFile {
@@ -514,7 +514,7 @@ fn resolve_includes_from(
     {
         let name = name.inner.0.clone();
         let mut path = path.inner;
-        path.push(name.clone());
+        path.push(name);
         if let Some(Spanned { span: _, inner: _ }) = ast.find(&path) {
             if let Some(redefined) = ast.ast.get(&name) {
                 errors.push(Error::Redefinition(Redefinition {

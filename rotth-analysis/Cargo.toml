@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 somok = "1.5.0"
 simplearena = { path = "../simplearena" }
-fnv = "1.0"
+fnv.workspace = true
 rotth-lexer = { path = "../rotth-lexer" }
 rotth-parser = { path = "../rotth-parser" }
 spanner = { path = "../spanner" }

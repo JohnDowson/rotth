@@ -9,7 +9,7 @@ edition = "2021"
 clap.workspace = true
 simplearena = { path = "../simplearena" }
 indoc = "2.0"
-fnv = "1.0"
+fnv.workspace = true
 rotth-lexer = { path = "../rotth-lexer" }
 rotth-parser = { path = "../rotth-parser" }
 rotth-analysis = { path = "../rotth-analysis" }

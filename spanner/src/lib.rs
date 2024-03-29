@@ -79,12 +79,18 @@ impl Span {
 impl Debug for Span {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if f.alternate() {
-            write!(f, "{:?}[{}..{}]", &self.file, &self.start, &self.end)
+            write!(
+                f,
+                "{}[{}..{}]",
+                self.file.to_string_lossy(),
+                &self.start,
+                &self.end
+            )
         } else {
             write!(
                 f,
-                "{:?}[{}..{}]",
-                self.file.file_name().unwrap(),
+                "{}[{}..{}]",
+                self.file.file_name().unwrap().to_string_lossy(),
                 &self.start,
                 &self.end
             )

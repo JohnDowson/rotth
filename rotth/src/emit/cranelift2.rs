@@ -4,12 +4,13 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 use fnv::FnvHashMap;
 use itempath::ItemPathBuf;
 use rotth_analysis::{
-    ctir::{CProc, ConcreteProgram, Intrinsic},
+    ctir::{CProc, ConcreteNode, ConcreteProgram, Intrinsic},
     inference::ReifiedType,
-    tir::TypedIr,
+    tir::{Bind, If, TypedIr},
 };
-use rotth_parser::{ast::Literal, types::Primitive};
+use rotth_parser::{ast::Literal, hir::Binding, types::Primitive};
 use smol_str::ToSmolStr;
+use spanner::Spanned;
 use target_lexicon::Triple;
 
 use std::sync::Arc;
@@ -105,7 +106,14 @@ pub fn compile(
 
 fn compile_proc(
     path: ItemPathBuf,
-    proc: CProc,
+    CProc {
+        generics: _,
+        vars,
+        ins,
+        outs,
+        body,
+        callees,
+    }: CProc,
     path_to_fid: &FnvHashMap<ItemPathBuf, (FuncId, Signature)>,
     module: &mut ObjectModule,
     ctx: &mut codegen::Context,
@@ -116,8 +124,7 @@ fn compile_proc(
     let (fid, sig) = path_to_fid[&path].clone();
     ctx.func.signature = sig;
 
-    let callees_frefs = proc
-        .callees
+    let callees_frefs = callees
         .into_iter()
         .map(|(callee, (ins, outs))| {
             let (fid, _) = &path_to_fid[&callee];
@@ -134,15 +141,40 @@ fn compile_proc(
 
     let mut stack: Vec<Value> = Vec::new();
     stack.extend_from_slice(builder.block_params(entry_b));
+    let mut bound_stack = Vec::new();
 
-    for node in proc.body {
+    compile_body(
+        body,
+        &callees_frefs,
+        &mut stack,
+        &mut bound_stack,
+        &mut builder,
+    );
+    builder.ins().return_(&stack);
+    builder.finalize();
+
+    module.define_function(fid, ctx)?;
+    Ok(())
+}
+
+fn compile_body(
+    body: Vec<ConcreteNode>,
+    callees_frefs: &FnvHashMap<ItemPathBuf, (codegen::ir::FuncRef, usize, usize)>,
+    stack: &mut Vec<Value>,
+    bound_stack: &mut Vec<FnvHashMap<ItemPathBuf, Value>>,
+    builder: &mut FunctionBuilder<'_>,
+) {
+    for node in body {
         match node.node {
             TypedIr::GVarUse(_) => todo!(),
             TypedIr::LVarUse(_) => todo!(),
-            TypedIr::BindingUse(_) => todo!(),
+            TypedIr::BindingUse(name) => {
+                let val = bound_stack.last().unwrap()[&name];
+                stack.push(val);
+            }
             TypedIr::ConstUse(_) => todo!(),
             TypedIr::Call(path) => {
-                let (fref, ins, outs) = callees_frefs[&path];
+                let (fref, ins, _outs) = callees_frefs[&path];
                 let ins = (0..ins).map(|_| stack.pop().unwrap()).collect::<Vec<_>>();
                 let call = builder.ins().call(fref, &ins);
                 for &val in builder.inst_results(call) {
@@ -215,9 +247,42 @@ fn compile_proc(
                 Intrinsic::Gt => todo!(),
                 Intrinsic::Ge => todo!(),
             },
-            TypedIr::Bind(_) => todo!(),
+            TypedIr::Bind(Bind { bindings, body }) => {
+                let mut bound = FnvHashMap::default();
+                for binding in bindings {
+                    match binding.inner {
+                        Binding::Ignore => {
+                            stack.pop();
+                        }
+                        Binding::Bind { name, ty: _ } => {
+                            let val = stack.pop().unwrap();
+                            bound.insert(name, val);
+                        }
+                    }
+                }
+                bound_stack.push(bound);
+                compile_body(body, callees_frefs, stack, bound_stack, builder);
+                bound_stack.pop();
+            }
             TypedIr::While(_) => todo!(),
-            TypedIr::If(_) => todo!(),
+            TypedIr::If(If { truth, lie }) => {
+                let val = stack.pop().unwrap();
+                let truth_b = builder.create_block();
+                let lie_b = builder.create_block();
+                let after_b = builder.create_block();
+                let mut args = stack.clone();
+                args.extend(bound_stack.iter().flat_map(|m| m.values().copied()));
+                builder.ins().brif(val, truth_b, stack, lie_b, stack);
+                builder.switch_to_block(truth_b);
+                let mut stack_t = stack.clone();
+                compile_body(truth, callees_frefs, &mut stack_t, bound_stack, builder);
+                builder.ins().jump(after_b, stack);
+                if let Some(lie) = lie {
+                    builder.switch_to_block(lie_b);
+                    let mut stack_l = stack.clone();
+                    compile_body(lie, callees_frefs, &mut stack_l, bound_stack, builder);
+                }
+            }
             TypedIr::Cond(_) => todo!(),
             TypedIr::Literal(lit) => {
                 let val = match lit {
@@ -233,14 +298,9 @@ fn compile_proc(
             }
             TypedIr::IgnorePattern => todo!(),
             TypedIr::Return => {
-                builder.ins().return_(&stack);
+                builder.ins().return_(&*stack);
             }
             TypedIr::FieldAccess(_) => todo!(),
         }
     }
-    builder.ins().return_(&stack);
-    builder.finalize();
-
-    module.define_function(fid, ctx)?;
-    Ok(())
 }

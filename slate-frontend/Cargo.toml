@@ -1,0 +1,17 @@
+[package]
+name = "slate-frontend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+logos.workspace = true
+smol_str.workspace = true
+internment.workspace = true
+somok.workspace = true
+fnv.workspace = true
+chumsky.workspace = true
+thiserror.workspace = true
+clap.workspace = true
+
+spanner = { path = "../spanner" }
+itempath = { path = "../itempath" }

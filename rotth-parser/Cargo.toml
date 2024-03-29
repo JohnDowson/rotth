@@ -11,8 +11,8 @@ logos.workspace = true
 
 spanner = { path = "../spanner" }
 rotth-lexer = { path = "../rotth-lexer" }
-somok = "1.5.0"
-fnv = "1.0"
+somok.workspace = true
+fnv.workspace = true
 smol_str.workspace = true
 internment.workspace = true
 thiserror.workspace = true

@@ -6,13 +6,13 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+use internment::Intern;
 use serde::{de::Visitor, Deserialize, Serialize};
-use smol_str::SmolStr;
 
 #[derive(PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ItemPath {
-    segments: [SmolStr],
+    segments: [Intern<String>],
 }
 
 impl PartialEq<&ItemPath> for ItemPathBuf {
@@ -34,27 +34,23 @@ impl PartialEq<ItemPathBuf> for ItemPath {
 }
 
 impl ItemPath {
-    pub fn iter(&'_ self) -> impl Iterator<Item = &'_ SmolStr> {
+    pub fn iter(&'_ self) -> impl Iterator<Item = &'_ Intern<String>> {
         self.segments.iter()
     }
 
     pub fn only(&self) -> Option<&str> {
-        self.segments.first().map(SmolStr::as_str)
+        self.segments.first().map(|s| (**s).as_str())
     }
 
-    pub fn last(&self) -> Option<SmolStr> {
+    pub fn last(&self) -> Option<Intern<String>> {
         self.segments.last().cloned()
-    }
-
-    pub fn segment_mut(&mut self, n: usize) -> Option<&mut SmolStr> {
-        self.segments.get_mut(n)
     }
 
     pub fn drop_first(&self) -> Option<&Self> {
         self.segments
             .split_first()
             .and_then(|(_, b)| if b.is_empty() { None } else { Some(b) })
-            .map(|s| unsafe { std::mem::transmute::<&[SmolStr], &ItemPath>(s) })
+            .map(|s| unsafe { std::mem::transmute::<&[Intern<String>], &ItemPath>(s) })
     }
 
     pub fn parent(&self) -> Option<&ItemPath> {
@@ -62,7 +58,7 @@ impl ItemPath {
             None
         } else {
             let segments = &self.segments[..self.segments.len() - 1];
-            let parent = unsafe { std::mem::transmute::<&[SmolStr], &ItemPath>(segments) };
+            let parent = unsafe { std::mem::transmute::<&[Intern<String>], &ItemPath>(segments) };
             Some(parent)
         }
     }
@@ -73,10 +69,14 @@ impl ItemPath {
         ItemPathBuf { segments }
     }
 
-    pub fn child(&self, segment: impl Into<SmolStr>) -> ItemPathBuf {
+    pub fn child(&self, segment: impl Into<Intern<String>>) -> ItemPathBuf {
         let mut segments = self.segments.to_owned();
         segments.push(segment.into());
         ItemPathBuf { segments }
+    }
+
+    pub fn segment_mut(&mut self, segment: usize) -> Option<&mut Intern<String>> {
+        self.segments.get_mut(segment)
     }
 }
 
@@ -84,7 +84,7 @@ impl ItemPath {
 macro_rules! path {
     ( $( $s:tt )::+ ) => {{
         let mut path = $crate::ItemPathBuf::new();
-        $(path.push(stringify!($s));)*
+        $(path.push(stringify!($s).to_string());)*
         path
     }};
     () => {{
@@ -95,7 +95,7 @@ macro_rules! path {
 #[derive(PartialEq, Eq, Hash, Default, Clone)]
 #[repr(transparent)]
 pub struct ItemPathBuf {
-    segments: Vec<SmolStr>,
+    segments: Vec<Intern<String>>,
 }
 
 struct ITPVisitor;
@@ -147,7 +147,7 @@ impl Serialize for ItemPathBuf {
     where
         S: serde::Serializer,
     {
-        let separator = SmolStr::from("::");
+        let separator = Intern::from("::".to_string());
         let segments = self.segments.iter();
         let iter: String = segments
             .intersperse(&separator)
@@ -161,28 +161,23 @@ impl Deref for ItemPathBuf {
     type Target = ItemPath;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { std::mem::transmute::<&[SmolStr], &ItemPath>(&*self.segments) }
+        unsafe { std::mem::transmute::<&[Intern<String>], &ItemPath>(&*self.segments) }
     }
 }
 
 impl DerefMut for ItemPathBuf {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { std::mem::transmute::<&mut [SmolStr], &mut ItemPath>(&mut *self.segments) }
+        unsafe { std::mem::transmute::<&mut [Intern<String>], &mut ItemPath>(&mut *self.segments) }
     }
 }
 
-impl<T: Into<SmolStr>> From<Vec<T>> for ItemPathBuf {
-    fn from(segments: Vec<T>) -> Self {
+impl From<Vec<Intern<String>>> for ItemPathBuf {
+    fn from(segments: Vec<Intern<String>>) -> Self {
         Self {
-            segments: segments.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<SmolStr> for ItemPathBuf {
-    fn from(segment: SmolStr) -> Self {
-        Self {
-            segments: vec![segment],
+            segments: segments
+                .into_iter()
+                .map(|s| Intern::new(s.as_ref().into()))
+                .collect(),
         }
     }
 }
@@ -207,14 +202,14 @@ impl ItemPathBuf {
         Self::default()
     }
 
-    pub fn push(&mut self, segment: impl Into<SmolStr>) {
-        self.segments.push(segment.into())
+    pub fn push(&mut self, segment: impl AsRef<str>) {
+        self.segments.push(Intern::new(segment.as_ref().into()))
     }
 }
 
 impl Debug for ItemPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let separator = SmolStr::from("::");
+        let separator = Intern::from("::".to_string());
         let segments = self.segments.iter();
         let iter = segments.intersperse(&separator);
         for s in iter {
