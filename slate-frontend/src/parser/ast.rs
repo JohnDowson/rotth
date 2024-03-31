@@ -2,7 +2,6 @@ use std::fmt::Debug;
 
 use internment::Intern;
 use itempath::ItemPathBuf;
-use somok::Either;
 use spanner::Spanned;
 
 use crate::lexer::Token;
@@ -45,6 +44,7 @@ pub enum Punctuation {
     Colon,
     DoubleColon,
     Dot,
+    FatArrow,
 }
 
 #[derive(Clone)]
@@ -135,7 +135,6 @@ pub struct Proc {
     pub signature: Spanned<ProcSignature>,
     pub do_: Spanned<Keyword>,
     pub body: Vec<Spanned<Expr>>,
-    pub end: Spanned<Keyword>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -155,7 +154,6 @@ pub enum Keyword {
     Static,
     Struct,
     Cast,
-    End,
 }
 
 impl std::fmt::Display for Keyword {
@@ -171,7 +169,6 @@ pub struct Struct {
     pub name: Spanned<Word>,
     pub do_: Spanned<Keyword>,
     pub body: Vec<Spanned<NameTypePair>>,
-    pub end: Spanned<Keyword>,
 }
 
 #[derive(Debug, Clone)]
@@ -181,7 +178,6 @@ pub struct Const {
     pub signature: Spanned<ConstSignature>,
     pub do_: Spanned<Keyword>,
     pub body: Vec<Spanned<Expr>>,
-    pub end: Spanned<Keyword>,
 }
 
 #[derive(Debug, Clone)]
@@ -223,10 +219,10 @@ pub enum Expr {
 
     Let(Box<Let>),
 
-    While(While),
+    While(Box<While>),
 
     If(If),
-    Cond(Box<Cond>),
+    Cond(Box<Match>),
 
     Cast(Cast),
     Read(Read),
@@ -353,10 +349,9 @@ pub struct NameTypePair {
 #[derive(Debug, Clone)]
 pub struct While {
     pub while_: Spanned<Keyword>,
-    pub cond: Vec<Spanned<Expr>>,
+    pub cond: Spanned<Expr>,
     pub do_: Spanned<Keyword>,
     pub body: Vec<Spanned<Expr>>,
-    pub end: Spanned<Keyword>,
 }
 
 #[derive(Debug, Clone)]
@@ -370,7 +365,6 @@ pub struct If {
     pub if_: Spanned<Keyword>,
     pub truth: Vec<Spanned<Expr>>,
     pub lie: Option<Else>,
-    pub end: Spanned<Keyword>,
 }
 
 #[derive(Debug, Clone)]
@@ -380,20 +374,17 @@ pub struct Else {
 }
 
 #[derive(Debug, Clone)]
-pub struct Cond {
-    pub cond: Spanned<Keyword>,
-    pub pat: Spanned<Expr>,
+pub struct Match {
+    pub match_: Spanned<Keyword>,
+    pub expr: Spanned<Expr>,
     pub do_: Spanned<Keyword>,
-    pub body: Vec<Spanned<Expr>>,
-    pub branches: Vec<Spanned<CondBranch>>,
-    pub end: Spanned<Keyword>,
+    pub branches: Vec<Spanned<MatchBranch>>,
 }
 
 #[derive(Debug, Clone)]
-pub struct CondBranch {
-    pub else_: Spanned<Keyword>,
+pub struct MatchBranch {
     pub pat: Spanned<Expr>,
-    pub do_: Spanned<Keyword>,
+    pub fat_arrow: Spanned<Punctuation>,
     pub body: Vec<Spanned<Expr>>,
 }
 

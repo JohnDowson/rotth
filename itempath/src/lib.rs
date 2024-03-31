@@ -38,8 +38,8 @@ impl ItemPath {
         self.segments.iter()
     }
 
-    pub fn only(&self) -> Option<&str> {
-        self.segments.first().map(|s| (**s).as_str())
+    pub fn first(&self) -> Option<Intern<String>> {
+        self.segments.first().copied()
     }
 
     pub fn last(&self) -> Option<Intern<String>> {
@@ -84,7 +84,7 @@ impl ItemPath {
 macro_rules! path {
     ( $( $s:tt )::+ ) => {{
         let mut path = $crate::ItemPathBuf::new();
-        $(path.push(stringify!($s).to_string());)*
+        $(path.push(stringify!($s).to_string().into());)*
         path
     }};
     () => {{
@@ -113,7 +113,7 @@ impl<'de> Visitor<'de> for ITPVisitor {
     {
         let mut itp = ItemPathBuf::new();
         for seg in v.split("::") {
-            itp.push(seg);
+            itp.push(seg.to_string().into());
         }
         Ok(itp)
     }
@@ -202,8 +202,8 @@ impl ItemPathBuf {
         Self::default()
     }
 
-    pub fn push(&mut self, segment: impl AsRef<str>) {
-        self.segments.push(Intern::new(segment.as_ref().into()))
+    pub fn push(&mut self, segment: Intern<String>) {
+        self.segments.push(segment)
     }
 }
 

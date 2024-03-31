@@ -1,6 +1,6 @@
-use fnv::{FnvHashMap, FnvHashSet};
+use fnv::FnvHashMap;
+use internment::Intern;
 use rotth_parser::{hir, types::Primitive};
-use smol_str::SmolStr;
 use std::fmt::Write;
 
 use crate::{
@@ -76,7 +76,7 @@ fn substitutions(subs: &mut FnvHashMap<GenId, ReifiedType>, g: &Type, c: &Reifie
 
 #[derive(Debug, Clone)]
 pub struct CStruct {
-    pub fields: FnvHashMap<SmolStr, Field>,
+    pub fields: FnvHashMap<Intern<String>, Field>,
 }
 
 impl CStruct {
@@ -93,7 +93,7 @@ pub struct Field {
 pub type ConcreteNode = TypedNode<ReifiedType, Intrinsic>;
 #[derive(Debug, Clone)]
 pub struct CProc {
-    pub generics: FnvHashMap<SmolStr, GenId>,
+    pub generics: FnvHashMap<Intern<String>, GenId>,
     pub vars: FnvHashMap<ItemPathBuf, ReifiedType>,
     pub ins: Vec<ReifiedType>,
     pub outs: Vec<ReifiedType>,

@@ -50,8 +50,8 @@ where
             .collect::<Vec<_>>()
             .then(path().then(generic_params.or_not()))
             .map_with(|(ptr, (ty, params)), span| {
-                let mut ty = if let Some(type_name) = ty.inner.only() {
-                    match type_name {
+                let mut ty = if let Some(type_name) = ty.inner.first() {
+                    match &**type_name {
                         "void" => Type::Primitive(Primitive::Void),
                         "bool" => Type::Primitive(Primitive::Bool),
                         "char" => Type::Primitive(Primitive::Char),

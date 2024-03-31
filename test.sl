@@ -1,4 +1,6 @@
-proc main: i64 do
-    let foo = 1 + 2.add(3.sub(4 + 5))
-    foo = 69
-end
+proc fib i64 : i64 do
+    0
+    match i do
+        1 => 2
+        3 => 4
+    5

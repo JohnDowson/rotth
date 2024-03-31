@@ -8,20 +8,19 @@ members = [
   "rotth-lsp",
   "spanner",
   "simplearena",
-  "chisel",
   "itempath",
   "slate-frontend",
 ]
 
 [workspace.dependencies]
-chumsky = { version = "1.0.0-alpha.6", features = ["pratt"] }
+chumsky = { version = "1.0.0-alpha.6", features = ["pratt", "label"] }
 logos = "0.14"
 ariadne = "0.4"
 clap = { version = "4", features = ["derive"] }
 smol_str = { version = "0.2", features = ["serde"] }
 thiserror = "1.0"
 serde = { version = "1.0.197", features = ["derive"] }
-tokio = { version = "1.36.0", features = ["fs", "rt-multi-thread"] }
+tokio = { version = "1.36.0", features = ["full"] }
 internment = "0.7.4"
 somok = "1.5.0"
 fnv = "1.0.7"

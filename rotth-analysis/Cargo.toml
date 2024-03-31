@@ -15,3 +15,4 @@ spanner = { path = "../spanner" }
 itempath = { path = "../itempath" }
 thiserror.workspace = true
 smol_str.workspace = true
+internment.workspace = true

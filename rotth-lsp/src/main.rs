@@ -1,10 +1,11 @@
 use chumsky::error::RichReason;
 use dashmap::DashMap;
+use internment::Intern;
 use ropey::Rope;
 use rotth_lexer::lex;
 use rotth_lsp::completion::{completion, CompleteCompletionItem};
 use rotth_lsp::semantic_token::{semantic_token_from_ast, CompleteSemanticToken, LEGEND_TYPE};
-use rotth_parser::ast::{parse, TopLevel};
+use rotth_parser::ast::{parse, TopLevel, Use};
 use rotth_parser::ParserError;
 use somok::{Leaksome, Somok};
 use spanner::Spanned;
@@ -35,7 +36,7 @@ impl<'s> Backend {
         &self,
         parent: Option<&Path>,
         path: &Path,
-    ) -> tokio::io::Result<Vec<(PathBuf, PathBuf)>> {
+    ) -> tokio::io::Result<Vec<(Intern<PathBuf>, PathBuf)>> {
         let path = if let Some(parent) = parent {
             parent.parent().unwrap().join(path).canonicalize()
         } else {
@@ -58,12 +59,18 @@ impl<'s> Backend {
             })
             .await
             .unwrap();
-        let includes: Vec<(PathBuf, PathBuf)> = ast
+        let includes: Vec<_> = ast
             .iter()
             .filter_map(|i| {
-                if let TopLevel::Include(inc) = &**i {
-                    let parent = i.span.file.to_path_buf();
-                    let path = parent.parent().unwrap().join(&*inc.path);
+                if let TopLevel::Use(Use {
+                    use_: _,
+                    name: _,
+                    from: _,
+                    path,
+                }) = &i.inner
+                {
+                    let parent = i.span.file;
+                    let path = parent.parent().unwrap().join(&*path.inner.last().unwrap());
                     self.include_map
                         .entry(parent.to_path_buf())
                         .or_default()
@@ -83,7 +90,7 @@ impl<'s> Backend {
         let rope = ropey::Rope::from_str(&params.text);
         self.document_map
             .insert(params.uri.to_file_path().unwrap(), rope.clone());
-        let path = &*params.uri.to_file_path().unwrap().into_boxed_path().leak();
+        let path = Intern::new(params.uri.to_file_path().ok()?);
 
         let tokens = lex(&params.text, path);
         let ast = match parse(tokens) {
@@ -141,7 +148,7 @@ impl<'s> Backend {
             } // TODO!
         };
 
-        ast.0.some()
+        ast.some()
     }
 
     async fn on_change(&self, params: TextDocument) {
@@ -206,8 +213,9 @@ impl LanguageServer for Backend {
                 completion_provider: Some(CompletionOptions {
                     resolve_provider: Some(false),
                     trigger_characters: None,
-                    work_done_progress_options: Default::default(),
                     all_commit_characters: None,
+                    work_done_progress_options: Default::default(),
+                    completion_item: None,
                 }),
                 semantic_tokens_provider: Some(
                     SemanticTokensServerCapabilities::SemanticTokensRegistrationOptions(
@@ -371,7 +379,7 @@ impl LanguageServer for Backend {
 
         let item = self.ast_map.iter().find_map(|r| {
             for item in r.value() {
-                if item.name().unwrap() == word {
+                if &**item.inner.name() == word {
                     return item.clone().some();
                 }
             }
@@ -382,7 +390,7 @@ impl LanguageServer for Backend {
             let span = &item.span;
             let uri = Url::from_file_path(&*span.file).unwrap();
 
-            let rope = &*self.document_map.get(span.file)?;
+            let rope = &*self.document_map.get(&**span.file)?;
 
             let start_position = offset_to_position(span.start, rope)?;
             let end_position = offset_to_position(span.end, rope)?;

@@ -1,7 +1,7 @@
 use crate::ast::GenericParams;
 use fnv::FnvHashMap;
+use internment::Intern;
 use itempath::{path, ItemPath, ItemPathBuf};
-use smol_str::SmolStr;
 use spanner::Spanned;
 use std::fmt::Write;
 
@@ -53,7 +53,7 @@ impl Type {
                         }
                     }
                     write!(paramstr, "]").unwrap();
-                    base.push(paramstr);
+                    base.push(paramstr.into());
                 }
                 base
             }
@@ -105,13 +105,13 @@ impl Primitive {
 
 pub struct StructBuilder<'i> {
     index: &'i mut StructIndex,
-    generics: Vec<Spanned<SmolStr>>,
-    fields: FnvHashMap<SmolStr, Spanned<Type>>,
+    generics: Vec<Spanned<Intern<String>>>,
+    fields: FnvHashMap<Intern<String>, Spanned<Type>>,
     name: ItemPathBuf,
 }
 
 impl<'i> StructBuilder<'i> {
-    pub fn field(&mut self, name: SmolStr, ty: Spanned<Type>) -> &mut Self {
+    pub fn field(&mut self, name: Intern<String>, ty: Spanned<Type>) -> &mut Self {
         self.fields.insert(name, ty);
         self
     }
@@ -135,7 +135,7 @@ impl StructIndex {
     pub fn new_struct(
         &'_ mut self,
         name: ItemPathBuf,
-        generics: Vec<Spanned<SmolStr>>,
+        generics: Vec<Spanned<Intern<String>>>,
     ) -> StructBuilder<'_> {
         StructBuilder {
             index: self,
@@ -173,6 +173,6 @@ impl<'s> IntoIterator for &'s StructIndex {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Struct {
     pub name: ItemPathBuf,
-    pub generics: Vec<Spanned<SmolStr>>,
-    pub fields: FnvHashMap<SmolStr, Spanned<Type>>,
+    pub generics: Vec<Spanned<Intern<String>>>,
+    pub fields: FnvHashMap<Intern<String>, Spanned<Type>>,
 }

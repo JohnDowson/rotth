@@ -11,7 +11,7 @@ pub enum CompleteCompletionItem {
 pub fn completion(ast: &[Spanned<TopLevel>], ident_offset: usize) -> Vec<CompleteCompletionItem> {
     let mut res = Vec::default();
     for item in ast.iter() {
-        match &**item {
+        match &item.inner {
             TopLevel::Proc(p) => {
                 if p.name.span.end < ident_offset {
                     let Spanned {
@@ -27,15 +27,6 @@ pub fn completion(ast: &[Spanned<TopLevel>], ident_offset: usize) -> Vec<Complet
                         span: _,
                         inner: Word(name),
                     } = &c.name;
-                    res.push(CompleteCompletionItem::Proc(name.to_string()));
-                }
-            }
-            TopLevel::Mem(m) => {
-                if m.name.span.end < ident_offset {
-                    let Spanned {
-                        span: _,
-                        inner: Word(name),
-                    } = &m.name;
                     res.push(CompleteCompletionItem::Proc(name.to_string()));
                 }
             }

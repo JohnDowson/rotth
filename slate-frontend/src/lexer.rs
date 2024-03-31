@@ -8,6 +8,15 @@ fn to_char(l: &'_ mut Lexer<'_, Token>) -> Option<char> {
     l.slice().chars().nth(1)
 }
 
+fn indent_level(l: &'_ mut Lexer<'_, Token>) -> Option<usize> {
+    // skip newline
+    let mut chars = l.slice().chars().skip(1);
+    let Some(first) = chars.next() else {
+        return Some(0);
+    };
+    chars.clone().all(|c| c == first).then(|| chars.count() + 1)
+}
+
 fn to_bool(l: &'_ mut Lexer<'_, Token>) -> Option<bool> {
     match l.slice() {
         "true" => Some(true),
@@ -51,6 +60,8 @@ pub enum Token {
     DoubleColon,
     #[token(",")]
     Comma,
+    #[token("=>")]
+    FatArrow,
 
     #[regex(r"[_A-Za-z][_A-Za-z0-9]*", to_interned_string)]
     Word(Intern<String>),
@@ -101,13 +112,14 @@ pub enum Token {
     KwStruct,
     #[token("cast")]
     KwCast,
-    #[token("end")]
-    KwEnd,
 
     #[regex(r";.*\n", logos::skip)]
     Comment,
 
-    #[regex(r"\p{Whitespace}+", logos::skip)]
+    #[regex(r"\n( |\t)*", indent_level, priority = 2)]
+    Indent(usize),
+
+    #[regex(r"[ \t]+", logos::skip, priority = 1)]
     Whitespace,
 
     Error,
@@ -128,6 +140,7 @@ impl std::fmt::Debug for Token {
             Token::DoubleColon => write!(f, "::"),
             Token::OpDot => write!(f, "."),
             Token::Comma => write!(f, ","),
+            Token::FatArrow => write!(f, "=>"),
 
             Token::Word(word) => write!(f, "W({word})"),
             Token::Bool(b) => write!(f, "{b}"),
@@ -153,8 +166,8 @@ impl std::fmt::Debug for Token {
             Token::KwLet => write!(f, "let"),
             Token::KwStruct => write!(f, "struct"),
             Token::KwCast => write!(f, "cast"),
-            Token::KwEnd => write!(f, "end"),
             Token::Comment => write!(f, "<comment>"),
+            Token::Indent(level) => write!(f, "<indent-{}>", level),
             Token::Whitespace => write!(f, "<whitespace>"),
             Token::Error => write!(f, "<error>"),
         }

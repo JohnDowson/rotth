@@ -446,8 +446,8 @@ impl ResolvedFile {
 #[derive(Debug, Clone)]
 pub struct ResolvedStruct {
     pub name: Spanned<Word>,
-    pub generics: Vec<Spanned<SmolStr>>,
-    pub fields: FnvHashMap<SmolStr, Spanned<NameTypePair>>,
+    pub generics: Vec<Spanned<Intern<String>>>,
+    pub fields: FnvHashMap<Intern<String>, Spanned<NameTypePair>>,
 }
 
 pub fn resolve_includes(root: Module) -> Result<ResolvedFile, ParserError<'static>> {
@@ -478,7 +478,7 @@ fn resolve_includes_from(
         let tokens = lex(&module_src, Intern::new(module_file));
 
         let mut module_path = path.clone();
-        module_path.push(&*name.inner.0);
+        module_path.push(name.inner.0);
 
         let module_ast = parse(tokens)?;
         let resolved = resolve_includes_from(module_path, module_ast)?;
@@ -636,7 +636,7 @@ fn resolve_includes_from(
 
 fn make_struct(s: Struct) -> Result<ResolvedStruct, Vec<Error<'static>>> {
     let mut errors = Vec::default();
-    let mut fields: FnvHashMap<SmolStr, Spanned<NameTypePair>> = Default::default();
+    let mut fields: FnvHashMap<Intern<String>, Spanned<NameTypePair>> = Default::default();
     for field in s.body {
         let Word(name) = &field.inner.name.inner;
 

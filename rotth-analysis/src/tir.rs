@@ -1,4 +1,5 @@
 use fnv::FnvHashMap;
+use internment::Intern;
 use itempath::{ItemPath, ItemPathBuf};
 use rotth_parser::{
     ast::Literal,
@@ -88,7 +89,7 @@ pub struct CondBranch<T: TypeRepr, I> {
 #[derive(Debug, Clone)]
 pub struct FieldAccess<T> {
     pub ty: T,
-    pub field: SmolStr,
+    pub field: Intern<String>,
 }
 
 #[derive(Clone)]
@@ -155,7 +156,7 @@ pub struct GenId(pub usize);
 
 #[derive(Debug, Clone)]
 pub struct KProc<T> {
-    pub generics: FnvHashMap<SmolStr, GenId>,
+    pub generics: FnvHashMap<Intern<String>, GenId>,
     pub vars: FnvHashMap<ItemPathBuf, Var<TermId>>,
     pub span: Span,
     pub ins: Vec<TermId>,
@@ -179,7 +180,7 @@ pub struct Var<T> {
 pub struct KStruct {
     pub typename: ItemPathBuf,
     pub generics: Vec<GenId>,
-    pub fields: FnvHashMap<SmolStr, Type>,
+    pub fields: FnvHashMap<Intern<String>, Type>,
 }
 
 #[derive(Debug, Clone)]
@@ -232,7 +233,7 @@ impl Walker {
         };
 
         for struct_ in this.structs.clone() {
-            let mut generics_hash: FnvHashMap<SmolStr, GenId> = Default::default();
+            let mut generics_hash: FnvHashMap<Intern<String>, GenId> = Default::default();
             let mut generics: Vec<GenId> = Default::default();
             for (name, gid) in struct_
                 .generics
@@ -599,7 +600,7 @@ impl Walker {
         body: &[Spanned<Hir>],
         vars: &FnvHashMap<ItemPathBuf, Var<TermId>>,
         bindings_in_scope: Option<&FnvHashMap<ItemPathBuf, TermId>>,
-        generics: Option<&FnvHashMap<SmolStr, GenId>>,
+        generics: Option<&FnvHashMap<Intern<String>, GenId>>,
         expected_outs: Option<&TypeStack>,
         in_const: bool,
     ) -> Result<Vec<TirNode>, Error> {
@@ -1522,7 +1523,10 @@ impl Walker {
                 }
                 Hir::FieldAccess(hir::FieldAccess { field }) => {
                     let (in_ty, out_ty) = if let Some(ty) = ins.pop(heap) {
-                        let field_ty = self.engine.get_struct_field_through_ptr(ty, field).unwrap();
+                        let field_ty = self
+                            .engine
+                            .get_struct_field_through_ptr(ty, *field)
+                            .unwrap();
 
                         let out_ty = self.engine.insert(TypeInfo::Ptr(field_ty));
 
@@ -1539,7 +1543,7 @@ impl Walker {
                     TypedNode {
                         span: node.span,
                         node: TypedIr::FieldAccess(FieldAccess {
-                            field: field.clone(),
+                            field: *field,
                             ty: in_ty,
                         }),
                         ins: vec![in_ty],
@@ -1561,7 +1565,7 @@ impl Walker {
     fn abstract_to_concrete_type(
         &mut self,
         ty: &Spanned<types::Type>,
-        generics: Option<&FnvHashMap<SmolStr, GenId>>,
+        generics: Option<&FnvHashMap<Intern<String>, GenId>>,
     ) -> Result<Type, Error> {
         let span = ty.span;
         let kind = match &ty.inner {
@@ -1589,7 +1593,7 @@ impl Walker {
                         todo!("This is a error yo")
                     }
                 } else if let Some(ty) = self.structs.get(name).cloned() {
-                    let mut generics_hash: FnvHashMap<SmolStr, GenId> = Default::default();
+                    let mut generics_hash: FnvHashMap<Intern<String>, GenId> = Default::default();
                     let mut generics: Vec<GenId> = Default::default();
                     for (name, gid) in ty.generics.into_iter().map(|ty| (ty.inner, self.gen_id())) {
                         generics.push(gid);
@@ -1607,8 +1611,8 @@ impl Walker {
                     });
                     self.known_structs.insert(ty.name, s.clone());
                     s
-                } else if let Some(g) = name.only() {
-                    if let Some(id) = generics.and_then(|gs| gs.get(g)) {
+                } else if let Some(g) = name.first() {
+                    if let Some(id) = generics.and_then(|gs| gs.get(&g)) {
                         return Ok(Type::Generic(*id));
                     } else {
                         return error(

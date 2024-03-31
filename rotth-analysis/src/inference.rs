@@ -1,7 +1,7 @@
 use fnv::FnvHashMap;
+use internment::Intern;
 use itempath::ItemPathBuf;
 use rotth_parser::types::Primitive;
-use smol_str::SmolStr;
 use std::{fmt::Write, rc::Rc};
 
 use crate::{
@@ -34,7 +34,7 @@ pub struct ProtoId(usize);
 #[derive(Debug)]
 pub struct StructProto {
     pub generics: Vec<GenId>,
-    pub fields: FnvHashMap<SmolStr, TermId>,
+    pub fields: FnvHashMap<Intern<String>, TermId>,
 }
 
 /// A identifier to uniquely refer to instantiated struct,
@@ -42,7 +42,7 @@ pub struct StructProto {
 pub struct InstId(usize);
 #[derive(Debug, Clone)]
 pub struct StructInst {
-    pub fields: FnvHashMap<SmolStr, TermId>,
+    pub fields: FnvHashMap<Intern<String>, TermId>,
 }
 
 /// Information about a type term
@@ -212,10 +212,14 @@ impl Insert<Primitive> for Engine {
 }
 
 impl Engine {
-    pub fn get_struct_field_through_ptr(&self, term: TermId, field: &SmolStr) -> Option<TermId> {
+    pub fn get_struct_field_through_ptr(
+        &self,
+        term: TermId,
+        field: Intern<String>,
+    ) -> Option<TermId> {
         match &self.vars[term.0] {
             TypeInfo::Ptr(term) => match &self.vars[term.0] {
-                TypeInfo::Struct(_, inst) => self.insts[inst.0].fields.get(field).copied(),
+                TypeInfo::Struct(_, inst) => self.insts[inst.0].fields.get(&field).copied(),
                 _ => None,
             },
             _ => None,
@@ -505,7 +509,7 @@ impl Engine {
                         let f_offset = offset;
                         offset += ty.size();
                         Ok((
-                            n.clone(),
+                            *n,
                             Field {
                                 ty,
                                 offset: f_offset,

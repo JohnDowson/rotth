@@ -20,6 +20,10 @@ fn to_smol_str(l: &'_ mut Lexer<'_, Token>) -> SmolStr {
     SmolStr::from(l.slice())
 }
 
+fn to_interned_string(l: &'_ mut Lexer<'_, Token>) -> Intern<String> {
+    Intern::new(l.slice().to_string())
+}
+
 #[derive(Clone, Hash, PartialEq, Eq, Logos)]
 pub enum Token {
     #[token("->", priority = 1000000)]
@@ -32,15 +36,15 @@ pub enum Token {
     Write,
     #[regex(
         r"[()\{\}<>\|\\/#$%^&*\-=+?][()\{\}<>\|\\/!@#$%^&*\-=+?]?",
-        to_smol_str
+        to_interned_string
     )]
-    Operator(SmolStr),
+    Operator(Intern<String>),
     #[regex(
         r"[_A-Za-z][()\{\}<>\|\\/!#$%^&*\-=+_?A-Za-z0-9]*",
-        to_smol_str,
+        to_interned_string,
         priority = 0
     )]
-    Word(SmolStr),
+    Word(Intern<String>),
     #[regex("false|true", to_bool)]
     Bool(bool),
     #[regex(r#""(?:[^"]|\\")*""#, to_smol_str)]

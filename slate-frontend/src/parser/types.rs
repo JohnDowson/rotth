@@ -53,7 +53,7 @@ impl Type {
                         }
                     }
                     write!(paramstr, "]").unwrap();
-                    base.push(paramstr);
+                    base.push(paramstr.into());
                 }
                 base
             }

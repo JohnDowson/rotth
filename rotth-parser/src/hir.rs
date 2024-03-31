@@ -8,6 +8,7 @@ use crate::{
     types::{Custom, StructIndex, Type},
 };
 use fnv::FnvHashMap;
+use internment::Intern;
 use itempath::{ItemPath, ItemPathBuf};
 use smol_str::SmolStr;
 use somok::{Either, Somok};
@@ -62,7 +63,7 @@ pub struct Var {
 
 #[derive(Debug, Clone)]
 pub struct Proc {
-    pub generics: Vec<SmolStr>,
+    pub generics: Vec<Intern<String>>,
     pub ins: Vec<Spanned<Type>>,
     pub outs: Vec<Spanned<Type>>,
     pub body: Vec<Spanned<Hir>>,
@@ -98,7 +99,7 @@ pub enum Hir {
 }
 #[derive(Debug, Clone)]
 pub struct FieldAccess {
-    pub field: SmolStr,
+    pub field: Intern<String>,
 }
 #[derive(Clone)]
 pub struct If {
@@ -213,8 +214,8 @@ impl Walker {
                 }
                 .some()
             }
-            Expr::Path(p) => p.only()?,
-            Expr::Word(Word(w)) => w.as_str(),
+            Expr::Path(p) => p.first()?,
+            Expr::Word(Word(w)) => *w,
 
             Expr::Read(i) => {
                 return Spanned {
@@ -232,7 +233,7 @@ impl Walker {
             }
             _ => return None,
         };
-        let intrinsic = match word {
+        let intrinsic = match &**word {
             "drop" => Intrinsic::Drop,
             "dup" => Intrinsic::Dup,
             "swap" => Intrinsic::Swap,
@@ -281,7 +282,7 @@ impl Walker {
         self.current_path = mp;
     }
 
-    fn walk_struct(&mut self, name: SmolStr) {
+    fn walk_struct(&mut self, name: Intern<String>) {
         let path = self.current_path.child(name);
         let struct_ = if let Some(Spanned {
             span: _,
@@ -325,7 +326,7 @@ impl Walker {
         builder.finish();
     }
 
-    fn walk_ref(&mut self, name: SmolStr, referee: &ItemPath) {
+    fn walk_ref(&mut self, name: Intern<String>, referee: &ItemPath) {
         let path = self.current_path.child(name);
         match self.ast.find(referee) {
             Some(Spanned {
@@ -348,7 +349,7 @@ impl Walker {
         }
     }
 
-    fn walk_toplevel(&mut self, name: SmolStr, item: ResolvedItem) {
+    fn walk_toplevel(&mut self, name: Intern<String>, item: ResolvedItem) {
         match item {
             ResolvedItem::Ref(path) => self.walk_ref(name, &path),
             ResolvedItem::Proc(_) => self.walk_proc(name),
@@ -367,7 +368,7 @@ impl Walker {
         }
     }
 
-    fn walk_const(&mut self, name: SmolStr) {
+    fn walk_const(&mut self, name: Intern<String>) {
         let path = self.current_path.child(name.clone());
         let const_ = if let Some(Spanned {
             span: _,
@@ -394,8 +395,8 @@ impl Walker {
         );
     }
 
-    fn walk_proc(&mut self, name: SmolStr) {
-        let path = self.current_path.child(name.clone());
+    fn walk_proc(&mut self, name: Intern<String>) {
+        let path = self.current_path.child(name);
         let proc = if let Some(Spanned {
             span: _,
             inner: ResolvedItem::Proc(p),
@@ -498,7 +499,7 @@ impl Walker {
             .iter()
             .map(|b| {
                 b.map_ref(|b| match b {
-                    Either::Left(Word(w)) if w == "_" => Binding::Ignore,
+                    Either::Left(Word(w)) if **w == "_" => Binding::Ignore,
                     Either::Left(Word(w)) => Binding::Bind {
                         name: self.current_path.child(w.clone()),
                         ty: None,
@@ -532,7 +533,7 @@ impl Walker {
 
     fn walk_cond_branch(&mut self, branch: &ast::CondBranch) -> CondBranch {
         let pattern = match &branch.pat.inner {
-            Expr::Word(Word(w)) if w == "_" => Spanned {
+            Expr::Word(Word(w)) if **w == "_" => Spanned {
                 span: branch.pat.span,
                 inner: Hir::IgnorePattern,
             },

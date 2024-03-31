@@ -27,15 +27,10 @@ pub fn semantic_token_from_ast(ast: &[Spanned<TopLevel>]) -> Vec<CompleteSemanti
     let mut semantic_tokens = vec![];
 
     for item in ast.iter() {
-        match &**item {
-            TopLevel::Include(i) => {
-                push_token(&i.include, &mut semantic_tokens, SemanticTokenType::KEYWORD);
-                if let Some(Qualifiers { items, from }) = &i.qualifiers {
-                    for item in items {
-                        push_token(item, &mut semantic_tokens, SemanticTokenType::FUNCTION);
-                    }
-                    push_token(from, &mut semantic_tokens, SemanticTokenType::KEYWORD);
-                }
+        match &item.inner {
+            TopLevel::Use(i) => {
+                push_token(&i.use_, &mut semantic_tokens, SemanticTokenType::KEYWORD);
+                push_token(&i.name, &mut semantic_tokens, SemanticTokenType::FUNCTION);
                 push_token(&i.path, &mut semantic_tokens, SemanticTokenType::STRING);
             }
             TopLevel::Proc(p) => {
@@ -66,13 +61,13 @@ pub fn semantic_token_from_ast(ast: &[Spanned<TopLevel>]) -> Vec<CompleteSemanti
                 };
                 push_token(&p.name, &mut semantic_tokens, SemanticTokenType::FUNCTION);
                 let signature = &p.signature;
-                for ty in &signature.ins {
+                for ty in &signature.inner.ins {
                     push_token(ty, &mut semantic_tokens, SemanticTokenType::TYPE)
                 }
-                if let Some(sep) = &signature.sep {
+                if let Some(sep) = &signature.inner.sep {
                     push_token(sep, &mut semantic_tokens, SemanticTokenType::KEYWORD);
                 }
-                if let Some(outs) = &signature.outs {
+                if let Some(outs) = &signature.inner.outs {
                     for ty in outs {
                         push_token(ty, &mut semantic_tokens, SemanticTokenType::TYPE)
                     }
@@ -92,15 +87,6 @@ pub fn semantic_token_from_ast(ast: &[Spanned<TopLevel>]) -> Vec<CompleteSemanti
                 }
                 push_token(&c.end, &mut semantic_tokens, SemanticTokenType::KEYWORD);
             }
-            TopLevel::Mem(m) => {
-                push_token(&m.mem, &mut semantic_tokens, SemanticTokenType::KEYWORD);
-                push_token(&m.name, &mut semantic_tokens, SemanticTokenType::TYPE);
-                push_token(&m.do_, &mut semantic_tokens, SemanticTokenType::KEYWORD);
-                for e in &m.body {
-                    push_expr_tokens(e, &mut semantic_tokens);
-                }
-                push_token(&m.end, &mut semantic_tokens, SemanticTokenType::KEYWORD);
-            }
             TopLevel::Var(v) => {
                 push_token(&v.var, &mut semantic_tokens, SemanticTokenType::KEYWORD);
                 push_token(&v.name, &mut semantic_tokens, SemanticTokenType::TYPE);
@@ -112,12 +98,21 @@ pub fn semantic_token_from_ast(ast: &[Spanned<TopLevel>]) -> Vec<CompleteSemanti
                 push_token(&s.name, &mut semantic_tokens, SemanticTokenType::TYPE);
                 push_token(&s.do_, &mut semantic_tokens, SemanticTokenType::KEYWORD);
                 for f in &s.body {
-                    push_token(&f.name, &mut semantic_tokens, SemanticTokenType::PARAMETER);
-                    push_token(&f.name, &mut semantic_tokens, SemanticTokenType::KEYWORD);
-                    push_token(&f.ty, &mut semantic_tokens, SemanticTokenType::TYPE);
+                    push_token(
+                        &f.inner.name,
+                        &mut semantic_tokens,
+                        SemanticTokenType::PARAMETER,
+                    );
+                    push_token(
+                        &f.inner.name,
+                        &mut semantic_tokens,
+                        SemanticTokenType::KEYWORD,
+                    );
+                    push_token(&f.inner.ty, &mut semantic_tokens, SemanticTokenType::TYPE);
                 }
                 push_token(&s.end, &mut semantic_tokens, SemanticTokenType::KEYWORD);
             }
+            TopLevel::Module(_) => todo!(),
         }
     }
 
@@ -135,12 +130,11 @@ fn push_expr_tokens(node: &Spanned<Expr>, tokens: &mut Vec<CompleteSemanticToken
             push_token(&w.write, tokens, SemanticTokenType::KEYWORD);
             push_token(&w.ty, tokens, SemanticTokenType::TYPE);
         }
-        Expr::CompStop => push_token(node, tokens, SemanticTokenType::KEYWORD),
         Expr::Type(_) => push_token(node, tokens, SemanticTokenType::TYPE),
         Expr::Bind(b) => {
             push_token(&b.bind, tokens, SemanticTokenType::KEYWORD);
             for binding in &b.bindings {
-                match &**binding {
+                match &binding.inner {
                     Either::Left(_) => push_token(binding, tokens, SemanticTokenType::VARIABLE),
                     Either::Right(NameTypePair { name, sep, ty }) => {
                         push_token(name, tokens, SemanticTokenType::VARIABLE);
@@ -187,10 +181,10 @@ fn push_expr_tokens(node: &Spanned<Expr>, tokens: &mut Vec<CompleteSemanticToken
                 push_expr_tokens(e, tokens);
             }
             for b in &c.branches {
-                push_token(&b.else_, tokens, SemanticTokenType::KEYWORD);
-                push_token(&b.pat, tokens, SemanticTokenType::PARAMETER);
-                push_token(&b.do_, tokens, SemanticTokenType::KEYWORD);
-                for e in &b.body {
+                push_token(&b.inner.else_, tokens, SemanticTokenType::KEYWORD);
+                push_token(&b.inner.pat, tokens, SemanticTokenType::PARAMETER);
+                push_token(&b.inner.do_, tokens, SemanticTokenType::KEYWORD);
+                for e in &b.inner.body {
                     push_expr_tokens(e, tokens);
                 }
             }

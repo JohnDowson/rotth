@@ -251,7 +251,6 @@ impl Compiler {
                     Intrinsic::Le => proc.le(),
                     Intrinsic::Gt => proc.gt(),
                     Intrinsic::Ge => proc.ge(),
-                    i => todo!("{i:?}"),
                 },
                 TypedIr::Bind(Bind { bindings, body }) => {
                     proc.bindings.push(Vec::new());
@@ -320,7 +319,7 @@ impl Compiler {
     }
 
     fn mangle(&self, name: &ItemPath) -> Mangled {
-        let joiner = "__".into();
+        let joiner = "__".to_string().into();
         let name = name
             .iter()
             .intersperse(&joiner)
