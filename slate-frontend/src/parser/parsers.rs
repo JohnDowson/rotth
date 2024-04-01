@@ -10,34 +10,48 @@ use crate::lexer::Token;
 
 use super::{
     ast::{
-        Binary, Call, Cast, Const, ConstSignature, Else, Expr, FieldAccess, GenericParams,
-        Generics, If, Keyword, Let, Literal, Match, MatchBranch, Module, ModuleDef, NameTypePair,
-        Proc, ProcSignature, Punctuation, Read, Static, Struct, TopLevel, Unary, Use, While, Word,
+        Binary, Call, Const, Constraint, Else, Expr, FieldAccess, FieldValuePair, Func,
+        FuncSignature, Generic, GenericParams, Generics, If, ImplLevel, InherentImpl, Keyword,
+        Lambda, LambdaArg, Let, Literal, Match, MatchBranch, Module, ModuleDef, NameTypePair,
+        Punctuation, Return, SignatureReturn, Static, Struct, StructLiteral, TopLevel, TraitImpl,
+        TypeAscription, Unary, Use, While, Word,
     },
     types::{Custom, Primitive, Type},
 };
 
-trait RParser<'i, I, O>
+trait NParser<'i, I, O>
 where
-    Self: Parser<'i, I, Spanned<O>, extra::Full<Rich<'i, Token, Span>, Vec<usize>, usize>> + Clone,
+    Self: Parser<'i, I, O, extra::Full<Rich<'i, Token, Span>, (), usize>> + Clone,
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+}
+impl<'i, I, O, T> NParser<'i, I, O> for T
+where
+    T: Parser<'i, I, O, extra::Full<Rich<'i, Token, Span>, (), usize>> + Clone,
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
 }
 
-impl<'i, I, O, T> RParser<'i, I, O> for T
+trait SParser<'i, I, O>
 where
-    T: Parser<'i, I, Spanned<O>, extra::Full<Rich<'i, Token, Span>, Vec<usize>, usize>> + Clone,
+    Self: Parser<'i, I, Spanned<O>, extra::Full<Rich<'i, Token, Span>, (), usize>> + Clone,
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+}
+impl<'i, I, O, T> SParser<'i, I, O> for T
+where
+    T: Parser<'i, I, Spanned<O>, extra::Full<Rich<'i, Token, Span>, (), usize>> + Clone,
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
 }
 
-fn ty<'i, I>() -> impl RParser<'i, I, Type>
+fn ty<'i, I>() -> impl SParser<'i, I, Type>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
     recursive(|ty| {
         let generic_params = lbracket()
-            .then(ty.repeated().at_least(1).collect())
+            .then(ty.repeated().collect())
             .then(rbracket())
             .map_with(|((left_bracket, tys), right_bracket), span| Spanned {
                 span: span.span(),
@@ -48,8 +62,9 @@ where
                 },
             });
         just(Token::OpAnd)
+            .to(())
             .repeated()
-            .collect::<Vec<_>>()
+            .collect::<Vec<()>>()
             .then(path().then(generic_params.or_not()))
             .map_with(|(ptr, (ty, params)), span| {
                 let mut ty = if let Some(type_name) = ty.inner.first() {
@@ -120,40 +135,52 @@ fn parse_string(s: &str, path: Intern<PathBuf>) -> Result<Intern<String>, Rich<'
         .map(Into::into)
 }
 
-fn literal<'i, I>() -> impl RParser<'i, I, Literal>
+fn literal<'i, I>(expr: impl SParser<'i, I, Expr>) -> impl SParser<'i, I, Literal>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
-    select! {
-        Token::Bool(b) = span => Spanned { span: span.span(), inner: Literal::Bool(b)},
-        Token::Num(n) = span => {
-            if let Ok(i) = n.parse::<i64>(){
-                Spanned{ span: span.span(),inner: Literal::Int(i) }
-            }
-            else {
-                Spanned{ span: span.span(), inner: Literal::UInt(n.parse().unwrap()) }
-            }
+    choice((
+        lparen().then(rparen()).map_with(|_, extra| Spanned {
+            span: extra.span(),
+            inner: Literal::Unit,
+        }),
+        path()
+            .then(body_unspanned(field_value_pair(expr)))
+            .map_with(|(ty, fields), extra| Spanned {
+                span: extra.span(),
+                inner: Literal::Struct(StructLiteral { ty, fields }),
+            }),
+        select! {
+            Token::Bool(b) = span => Spanned { span: span.span(), inner: Literal::Bool(b)},
+            Token::Num(n) = span => {
+                if let Ok(i) = n.parse::<i64>(){
+                    Spanned{ span: span.span(),inner: Literal::Int(i) }
+                }
+                else {
+                    Spanned{ span: span.span(), inner: Literal::UInt(n.parse().unwrap()) }
+                }
+            },
+            Token::String(s) = span => {
+                let span: spanner::Span = span.span();
+                let s = parse_string(&s, span.context()).ok()?;
+                Spanned{ span, inner: Literal::String(s) }},
+            Token::Char(c) = span => Spanned { span: span.span(), inner: Literal::Char(c) },
         },
-        Token::String(s) = span => {
-            let span: spanner::Span = span.span();
-            let s = parse_string(&s, span.context()).ok()?;
-            Spanned{ span, inner: Literal::String(s) }},
-        Token::Char(c) = span => Spanned { span: span.span(), inner: Literal::Char(c) },
-    }
+    ))
     .labelled("Literal")
 }
 
-fn literal_expr<'i, I>() -> impl RParser<'i, I, Expr>
+fn literal_expr<'i, I>(expr: impl SParser<'i, I, Expr>) -> impl SParser<'i, I, Expr>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
-    literal().map(|Spanned { span, inner }| Spanned {
+    literal(expr).map(|Spanned { span, inner }| Spanned {
         span,
         inner: Expr::Literal(inner),
     })
 }
 
-fn kw_module<'i, I>() -> impl RParser<'i, I, Keyword>
+fn kw_module<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -163,7 +190,7 @@ where
     })
 }
 
-fn kw_use<'i, I>() -> impl RParser<'i, I, Keyword>
+fn kw_use<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -173,7 +200,7 @@ where
     })
 }
 
-fn kw_from<'i, I>() -> impl RParser<'i, I, Keyword>
+fn kw_from<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -183,7 +210,7 @@ where
     })
 }
 
-fn kw_let<'i, I>() -> impl RParser<'i, I, Keyword>
+fn kw_let<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -193,7 +220,17 @@ where
     })
 }
 
-fn kw_while<'i, I>() -> impl RParser<'i, I, Keyword>
+fn kw_lambda<'i, I>() -> impl SParser<'i, I, Keyword>
+where
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+    just(Token::KwLambda).map_with(|_, extra| Spanned {
+        span: extra.span(),
+        inner: Keyword::Lambda,
+    })
+}
+
+fn kw_while<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -202,7 +239,18 @@ where
         inner: Keyword::While,
     })
 }
-fn kw_match<'i, I>() -> impl RParser<'i, I, Keyword>
+
+fn kw_for<'i, I>() -> impl SParser<'i, I, Keyword>
+where
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+    just(Token::KwFor).map_with(|_, extra| Spanned {
+        span: extra.span(),
+        inner: Keyword::For,
+    })
+}
+
+fn kw_match<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -211,7 +259,7 @@ where
         inner: Keyword::Match,
     })
 }
-fn kw_if<'i, I>() -> impl RParser<'i, I, Keyword>
+fn kw_if<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -220,7 +268,7 @@ where
         inner: Keyword::If,
     })
 }
-fn kw_else<'i, I>() -> impl RParser<'i, I, Keyword>
+fn kw_else<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -229,16 +277,8 @@ where
         inner: Keyword::Else,
     })
 }
-fn kw_do<'i, I>() -> impl RParser<'i, I, Keyword>
-where
-    I: ValueInput<'i, Token = Token, Span = Span>,
-{
-    just(Token::KwDo).map_with(|_, extra| Spanned {
-        span: extra.span(),
-        inner: Keyword::Do,
-    })
-}
-fn kw_ret<'i, I>() -> impl RParser<'i, I, Keyword>
+
+fn kw_ret<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -247,26 +287,18 @@ where
         inner: Keyword::Return,
     })
 }
-fn kw_cast<'i, I>() -> impl RParser<'i, I, Keyword>
+
+fn kw_func<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
-    just(Token::KwCast).map_with(|_, extra| Spanned {
+    just(Token::KwFunc).map_with(|_, extra| Spanned {
         span: extra.span(),
-        inner: Keyword::Cast,
-    })
-}
-fn kw_proc<'i, I>() -> impl RParser<'i, I, Keyword>
-where
-    I: ValueInput<'i, Token = Token, Span = Span>,
-{
-    just(Token::KwProc).map_with(|_, extra| Spanned {
-        span: extra.span(),
-        inner: Keyword::Proc,
+        inner: Keyword::Func,
     })
 }
 
-fn kw_const<'i, I>() -> impl RParser<'i, I, Keyword>
+fn kw_const<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -276,7 +308,7 @@ where
     })
 }
 
-fn kw_static<'i, I>() -> impl RParser<'i, I, Keyword>
+fn kw_static<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -286,7 +318,7 @@ where
     })
 }
 
-fn kw_struct<'i, I>() -> impl RParser<'i, I, Keyword>
+fn kw_struct<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -296,7 +328,17 @@ where
     })
 }
 
-fn op_and<'i, I>() -> impl RParser<'i, I, Punctuation>
+fn kw_impl<'i, I>() -> impl SParser<'i, I, Keyword>
+where
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+    just(Token::KwImpl).map_with(|_, extra| Spanned {
+        span: extra.span(),
+        inner: Keyword::Impl,
+    })
+}
+
+fn op_and<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -306,7 +348,7 @@ where
     })
 }
 
-fn op_mul<'i, I>() -> impl RParser<'i, I, Punctuation>
+fn op_mul<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -316,7 +358,7 @@ where
     })
 }
 
-fn op_div<'i, I>() -> impl RParser<'i, I, Punctuation>
+fn op_div<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -326,7 +368,7 @@ where
     })
 }
 
-fn op_plus<'i, I>() -> impl RParser<'i, I, Punctuation>
+fn op_plus<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -336,7 +378,7 @@ where
     })
 }
 
-fn op_minus<'i, I>() -> impl RParser<'i, I, Punctuation>
+fn op_minus<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -346,7 +388,7 @@ where
     })
 }
 
-fn op_assign<'i, I>() -> impl RParser<'i, I, Punctuation>
+fn op_assign<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -356,7 +398,7 @@ where
     })
 }
 
-fn op_eq<'i, I>() -> impl RParser<'i, I, Punctuation>
+fn op_eq<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -366,7 +408,7 @@ where
     })
 }
 
-fn op_dot<'i, I>() -> impl RParser<'i, I, Punctuation>
+fn op_dot<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -376,7 +418,7 @@ where
     })
 }
 
-fn fat_arrow<'i, I>() -> impl RParser<'i, I, Punctuation>
+fn fat_arrow<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -386,7 +428,7 @@ where
     })
 }
 
-fn word<'i, I>() -> impl RParser<'i, I, Word>
+fn word<'i, I>() -> impl SParser<'i, I, Word>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -395,7 +437,7 @@ where
     }
 }
 
-fn word_expr<'i, I>() -> impl RParser<'i, I, Expr>
+fn word_expr<'i, I>() -> impl SParser<'i, I, Expr>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -404,7 +446,7 @@ where
     }
 }
 
-fn path<'i, I>() -> impl RParser<'i, I, ItemPathBuf>
+fn path<'i, I>() -> impl SParser<'i, I, ItemPathBuf>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -420,7 +462,7 @@ where
     })
 }
 
-fn path_expr<'i, I>() -> impl RParser<'i, I, Expr>
+fn path_expr<'i, I>() -> impl SParser<'i, I, Expr>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -436,7 +478,7 @@ where
     })
 }
 
-fn separator<'i, I>() -> impl RParser<'i, I, Punctuation>
+fn separator<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -446,106 +488,129 @@ where
     })
 }
 
-fn read_expr<'i, I>() -> impl RParser<'i, I, Expr>
+fn const_<'i: 'd, 'd, I>(expr: impl SParser<'i, I, Expr>) -> impl SParser<'i, I, Const>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
-    select! {
-        t @ Token::OpMul = span => Spanned { span: span.span(), inner: t },
-    }
-    .then(ty())
-    .map_with(|(read, ty), span| Spanned {
-        span: span.span(),
-        inner: Expr::Read(Read { read, ty }),
+    kw_const()
+        .then(word())
+        .then(type_ascription())
+        .then(op_assign())
+        .then(expr)
+        .map_with(
+            |((((const_, name), signature), assign), expr), span| Spanned {
+                span: span.span(),
+                inner: Const {
+                    const_,
+                    name,
+                    signature,
+                    assign,
+                    expr,
+                },
+            },
+        )
+}
+
+fn const_toplevel<'i, I>() -> impl SParser<'i, I, TopLevel>
+where
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+    const_(expr()).map(|Spanned { span, inner }| Spanned {
+        span,
+        inner: TopLevel::Const(inner),
     })
 }
 
-fn static_<'i, I>() -> impl RParser<'i, I, Static>
+fn const_expr<'i, I>(expr: impl SParser<'i, I, Expr>) -> impl SParser<'i, I, Expr>
+where
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+    const_(expr).map(|Spanned { span, inner }| Spanned {
+        span,
+        inner: Expr::Const(Box::new(inner)),
+    })
+}
+
+fn static_<'i, I>(expr: impl SParser<'i, I, Expr>) -> impl SParser<'i, I, Static>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
     kw_static()
         .then(word())
-        .then(separator())
-        .then(ty())
-        .map_with(|(((static_, name), sep), ty), span| Spanned {
-            span: span.span(),
-            inner: Static {
-                static_,
-                name,
-                sep,
-                ty,
+        .then(type_ascription())
+        .then(op_assign())
+        .then(expr)
+        .map_with(
+            |((((static_, name), signature), assign), expr), span| Spanned {
+                span: span.span(),
+                inner: Static {
+                    static_,
+                    name,
+                    signature,
+                    assign,
+                    expr,
+                },
             },
-        })
+        )
 }
 
-fn static_toplevel<'i, I>() -> impl RParser<'i, I, TopLevel>
+fn static_toplevel<'i, I>() -> impl SParser<'i, I, TopLevel>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
-    static_().map(|Spanned { span, inner }| Spanned {
+    static_(expr()).map(|Spanned { span, inner }| Spanned {
         span,
-        inner: TopLevel::Var(inner),
+        inner: TopLevel::Static(inner),
     })
 }
 
-fn static_expr<'i, I>() -> impl RParser<'i, I, Expr>
+fn static_expr<'i, I>(expr: impl SParser<'i, I, Expr>) -> impl SParser<'i, I, Expr>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
-    static_().map(|Spanned { span, inner }| Spanned {
+    static_(expr).map(|Spanned { span, inner }| Spanned {
         span,
-        inner: Expr::Static(inner),
+        inner: Expr::Static(Box::new(inner)),
     })
 }
 
-fn expr<'i: 'd, 'd, I>() -> impl RParser<'i, I, Expr>
+fn expr<'i: 'd, 'd, I>() -> impl SParser<'i, I, Expr>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
     recursive(|expr| {
         let while_ = kw_while()
             .then(expr.clone())
-            .then(kw_do().map_with(|d, e| {
-                e.state().push(0);
-                d
-            }))
             .then(body(expr.clone()))
-            .map_with(|(((while_, cond), do_), body), span| Spanned {
+            .map_with(|((while_, cond), body), span| Spanned {
                 span: span.span(),
-                inner: Expr::While(Box::new(While {
-                    while_,
-                    cond,
-                    do_,
-                    body,
-                })),
+                inner: Expr::While(Box::new(While { while_, cond, body })),
             });
 
-        let lie = kw_else()
-            .then(expr.clone().repeated().collect())
+        let lie = indent_same()
+            .ignore_then(kw_else())
+            .then(body(expr.clone()))
             .map(|(else_, body)| Else { else_, body });
 
         let if_ = kw_if()
-            .then(expr.clone().repeated().collect())
+            .then(expr.clone())
+            .then(body(expr.clone()))
             .then(lie.or_not())
-            .map_with(|((if_, truth), lie), span| Spanned {
-                span: span.span(),
-                inner: Expr::If(If { if_, truth, lie }),
+            .map_with(|(((if_, cond), truth), lie), extra| Spanned {
+                span: extra.span(),
+                inner: Expr::If(Box::new(If {
+                    if_,
+                    cond,
+                    truth,
+                    lie,
+                })),
             });
 
-        let cast = kw_cast().then(ty()).map_with(|(cast, ty), span| Spanned {
-            span: span.span(),
-            inner: Expr::Cast(Cast { cast, ty }),
-        });
-
-        let pat = choice((literal_expr(), word_expr(), path_expr()));
+        let pat = choice((literal_expr(expr.clone()), word_expr(), path_expr()));
         let match_branch = pat
             .clone()
             .then(fat_arrow())
-            .then(choice((
-                expr.clone().map(|e| vec![e]),
-                kw_do().ignore_then(body(expr.clone())),
-            )))
+            .then(choice((expr.clone().map(|e| vec![e]), body(expr.clone()))))
             .map_with(|((pat, fat_arrow), body), extra| Spanned {
                 span: extra.span(),
                 inner: MatchBranch {
@@ -558,64 +623,85 @@ where
 
         let match_ = kw_match()
             .then(expr.clone())
-            .then(kw_do())
-            .then(
-                indent_increase().ignore_with_ctx(
-                    match_branch
-                        .separated_by(
-                            select(|x, e| match x {
-                                Token::Indent(level) if level == *dbg! {e.ctx()} => Some(()),
-                                _ => None,
-                            })
-                            .labelled("matching indent level"),
-                        )
-                        .collect(),
-                ),
-            )
-            .map_with(|(((match_, expr), do_), branches), extra| Spanned {
+            .then(body(match_branch))
+            .map_with(|((match_, expr), branches), extra| Spanned {
                 span: extra.span(),
                 inner: Expr::Cond(Box::new(Match {
                     match_,
                     expr,
-                    do_,
                     branches,
                 })),
             });
 
-        let ret_expr = kw_ret().map(|Spanned { span, inner }| Spanned {
-            span,
-            inner: Expr::Keyword(inner),
-        });
+        let ret_expr = kw_ret()
+            .then(expr.clone().or_not())
+            .map_with(|(return_, expr), extra| Spanned {
+                span: extra.span(),
+                inner: Expr::Return(Box::new(Return { return_, expr })),
+            });
 
         let let_ = kw_let()
             .then(word())
+            .then(type_ascription().or_not())
             .then(op_assign())
             .then(expr.clone())
-            .map_with(|(((let_, pat), assign), body), extra| Spanned {
+            .map_with(
+                |((((let_, pat), ascription), assign), body), extra| Spanned {
+                    span: extra.span(),
+                    inner: Expr::Let(Box::new(Let {
+                        let_,
+                        pat,
+                        ascription,
+                        assign,
+                        body,
+                    })),
+                },
+            );
+
+        let lambda = kw_lambda()
+            .then(
+                word()
+                    .then(type_ascription().or_not())
+                    .map(|(name, ascription)| LambdaArg { name, ascription })
+                    .separated_by(just(Token::Comma))
+                    .collect::<Vec<_>>(),
+            )
+            .then(choice((expr.clone().map(|e| vec![e]), body(expr.clone()))))
+            .map_with(|((lambda, arglist), body), extra| Spanned {
                 span: extra.span(),
-                inner: Expr::Let(Box::new(Let {
-                    let_,
-                    pat,
-                    assign,
+                inner: Expr::Lambda(Lambda {
+                    lambda,
+                    arglist,
                     body,
-                })),
+                }),
             });
 
         let call = lparen()
-            .then(expr.separated_by(just(Token::Comma)).collect::<Vec<_>>())
-            .then(rparen());
+            .then(
+                select! { Token::Indent(_) => () }
+                    .or_not()
+                    .ignore_then(expr.clone())
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .collect::<Vec<_>>(),
+            )
+            .then(
+                select! { Token::Indent(_) => () }
+                    .or_not()
+                    .ignore_then(rparen()),
+            );
 
         choice((
-            literal_expr(),
-            static_expr(),
+            literal_expr(expr.clone()),
+            static_expr(expr.clone()),
+            const_expr(expr),
             path_expr(),
             word_expr(),
-            read_expr(),
             let_,
+            lambda,
             while_,
             if_,
             match_,
-            cast,
             ret_expr,
         ))
         .pratt((
@@ -663,16 +749,20 @@ where
                     inner: Expr::Assign(Box::new(Binary { left, op, right })),
                 }
             }),
-            pratt::postfix(6, op_dot::<I>().then(word()), |expr, (op, field), span| {
-                Spanned {
+            pratt::postfix(
+                6,
+                select! { Token::Indent(_) => () }
+                    .or_not()
+                    .ignore_then(op_dot::<I>().then(word())),
+                |expr, (op, field), span| Spanned {
                     span,
                     inner: Expr::FieldAccess(Box::new(FieldAccess {
                         reciever: expr,
                         access: op,
                         field,
                     })),
-                }
-            }),
+                },
+            ),
             pratt::postfix(6, call, |callee, ((lparen, args), rparen), span| Spanned {
                 span,
                 inner: Expr::Call(Box::new(Call {
@@ -688,48 +778,45 @@ where
 }
 
 fn indent_increase<'i, I>(
-) -> impl Parser<'i, I, usize, extra::Full<Rich<'i, Token, Span>, Vec<usize>, usize>> + Clone
+) -> impl Parser<'i, I, usize, extra::Full<Rich<'i, Token, Span>, (), usize>> + Clone
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
     select(|x, e| match x {
-        Token::Indent(level) if level > *e.ctx() => {
-            if level > *e.ctx() {
-                Some(level)
-            } else {
-                None
-            }
-        }
+        Token::Indent(level) if level > *e.ctx() => Some(level),
         _ => None,
     })
-    .labelled("Indent increase")
+    .labelled("indent increase")
 }
 
-fn proc_signature<'i, I>() -> impl RParser<'i, I, ProcSignature>
+fn indent_same<'i, I>(
+) -> impl Parser<'i, I, (), extra::Full<Rich<'i, Token, Span>, (), usize>> + Clone
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
-    ty().repeated()
+    select(|x, e| match x {
+        Token::Indent(level) if level == *e.ctx() => Some(()),
+        _ => None,
+    })
+    .labelled("same indent")
+}
+fn func_signature<'i, I>() -> impl NParser<'i, I, FuncSignature>
+where
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+    name_type_pair()
+        .separated_by(just(Token::Comma))
         .collect::<Vec<_>>()
         .then(
-            separator()
-                .then(ty().repeated().at_least(1).collect::<Vec<_>>())
+            fat_arrow()
+                .then(ty())
+                .map(|(arrow, ty)| SignatureReturn { arrow, ty })
                 .or_not(),
         )
-        .map_with(|(ins, maybe_outs), span| {
-            let (sep, outs) = if let Some((sep, outs)) = maybe_outs {
-                (Some(sep), Some(outs))
-            } else {
-                (None, None)
-            };
-            Spanned {
-                span: span.span(),
-                inner: ProcSignature { ins, sep, outs },
-            }
-        })
+        .map(|(ins, return_)| FuncSignature { ins, return_ })
 }
 
-fn lbracket<'i, I>() -> impl RParser<'i, I, Punctuation>
+fn lbracket<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -738,7 +825,7 @@ where
         inner: Punctuation::LBracket,
     })
 }
-fn rbracket<'i, I>() -> impl RParser<'i, I, Punctuation>
+fn rbracket<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -748,7 +835,7 @@ where
     })
 }
 
-fn lparen<'i, I>() -> impl RParser<'i, I, Punctuation>
+fn lparen<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -757,7 +844,7 @@ where
         inner: Punctuation::RParen,
     })
 }
-fn rparen<'i, I>() -> impl RParser<'i, I, Punctuation>
+fn rparen<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -767,138 +854,165 @@ where
     })
 }
 
-fn generics<'i, I>() -> impl RParser<'i, I, Generics>
+fn generics<'i, I>() -> impl NParser<'i, I, Generics>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
     lbracket()
-        .then(word().repeated().at_least(1).collect::<Vec<_>>())
-        .then(rbracket())
-        .map_with(|((left_bracket, tys), right_bracket), span| Spanned {
-            span: span.span(),
-            inner: Generics {
-                left_bracket,
-                tys,
-                right_bracket,
-            },
-        })
-}
-
-fn body<'i: 'd, 'd, I>(
-    expr: impl RParser<'i, I, Expr>,
-) -> impl Parser<'i, I, Vec<Spanned<Expr>>, extra::Full<Rich<'i, Token, Span>, Vec<usize>, usize>> + Clone
-where
-    I: ValueInput<'i, Token = Token, Span = Span>,
-{
-    expr.clone()
         .then(
-            select(|x, extra| match x {
-                Token::Indent(level) if level == *extra.ctx() => Some(()),
-                _ => None,
-            })
-            .ignore_then(expr)
-            .repeated()
-            .collect::<Vec<_>>(),
+            word()
+                .then(
+                    separator()
+                        .then(path().separated_by(just(Token::OpPlus)).collect())
+                        .map(|(sep, constraint)| Constraint { sep, constraint })
+                        .or_not(),
+                )
+                .map(|(ty, constraint)| Generic { ty, constraint })
+                .separated_by(just(Token::Comma))
+                .collect::<Vec<_>>(),
         )
-        .map(|(first, mut rest)| {
-            rest.insert(0, first);
-            rest
+        .then(rbracket())
+        .map(|((left_bracket, tys), right_bracket)| Generics {
+            left_bracket,
+            tys,
+            right_bracket,
         })
 }
 
-fn proc<'i: 'd, 'd, I>() -> impl RParser<'i, I, TopLevel>
+fn body<'i: 'd, 'd, I, O>(
+    expr: impl Parser<'i, I, Spanned<O>, extra::Full<Rich<'i, Token, Span>, (), usize>> + Clone,
+) -> impl Parser<'i, I, Vec<Spanned<O>>, extra::Full<Rich<'i, Token, Span>, (), usize>> + Clone
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
-    kw_proc()
+    indent_increase().ignore_with_ctx(expr.clone().separated_by(indent_same()).collect::<Vec<_>>())
+}
+
+fn body_unspanned<'i: 'd, 'd, I, O>(
+    expr: impl Parser<'i, I, O, extra::Full<Rich<'i, Token, Span>, (), usize>> + Clone,
+) -> impl Parser<'i, I, Vec<O>, extra::Full<Rich<'i, Token, Span>, (), usize>> + Clone
+where
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+    indent_increase().ignore_with_ctx(expr.clone().separated_by(indent_same()).collect::<Vec<_>>())
+}
+
+fn func<'i: 'd, 'd, I>() -> impl SParser<'i, I, Func>
+where
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+    kw_func()
         .then(generics().or_not())
         .then(word())
-        .then(proc_signature())
-        .then(kw_do())
-        .then(indent_increase().ignore_with_ctx(body(expr())))
+        .then(func_signature())
+        .then(body(expr()))
         .map_with(
-            |(((((proc, generics), name), signature), do_), body), span| Spanned {
+            |((((func, generics), name), signature), body), span| Spanned {
                 span: span.span(),
-                inner: TopLevel::Proc(Proc {
-                    proc,
+                inner: Func {
+                    func,
                     generics,
                     name,
                     signature,
-                    do_,
                     body,
-                }),
+                },
             },
         )
 }
 
-fn const_signature<'i, I>() -> impl RParser<'i, I, ConstSignature>
+fn type_ascription<'i, I>(
+) -> impl Parser<'i, I, TypeAscription, extra::Full<Rich<'i, Token, Span>, (), usize>> + Clone
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
     separator()
-        .then(ty().repeated().at_least(1).collect())
-        .map_with(|(sep, tys), span| Spanned {
-            span: span.span(),
-            inner: ConstSignature { sep, tys },
-        })
+        .then(ty())
+        .map(|(sep, ty)| TypeAscription { sep, ty })
 }
 
-fn const_<'i: 'd, 'd, I>() -> impl RParser<'i, I, TopLevel>
+fn name_type_pair<'i, I>() -> impl NParser<'i, I, NameTypePair>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
-    kw_const()
-        .then(word())
-        .then(const_signature())
-        .then(kw_do())
-        .then(expr().repeated().collect())
-        .map_with(|((((const_, name), signature), do_), body), span| Spanned {
-            span: span.span(),
-            inner: TopLevel::Const(Const {
-                const_,
-                name,
-                signature,
-                do_,
-                body,
-            }),
-        })
+    word()
+        .then(type_ascription())
+        .map(|(name, TypeAscription { sep, ty })| NameTypePair { name, sep, ty })
 }
 
-fn name_type_pair<'i, I>() -> impl RParser<'i, I, NameTypePair>
+fn field_value_pair<'i, I>(expr: impl SParser<'i, I, Expr>) -> impl NParser<'i, I, FieldValuePair>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
     word()
         .then(separator())
-        .then(ty())
-        .map_with(|((name, sep), ty), span| Spanned {
-            span: span.span(),
-            inner: NameTypePair { name, sep, ty },
-        })
+        .then(expr)
+        .map(|((name, sep), expr)| FieldValuePair { name, sep, expr })
 }
 
-fn struct_<'i, I>() -> impl RParser<'i, I, TopLevel>
+fn struct_<'i, I>() -> impl SParser<'i, I, TopLevel>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
     kw_struct()
         .then(generics().or_not())
         .then(word())
-        .then(kw_do())
-        .then(name_type_pair().repeated().collect())
-        .map_with(|((((struct_, generics), name), do_), body), span| Spanned {
+        .then(body_unspanned(name_type_pair()))
+        .map_with(|(((struct_, generics), name), body), span| Spanned {
             span: span.span(),
             inner: TopLevel::Struct(Struct {
                 struct_,
                 generics,
                 name,
-                do_,
                 body,
             }),
         })
 }
 
-fn module<'i, I>() -> impl RParser<'i, I, TopLevel>
+fn inherent_impl<'i, I>() -> impl SParser<'i, I, TopLevel>
+where
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+    kw_impl()
+        .then(generics().or_not())
+        .then(ty())
+        .then(body_unspanned(func().map(|f| f.map(ImplLevel::Func))))
+        .map_with(|(((impl_, generics), ty), body), span| Spanned {
+            span: span.span(),
+            inner: TopLevel::InherentImpl(InherentImpl {
+                impl_,
+                generics,
+                ty,
+                body,
+            }),
+        })
+}
+
+fn trait_impl<'i, I>() -> impl SParser<'i, I, TopLevel>
+where
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+    kw_impl()
+        .then(generics().or_not())
+        .then(path())
+        .then(kw_for())
+        .then(ty())
+        .then(body_unspanned(func().map(|f| f.map(ImplLevel::Func))))
+        .map_with(
+            |(((((impl_, generics), trait_), for_), ty), body), span| Spanned {
+                span: span.span(),
+                inner: TopLevel::TraitImpl(TraitImpl {
+                    impl_,
+                    generics,
+                    trait_,
+                    for_,
+                    ty,
+                    body,
+                }),
+            },
+        )
+}
+
+fn module<'i, I>() -> impl SParser<'i, I, TopLevel>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -910,7 +1024,7 @@ where
         })
 }
 
-fn use_<'i, I>() -> impl RParser<'i, I, TopLevel>
+fn use_<'i, I>() -> impl SParser<'i, I, TopLevel>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -928,14 +1042,16 @@ where
 }
 
 pub fn file<'i: 'd, 'd, I>(
-) -> impl Parser<'i, I, Module, extra::Full<Rich<'i, Token, Span>, Vec<usize>, usize>> + 'd
+) -> impl Parser<'i, I, Module, extra::Full<Rich<'i, Token, Span>, (), usize>> + 'd
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
     choice((
         module(),
-        proc(),
-        const_(),
+        func().map(|f| f.map(TopLevel::Func)),
+        inherent_impl(),
+        trait_impl(),
+        const_toplevel(),
         static_toplevel(),
         struct_(),
         use_(),
@@ -947,17 +1063,19 @@ where
     .or(end().to(vec![]))
     .map(|items| {
         let mut module = Module {
-            procs: Vec::new(),
+            funcs: Vec::new(),
             consts: Vec::new(),
-            vars: Vec::new(),
+            statics: Vec::new(),
             structs: Vec::new(),
+            inherent_impls: Vec::new(),
+            trait_impls: Vec::new(),
             modules: Vec::new(),
             uses: Vec::new(),
         };
 
         for item in items {
             match item.inner {
-                TopLevel::Proc(p) => module.procs.push(Spanned {
+                TopLevel::Func(p) => module.funcs.push(Spanned {
                     span: item.span,
                     inner: p,
                 }),
@@ -965,13 +1083,21 @@ where
                     span: item.span,
                     inner: c,
                 }),
-                TopLevel::Var(v) => module.vars.push(Spanned {
+                TopLevel::Static(v) => module.statics.push(Spanned {
                     span: item.span,
                     inner: v,
                 }),
                 TopLevel::Struct(s) => module.structs.push(Spanned {
                     span: item.span,
                     inner: s,
+                }),
+                TopLevel::InherentImpl(i) => module.inherent_impls.push(Spanned {
+                    span: item.span,
+                    inner: i,
+                }),
+                TopLevel::TraitImpl(i) => module.trait_impls.push(Spanned {
+                    span: item.span,
+                    inner: i,
                 }),
                 TopLevel::Use(u) => module.uses.push(Spanned {
                     span: item.span,
@@ -986,5 +1112,4 @@ where
 
         module
     })
-    .with_state(Vec::new())
 }

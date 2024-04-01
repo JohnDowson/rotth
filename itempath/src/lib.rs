@@ -88,7 +88,7 @@ macro_rules! path {
         path
     }};
     () => {{
-        ItemPathBuf::new()
+        $crate::ItemPathBuf::new()
     }};
 }
 

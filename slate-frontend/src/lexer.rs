@@ -26,7 +26,7 @@ fn to_bool(l: &'_ mut Lexer<'_, Token>) -> Option<bool> {
 }
 
 fn to_interned_string(l: &'_ mut Lexer<'_, Token>) -> Intern<String> {
-    Intern::new(l.slice().to_string())
+    Intern::from_ref(l.slice())
 }
 
 fn to_smol_str(l: &'_ mut Lexer<'_, Token>) -> SmolStr {
@@ -96,12 +96,12 @@ pub enum Token {
     KwIf,
     #[token("else")]
     KwElse,
-    #[token("proc")]
-    KwProc,
+    #[token("func")]
+    KwFunc,
     #[token("while")]
     KwWhile,
-    #[token("do")]
-    KwDo,
+    #[token("lambda")]
+    KwLambda,
     #[token("const")]
     KwConst,
     #[token("static")]
@@ -110,8 +110,10 @@ pub enum Token {
     KwLet,
     #[token("struct")]
     KwStruct,
-    #[token("cast")]
-    KwCast,
+    #[token("impl")]
+    KwImpl,
+    #[token("for")]
+    KwFor,
 
     #[regex(r";.*\n", logos::skip)]
     Comment,
@@ -158,14 +160,16 @@ impl std::fmt::Debug for Token {
             Token::KwMatch => write!(f, "match"),
             Token::KwIf => write!(f, "if"),
             Token::KwElse => write!(f, "else"),
-            Token::KwProc => write!(f, "proc"),
+            Token::KwFunc => write!(f, "func"),
             Token::KwWhile => write!(f, "while"),
-            Token::KwDo => write!(f, "do"),
+            Token::KwFor => write!(f, "for"),
+            Token::KwLambda => write!(f, "lambda"),
             Token::KwConst => write!(f, "const"),
             Token::KwStatic => write!(f, "static"),
             Token::KwLet => write!(f, "let"),
             Token::KwStruct => write!(f, "struct"),
-            Token::KwCast => write!(f, "cast"),
+            Token::KwImpl => write!(f, "impl"),
+
             Token::Comment => write!(f, "<comment>"),
             Token::Indent(level) => write!(f, "<indent-{}>", level),
             Token::Whitespace => write!(f, "<whitespace>"),
@@ -180,12 +184,16 @@ impl std::fmt::Display for Token {
     }
 }
 
-pub fn lex(src: &str, path: Intern<PathBuf>) -> Vec<(Token, Span)> {
-    Token::lexer(src)
+pub fn lex(src: &str, path: Intern<PathBuf>) -> (Vec<(Token, Span)>, Span) {
+    let tt: Vec<_> = Token::lexer(src)
         .spanned()
         .map(|(t, s)| match t {
             Ok(t) => (t, Span::new(path, s.start, s.end)),
             Err(()) => (Token::Error, Span::new(path, s.start, s.end)),
         })
-        .collect()
+        .collect();
+    let eoi = tt
+        .last()
+        .map_or(Span::point(path, 0), |(_, s)| Span::point(path, s.end));
+    (tt, eoi)
 }

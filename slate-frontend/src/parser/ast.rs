@@ -1,19 +1,34 @@
-use std::fmt::Debug;
+use std::{collections::HashMap, fmt::Debug};
 
+use super::types::Type;
 use internment::Intern;
 use itempath::ItemPathBuf;
 use spanner::Spanned;
 
-use crate::lexer::Token;
+#[derive(Debug, Clone)]
+pub struct Ast {
+    pub modules: HashMap<ItemPathBuf, ResolvedModule>,
+}
 
-use super::types::Type;
+#[derive(Debug, Clone)]
+pub struct ResolvedModule {
+    pub funcs: Vec<Spanned<Func>>,
+    pub consts: Vec<Spanned<Const>>,
+    pub statics: Vec<Spanned<Static>>,
+    pub structs: Vec<Spanned<Struct>>,
+    pub inherent_impls: Vec<Spanned<InherentImpl>>,
+    pub trait_impls: Vec<Spanned<TraitImpl>>,
+    pub uses: Vec<Spanned<Use>>,
+}
 
 #[derive(Debug, Clone)]
 pub struct Module {
-    pub procs: Vec<Spanned<Proc>>,
+    pub funcs: Vec<Spanned<Func>>,
     pub consts: Vec<Spanned<Const>>,
-    pub vars: Vec<Spanned<Static>>,
+    pub statics: Vec<Spanned<Static>>,
     pub structs: Vec<Spanned<Struct>>,
+    pub inherent_impls: Vec<Spanned<InherentImpl>>,
+    pub trait_impls: Vec<Spanned<TraitImpl>>,
     pub modules: Vec<Spanned<ModuleDef>>,
     pub uses: Vec<Spanned<Use>>,
 }
@@ -49,91 +64,54 @@ pub enum Punctuation {
 
 #[derive(Clone)]
 pub enum TopLevel {
-    Proc(Proc),
+    Func(Func),
     Const(Const),
-    Var(Static),
+    Static(Static),
     Struct(Struct),
+    InherentImpl(InherentImpl),
+    TraitImpl(TraitImpl),
     Use(Use),
     Module(ModuleDef),
-}
-
-impl TopLevel {
-    pub fn name(&self) -> Intern<String> {
-        match self {
-            TopLevel::Proc(Proc {
-                name:
-                    Spanned {
-                        span: _,
-                        inner: Word(name),
-                    },
-                ..
-            }) => *name,
-            TopLevel::Const(Const {
-                name:
-                    Spanned {
-                        span: _,
-                        inner: Word(name),
-                    },
-                ..
-            }) => *name,
-            TopLevel::Var(Static {
-                name:
-                    Spanned {
-                        span: _,
-                        inner: Word(name),
-                    },
-                ..
-            }) => *name,
-            TopLevel::Struct(Struct {
-                name:
-                    Spanned {
-                        span: _,
-                        inner: Word(name),
-                    },
-                ..
-            }) => *name,
-            TopLevel::Use(Use {
-                use_: _,
-                name:
-                    Spanned {
-                        span: _,
-                        inner: Word(name),
-                    },
-                from: _,
-                path: _,
-            }) => *name,
-            TopLevel::Module(ModuleDef {
-                module: _,
-                name:
-                    Spanned {
-                        span: _,
-                        inner: Word(name),
-                    },
-            }) => *name,
-        }
-    }
 }
 
 impl Debug for TopLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TopLevel::Proc(arg0) => arg0.fmt(f),
+            TopLevel::Func(arg0) => arg0.fmt(f),
             TopLevel::Const(arg0) => arg0.fmt(f),
-            TopLevel::Var(arg0) => arg0.fmt(f),
+            TopLevel::Static(arg0) => arg0.fmt(f),
             TopLevel::Struct(arg0) => arg0.fmt(f),
+            TopLevel::InherentImpl(arg0) => arg0.fmt(f),
+            TopLevel::TraitImpl(arg0) => arg0.fmt(f),
             TopLevel::Use(arg0) => arg0.fmt(f),
             TopLevel::Module(arg0) => arg0.fmt(f),
         }
     }
 }
 
+#[derive(Clone)]
+pub enum ImplLevel {
+    Func(Func),
+    Const(Const),
+    Static(Static),
+}
+
+impl Debug for ImplLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ImplLevel::Func(arg0) => arg0.fmt(f),
+            ImplLevel::Const(arg0) => arg0.fmt(f),
+            ImplLevel::Static(arg0) => arg0.fmt(f),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
-pub struct Proc {
-    pub proc: Spanned<Keyword>,
-    pub generics: Option<Spanned<Generics>>,
+pub struct Func {
+    pub func: Spanned<Keyword>,
+    pub generics: Option<Generics>,
     pub name: Spanned<Word>,
-    pub signature: Spanned<ProcSignature>,
-    pub do_: Spanned<Keyword>,
+    pub signature: FuncSignature,
     pub body: Vec<Spanned<Expr>>,
 }
 
@@ -146,14 +124,16 @@ pub enum Keyword {
     Match,
     If,
     Else,
-    Proc,
+    Func,
     While,
-    Do,
+    For,
     Let,
     Const,
     Static,
     Struct,
+    Impl,
     Cast,
+    Lambda,
 }
 
 impl std::fmt::Display for Keyword {
@@ -165,19 +145,42 @@ impl std::fmt::Display for Keyword {
 #[derive(Debug, Clone)]
 pub struct Struct {
     pub struct_: Spanned<Keyword>,
-    pub generics: Option<Spanned<Generics>>,
+    pub generics: Option<Generics>,
     pub name: Spanned<Word>,
-    pub do_: Spanned<Keyword>,
-    pub body: Vec<Spanned<NameTypePair>>,
+    pub body: Vec<NameTypePair>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructLiteral {
+    pub ty: Spanned<ItemPathBuf>,
+    pub fields: Vec<FieldValuePair>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InherentImpl {
+    pub impl_: Spanned<Keyword>,
+    pub generics: Option<Generics>,
+    pub ty: Spanned<Type>,
+    pub body: Vec<Spanned<ImplLevel>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TraitImpl {
+    pub impl_: Spanned<Keyword>,
+    pub generics: Option<Generics>,
+    pub trait_: Spanned<ItemPathBuf>,
+    pub for_: Spanned<Keyword>,
+    pub ty: Spanned<Type>,
+    pub body: Vec<Spanned<ImplLevel>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Const {
     pub const_: Spanned<Keyword>,
     pub name: Spanned<Word>,
-    pub signature: Spanned<ConstSignature>,
-    pub do_: Spanned<Keyword>,
-    pub body: Vec<Spanned<Expr>>,
+    pub signature: TypeAscription,
+    pub assign: Spanned<Punctuation>,
+    pub expr: Spanned<Expr>,
 }
 
 #[derive(Debug, Clone)]
@@ -194,39 +197,37 @@ pub struct Use {
     pub path: Spanned<ItemPathBuf>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Qualifiers {
-    pub items: Vec<Spanned<ItemPathBuf>>,
-    pub from: Spanned<Keyword>,
+#[derive(Clone, Debug)]
+pub struct Return {
+    pub return_: Spanned<Keyword>,
+    pub expr: Option<Spanned<Expr>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Read {
-    pub read: Spanned<Token>,
-    pub ty: Spanned<Type>,
+#[derive(Clone, Debug)]
+pub struct Lambda {
+    pub lambda: Spanned<Keyword>,
+    pub arglist: Vec<LambdaArg>,
+    pub body: Vec<Spanned<Expr>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Write {
-    pub write: Spanned<Token>,
-    pub ty: Spanned<Type>,
+#[derive(Clone, Debug)]
+pub struct LambdaArg {
+    pub name: Spanned<Word>,
+    pub ascription: Option<TypeAscription>,
 }
 
 #[derive(Clone)]
 pub enum Expr {
-    Keyword(Keyword),
-    Type(Type),
+    Return(Box<Return>),
 
     Let(Box<Let>),
+    Lambda(Lambda),
 
     While(Box<While>),
 
-    If(If),
+    If(Box<If>),
     Cond(Box<Match>),
 
-    Cast(Cast),
-    Read(Read),
-    Write(Write),
     Ref(Box<Unary>),
     Deref(Box<Unary>),
 
@@ -243,21 +244,19 @@ pub enum Expr {
     Assign(Box<Binary>),
     Call(Box<Call>),
 
-    Static(Static),
+    Static(Box<Static>),
+    Const(Box<Const>),
 }
 
 impl Debug for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expr::Read(r) => write!(f, "@{:?}", r.ty),
-            Expr::Write(w) => write!(f, "@{:?}", w.ty),
-            Expr::Keyword(arg0) => arg0.fmt(f),
-            Expr::Type(arg0) => arg0.fmt(f),
+            Expr::Return(arg0) => arg0.fmt(f),
             Expr::Let(arg0) => arg0.fmt(f),
+            Expr::Lambda(arg0) => arg0.fmt(f),
             Expr::While(arg0) => arg0.fmt(f),
             Expr::If(arg0) => arg0.fmt(f),
             Expr::Cond(arg0) => arg0.fmt(f),
-            Expr::Cast(arg0) => arg0.fmt(f),
             Expr::Word(arg0) => arg0.fmt(f),
             Expr::Path(arg0) => arg0.fmt(f),
             Expr::Literal(arg0) => arg0.fmt(f),
@@ -268,10 +267,11 @@ impl Debug for Expr {
             Expr::Div(arg0) => arg0.fmt(f),
             Expr::Eq(arg0) => arg0.fmt(f),
             Expr::Assign(arg0) => arg0.fmt(f),
-            Expr::Static(arg0) => arg0.fmt(f),
             Expr::Deref(arg0) => arg0.fmt(f),
             Expr::Ref(arg0) => arg0.fmt(f),
             Expr::Call(arg0) => arg0.fmt(f),
+            Expr::Static(arg0) => arg0.fmt(f),
+            Expr::Const(arg0) => arg0.fmt(f),
         }
     }
 }
@@ -300,8 +300,20 @@ pub struct Unary {
 #[derive(Debug, Clone)]
 pub struct Generics {
     pub left_bracket: Spanned<Punctuation>,
-    pub tys: Vec<Spanned<Word>>,
+    pub tys: Vec<Generic>,
     pub right_bracket: Spanned<Punctuation>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Generic {
+    pub ty: Spanned<Word>,
+    pub constraint: Option<Constraint>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Constraint {
+    pub sep: Spanned<Punctuation>,
+    pub constraint: Vec<Spanned<ItemPathBuf>>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -322,21 +334,27 @@ pub struct FieldAccess {
 pub struct Static {
     pub static_: Spanned<Keyword>,
     pub name: Spanned<Word>,
+    pub signature: TypeAscription,
+    pub assign: Spanned<Punctuation>,
+    pub expr: Spanned<Expr>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypeAscription {
     pub sep: Spanned<Punctuation>,
     pub ty: Spanned<Type>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ConstSignature {
-    pub sep: Spanned<Punctuation>,
-    pub tys: Vec<Spanned<Type>>,
+pub struct FuncSignature {
+    pub ins: Vec<NameTypePair>,
+    pub return_: Option<SignatureReturn>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ProcSignature {
-    pub ins: Vec<Spanned<Type>>,
-    pub sep: Option<Spanned<Punctuation>>,
-    pub outs: Option<Vec<Spanned<Type>>>,
+pub struct SignatureReturn {
+    pub arrow: Spanned<Punctuation>,
+    pub ty: Spanned<Type>,
 }
 
 #[derive(Debug, Clone)]
@@ -347,22 +365,23 @@ pub struct NameTypePair {
 }
 
 #[derive(Debug, Clone)]
-pub struct While {
-    pub while_: Spanned<Keyword>,
-    pub cond: Spanned<Expr>,
-    pub do_: Spanned<Keyword>,
-    pub body: Vec<Spanned<Expr>>,
+pub struct FieldValuePair {
+    pub name: Spanned<Word>,
+    pub sep: Spanned<Punctuation>,
+    pub expr: Spanned<Expr>,
 }
 
 #[derive(Debug, Clone)]
-pub struct Cast {
-    pub cast: Spanned<Keyword>,
-    pub ty: Spanned<Type>,
+pub struct While {
+    pub while_: Spanned<Keyword>,
+    pub cond: Spanned<Expr>,
+    pub body: Vec<Spanned<Expr>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct If {
     pub if_: Spanned<Keyword>,
+    pub cond: Spanned<Expr>,
     pub truth: Vec<Spanned<Expr>>,
     pub lie: Option<Else>,
 }
@@ -377,7 +396,6 @@ pub struct Else {
 pub struct Match {
     pub match_: Spanned<Keyword>,
     pub expr: Spanned<Expr>,
-    pub do_: Spanned<Keyword>,
     pub branches: Vec<Spanned<MatchBranch>>,
 }
 
@@ -392,6 +410,7 @@ pub struct MatchBranch {
 pub struct Let {
     pub let_: Spanned<Keyword>,
     pub pat: Spanned<Word>,
+    pub ascription: Option<TypeAscription>,
     pub assign: Spanned<Punctuation>,
     pub body: Spanned<Expr>,
 }
@@ -402,16 +421,20 @@ pub enum Literal {
     UInt(u64),
     String(Intern<String>),
     Char(char),
+    Unit,
+    Struct(StructLiteral),
 }
 
 impl Debug for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Bool(arg0) => arg0.fmt(f),
-            Self::Int(arg0) => arg0.fmt(f),
-            Self::UInt(arg0) => arg0.fmt(f),
-            Self::String(arg0) => arg0.fmt(f),
-            Self::Char(arg0) => arg0.fmt(f),
+            Literal::Bool(arg0) => arg0.fmt(f),
+            Literal::Int(arg0) => arg0.fmt(f),
+            Literal::UInt(arg0) => arg0.fmt(f),
+            Literal::String(arg0) => arg0.fmt(f),
+            Literal::Char(arg0) => arg0.fmt(f),
+            Literal::Unit => write!(f, "Unit"),
+            Literal::Struct(arg0) => arg0.fmt(f),
         }
     }
 }

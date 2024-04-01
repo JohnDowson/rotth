@@ -53,7 +53,7 @@ impl TopLevel {
                         inner: Word(name),
                     },
                 ..
-            }) => name.clone(),
+            }) => *name,
             TopLevel::Const(Const {
                 name:
                     Spanned {
@@ -61,7 +61,7 @@ impl TopLevel {
                         inner: Word(name),
                     },
                 ..
-            }) => name.clone(),
+            }) => *name,
             TopLevel::Var(Var {
                 name:
                     Spanned {
@@ -69,7 +69,7 @@ impl TopLevel {
                         inner: Word(name),
                     },
                 ..
-            }) => name.clone(),
+            }) => *name,
             TopLevel::Struct(Struct {
                 name:
                     Spanned {
@@ -77,7 +77,7 @@ impl TopLevel {
                         inner: Word(name),
                     },
                 ..
-            }) => name.clone(),
+            }) => *name,
             TopLevel::Use(Use {
                 use_: _,
                 name:
@@ -87,7 +87,7 @@ impl TopLevel {
                     },
                 from: _,
                 path: _,
-            }) => name.clone(),
+            }) => *name,
             TopLevel::Module(ModuleDef {
                 module: _,
                 name:
@@ -95,7 +95,7 @@ impl TopLevel {
                         span: _,
                         inner: Word(name),
                     },
-            }) => name.clone(),
+            }) => *name,
         }
     }
 }
@@ -512,7 +512,7 @@ fn resolve_includes_from(
             },
     } in root.uses
     {
-        let name = name.inner.0.clone();
+        let name = name.inner.0;
         let mut path = path.inner;
         path.push(name);
         if let Some(Spanned { span: _, inner: _ }) = ast.find(&path) {
@@ -534,7 +534,7 @@ fn resolve_includes_from(
     }
 
     for Spanned { span, inner: proc } in root.procs {
-        let name = proc.name.inner.0.clone();
+        let name = proc.name.inner.0;
         let resolved = ResolvedItem::Proc(Rc::new(proc));
 
         if let Some(redefined) = ast.ast.get(&name) {
@@ -558,7 +558,7 @@ fn resolve_includes_from(
         inner: const_,
     } in root.consts
     {
-        let name = const_.name.inner.0.clone();
+        let name = const_.name.inner.0;
         let resolved = ResolvedItem::Const(Rc::new(const_));
 
         if let Some(redefined) = ast.ast.get(&name) {
@@ -578,7 +578,7 @@ fn resolve_includes_from(
     }
 
     for Spanned { span, inner: var } in root.vars {
-        let name = var.name.inner.0.clone();
+        let name = var.name.inner.0;
         let resolved = ResolvedItem::Var(Rc::new(var));
 
         if let Some(redefined) = ast.ast.get(&name) {
@@ -602,7 +602,7 @@ fn resolve_includes_from(
         inner: struct_,
     } in root.structs
     {
-        let name = struct_.name.inner.0.clone();
+        let name = struct_.name.inner.0;
         let resolved = match make_struct(struct_) {
             Ok(s) => ResolvedItem::Struct(Rc::new(s)),
             Err(mut es) => {
@@ -646,7 +646,7 @@ fn make_struct(s: Struct) -> Result<ResolvedStruct, Vec<Error<'static>>> {
                 redefined_item: redefined.span,
             }))
         } else {
-            fields.insert(name.clone(), field);
+            fields.insert(*name, field);
         }
     }
     let mut generics = Vec::new();
