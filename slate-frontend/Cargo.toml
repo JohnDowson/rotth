@@ -12,6 +12,7 @@ fnv.workspace = true
 chumsky.workspace = true
 thiserror.workspace = true
 clap.workspace = true
+slotmap.workspace = true
 
 spanner = { path = "../spanner" }
 itempath = { path = "../itempath" }

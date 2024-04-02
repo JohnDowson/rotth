@@ -1,14 +1,10 @@
-use std::{collections::HashMap, fmt::Debug};
+use std::fmt::Debug;
 
 use super::types::Type;
 use internment::Intern;
 use itempath::ItemPathBuf;
-use spanner::Spanned;
-
-#[derive(Debug, Clone)]
-pub struct Ast {
-    pub modules: HashMap<ItemPathBuf, ResolvedModule>,
-}
+use slotmap::SlotMap;
+use spanner::{Span, Spanned};
 
 #[derive(Debug, Clone)]
 pub struct ResolvedModule {
@@ -17,8 +13,27 @@ pub struct ResolvedModule {
     pub statics: Vec<Spanned<Static>>,
     pub structs: Vec<Spanned<Struct>>,
     pub inherent_impls: Vec<Spanned<InherentImpl>>,
+    pub traits: Vec<Spanned<Trait>>,
     pub trait_impls: Vec<Spanned<TraitImpl>>,
+    pub modules: Vec<Spanned<ResolvedModule>>,
     pub uses: Vec<Spanned<Use>>,
+}
+
+pub mod key {
+    slotmap::new_key_type! {
+        pub struct Module;
+        pub struct Span;
+        pub struct Func;
+        pub struct Expr;
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct Ast {
+    pub modules: SlotMap<key::Module, Module>,
+    pub funcs: SlotMap<key::Func, Func>,
+    pub spans: SlotMap<key::Span, Span>,
+    pub exprs: SlotMap<key::Expr, Expr>,
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +43,7 @@ pub struct Module {
     pub statics: Vec<Spanned<Static>>,
     pub structs: Vec<Spanned<Struct>>,
     pub inherent_impls: Vec<Spanned<InherentImpl>>,
+    pub traits: Vec<Spanned<Trait>>,
     pub trait_impls: Vec<Spanned<TraitImpl>>,
     pub modules: Vec<Spanned<ModuleDef>>,
     pub uses: Vec<Spanned<Use>>,
@@ -68,6 +84,7 @@ pub enum TopLevel {
     Const(Const),
     Static(Static),
     Struct(Struct),
+    Trait(Trait),
     InherentImpl(InherentImpl),
     TraitImpl(TraitImpl),
     Use(Use),
@@ -81,6 +98,7 @@ impl Debug for TopLevel {
             TopLevel::Const(arg0) => arg0.fmt(f),
             TopLevel::Static(arg0) => arg0.fmt(f),
             TopLevel::Struct(arg0) => arg0.fmt(f),
+            TopLevel::Trait(arg0) => arg0.fmt(f),
             TopLevel::InherentImpl(arg0) => arg0.fmt(f),
             TopLevel::TraitImpl(arg0) => arg0.fmt(f),
             TopLevel::Use(arg0) => arg0.fmt(f),
@@ -108,11 +126,16 @@ impl Debug for ImplLevel {
 
 #[derive(Debug, Clone)]
 pub struct Func {
+    pub func_decl: FuncDecl,
+    pub body: Vec<Spanned<Expr>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FuncDecl {
     pub func: Spanned<Keyword>,
     pub generics: Option<Generics>,
     pub name: Spanned<Word>,
     pub signature: FuncSignature,
-    pub body: Vec<Spanned<Expr>>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -131,6 +154,7 @@ pub enum Keyword {
     Const,
     Static,
     Struct,
+    Trait,
     Impl,
     Cast,
     Lambda,
@@ -148,6 +172,14 @@ pub struct Struct {
     pub generics: Option<Generics>,
     pub name: Spanned<Word>,
     pub body: Vec<NameTypePair>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Trait {
+    pub trait_: Spanned<Keyword>,
+    pub generics: Option<Generics>,
+    pub name: Spanned<Word>,
+    pub body: Vec<Spanned<FuncDecl>>,
 }
 
 #[derive(Debug, Clone)]
@@ -192,8 +224,6 @@ pub struct ModuleDef {
 #[derive(Debug, Clone)]
 pub struct Use {
     pub use_: Spanned<Keyword>,
-    pub name: Spanned<Word>,
-    pub from: Spanned<Keyword>,
     pub path: Spanned<ItemPathBuf>,
 }
 
@@ -421,8 +451,9 @@ pub enum Literal {
     UInt(u64),
     String(Intern<String>),
     Char(char),
-    Unit,
     Struct(StructLiteral),
+    Tuple(Vec<Spanned<Expr>>),
+    Array(Vec<Spanned<Expr>>),
 }
 
 impl Debug for Literal {
@@ -433,8 +464,9 @@ impl Debug for Literal {
             Literal::UInt(arg0) => arg0.fmt(f),
             Literal::String(arg0) => arg0.fmt(f),
             Literal::Char(arg0) => arg0.fmt(f),
-            Literal::Unit => write!(f, "Unit"),
             Literal::Struct(arg0) => arg0.fmt(f),
+            Literal::Tuple(arg0) => write!(f, "({:?})", arg0),
+            Literal::Array(arg0) => write!(f, "[{:?}]", arg0),
         }
     }
 }

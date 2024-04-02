@@ -110,6 +110,8 @@ pub enum Token {
     KwLet,
     #[token("struct")]
     KwStruct,
+    #[token("trait")]
+    KwTrait,
     #[token("impl")]
     KwImpl,
     #[token("for")]
@@ -168,6 +170,7 @@ impl std::fmt::Debug for Token {
             Token::KwStatic => write!(f, "static"),
             Token::KwLet => write!(f, "let"),
             Token::KwStruct => write!(f, "struct"),
+            Token::KwTrait => write!(f, "trait"),
             Token::KwImpl => write!(f, "impl"),
 
             Token::Comment => write!(f, "<comment>"),

@@ -10,7 +10,6 @@ use crate::{
 use fnv::FnvHashMap;
 use internment::Intern;
 use itempath::{ItemPath, ItemPathBuf};
-use smol_str::SmolStr;
 use somok::{Either, Somok};
 use spanner::{Span, Spanned};
 
@@ -277,7 +276,7 @@ impl Walker {
             },
         ) in &module.ast
         {
-            self.walk_toplevel(name.clone(), item.clone());
+            self.walk_toplevel(*name, item.clone());
         }
         self.current_path = mp;
     }
@@ -300,7 +299,7 @@ impl Walker {
         } = &*struct_;
         let Word(name) = name.inner.clone();
         let name = self.current_path.child(name);
-        let generics = generics.iter().map(|t| t.map_ref(|t| t.clone())).collect();
+        let generics = generics.iter().map(|t| t.map_ref(|t| *t)).collect();
         let mut builder = self.types.new_struct(name, generics);
         for (name, ty) in fields {
             let span = ty.inner.ty.span;
@@ -321,7 +320,7 @@ impl Walker {
 
             let ty = resolve_field(&self.current_path, ty);
             let ty = Spanned { span, inner: ty };
-            builder.field(name.clone(), ty);
+            builder.field(*name, ty);
         }
         builder.finish();
     }
@@ -336,9 +335,8 @@ impl Walker {
                 ResolvedItem::Ref(_) => todo!(),
                 ResolvedItem::Module(m) => {
                     for name in m.ast.keys() {
-                        let referee = referee.child(name.clone());
-                        self.items
-                            .insert(path.child(name.clone()), TopLevel::Ref(referee));
+                        let referee = referee.child(*name);
+                        self.items.insert(path.child(*name), TopLevel::Ref(referee));
                     }
                 }
                 _ => {
@@ -369,7 +367,7 @@ impl Walker {
     }
 
     fn walk_const(&mut self, name: Intern<String>) {
-        let path = self.current_path.child(name.clone());
+        let path = self.current_path.child(name);
         let const_ = if let Some(Spanned {
             span: _,
             inner: ResolvedItem::Const(c),
@@ -413,7 +411,7 @@ impl Walker {
             .map(|g| {
                 g.inner.tys.iter().map(|ty| {
                     let Word(ty) = &ty.inner;
-                    ty.clone()
+                    *ty
                 })
             })
             .into_iter()
@@ -459,7 +457,7 @@ impl Walker {
             Expr::If(if_) => Hir::If(self.walk_if(if_)),
             Expr::Cond(box cond) => Hir::Cond(self.walk_cond(cond)),
             Expr::Cast(_) => unreachable!(),
-            Expr::Word(Word(w)) => Hir::Path(self.current_path.child(w.clone())),
+            Expr::Word(Word(w)) => Hir::Path(self.current_path.child(*w)),
             Expr::Literal(l) => Hir::Literal(l.clone()),
             Expr::Keyword(Keyword::Return) => Hir::Return,
             Expr::Var(var) => {
@@ -482,9 +480,7 @@ impl Walker {
     }
 
     fn walk_var(&mut self, var: &ast::Var) {
-        let name = var
-            .name
-            .map_ref(|Word(w)| self.current_path.child(w.clone()));
+        let name = var.name.map_ref(|Word(w)| self.current_path.child(*w));
         let ty = var.ty.clone();
         let var = Var {
             ty,
@@ -501,14 +497,11 @@ impl Walker {
                 b.map_ref(|b| match b {
                     Either::Left(Word(w)) if **w == "_" => Binding::Ignore,
                     Either::Left(Word(w)) => Binding::Bind {
-                        name: self.current_path.child(w.clone()),
+                        name: self.current_path.child(*w),
                         ty: None,
                     },
                     Either::Right(r) => Binding::Bind {
-                        name: r
-                            .name
-                            .map_ref(|Word(w)| self.current_path.child(w.clone()))
-                            .inner,
+                        name: r.name.map_ref(|Word(w)| self.current_path.child(*w)).inner,
                         ty: Some(r.ty.inner.clone()),
                     },
                 })
@@ -545,7 +538,7 @@ impl Walker {
                 }
             }
             Expr::Word(Word(w)) => {
-                let path = self.current_path.child(w.clone());
+                let path = self.current_path.child(*w);
                 Spanned {
                     span: branch.pat.span,
                     inner: Hir::Path(path),

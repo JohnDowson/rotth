@@ -46,11 +46,13 @@ impl ItemPath {
         self.segments.last().cloned()
     }
 
-    pub fn drop_first(&self) -> Option<&Self> {
-        self.segments
-            .split_first()
-            .and_then(|(_, b)| if b.is_empty() { None } else { Some(b) })
-            .map(|s| unsafe { std::mem::transmute::<&[Intern<String>], &ItemPath>(s) })
+    pub fn drop_first(&self) -> Option<(Intern<String>, &Self)> {
+        self.segments.split_first().map(|(first, rest)| unsafe {
+            (
+                *first,
+                std::mem::transmute::<&[Intern<String>], &ItemPath>(rest),
+            )
+        })
     }
 
     pub fn parent(&self) -> Option<&ItemPath> {
@@ -78,14 +80,21 @@ impl ItemPath {
     pub fn segment_mut(&mut self, segment: usize) -> Option<&mut Intern<String>> {
         self.segments.get_mut(segment)
     }
+
+    pub fn len(&self) -> usize {
+        self.segments.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
 }
 
 #[macro_export]
 macro_rules! path {
     ( $( $s:tt )::+ ) => {{
-        let mut path = $crate::ItemPathBuf::new();
-        $(path.push(stringify!($s).to_string().into());)*
-        path
+        let segs = vec![$(stringify!($s).to_string().into(),)*];
+        $crate::ItemPathBuf::from(segs)
     }};
     () => {{
         $crate::ItemPathBuf::new()

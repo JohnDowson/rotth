@@ -11,22 +11,57 @@ use crate::{
     ParserError,
 };
 
-pub use self::ast::Module;
-use self::ast::{ModuleDef, Word};
+use self::ast::{Module, ModuleDef, ResolvedModule, Word};
 
-mod ast;
+pub mod ast;
 mod parsers;
 mod types;
 
-pub fn parse(tokens: Vec<(Token, Span)>, eoi: Span) -> Result<Module, ParserError<'static>> {
+fn parse_file(tokens: Vec<(Token, Span)>, eoi: Span) -> Result<Module, ParserError<'static>> {
     parsers::file()
         .parse(Stream::from_iter(tokens).spanned(eoi))
         .into_result()
         .map_err(|e| e.into())
 }
 
-pub fn resolve_modules(root: Module, path: ItemPathBuf) -> Result<(), ParserError<'static>> {
+pub fn parse(
+    tokens: Vec<(Token, Span)>,
+    eoi: Span,
+) -> Result<ResolvedModule, ParserError<'static>> {
+    let root = parsers::file()
+        .parse(Stream::from_iter(tokens).spanned(eoi))
+        .into_result()?;
+    let path = eoi.file.file_stem().unwrap().to_string_lossy();
+    let path = Intern::<String>::from_ref(&*path);
+    resolve_modules(root, ItemPathBuf::from(vec![path]))
+}
+
+pub fn resolve_modules(
+    Module {
+        funcs,
+        consts,
+        statics,
+        structs,
+        inherent_impls,
+        traits,
+        trait_impls,
+        modules,
+        uses,
+    }: Module,
+    path: ItemPathBuf,
+) -> Result<ResolvedModule, ParserError<'static>> {
     let mut errors = ParserError(Vec::new());
+    let mut resolved_module = ResolvedModule {
+        funcs,
+        consts,
+        statics,
+        structs,
+        inherent_impls,
+        traits,
+        trait_impls,
+        modules: Vec::new(),
+        uses,
+    };
     for Spanned {
         span,
         inner:
@@ -38,24 +73,36 @@ pub fn resolve_modules(root: Module, path: ItemPathBuf) -> Result<(), ParserErro
                         inner: Word(name),
                     },
             },
-    } in root.modules
+    } in modules
     {
         let mut file = (*span.file).clone();
+        file.set_extension("");
         file.push(&**name);
         file.set_extension("sl");
 
         let Ok(src) = std::fs::read_to_string(&file) else {
-            errors.0.push(crate::Error::UnresolvedInclude(span));
+            errors.0.push(crate::Error::UnresolvedModule(
+                span,
+                Intern::from_ref(&*file),
+            ));
             continue;
         };
         let (tokens, eoi) = lexer::lex(&src, Intern::from_ref(&file));
         let mut path = path.clone();
         path.push(name);
-        let module = parse(tokens, eoi)?;
-        let module = match resolve_modules(module, path) {
-            Ok(module) => module,
-            Err(es) => errors.0.extend(es.0),
+        let module = parse_file(tokens, eoi)?;
+        match resolve_modules(module, path) {
+            Ok(module) => resolved_module.modules.push(span.spanned(module)),
+            Err(es) => {
+                errors.0.extend(es.0);
+                continue;
+            }
         };
     }
-    Ok(())
+
+    if !errors.0.is_empty() {
+        Err(errors)
+    } else {
+        Ok(resolved_module)
+    }
 }

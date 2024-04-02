@@ -1,5 +1,5 @@
 module foo
-use bar from foo
+use foo::bar
 
 struct [T] FooBar
     foo: T
@@ -7,6 +7,9 @@ struct [T] FooBar
 impl FooBar[i32]
     func method self: Self => i32
         self.foo + 1
+
+trait [T] Frobnify
+    func self: &Self => T
 
 impl[T: Copy] Frobnify for FooBar[T]
     func frob self: &Self => T
@@ -32,6 +35,8 @@ func foo i: i64, j: u69 => i64
         12
     let lam = lambda x, y, z: i32 y
     lam(6, 6, 6)
+    let multilam = lambda x, y
+        x + y
     alpha.beta.delta()
     sigma
         .zeta
@@ -43,6 +48,9 @@ func foo i: i64, j: u69 => i64
              .multiline
              .expression
         )
-    let bar = Something
-        a: 1
-        b: "hello"
+    let tuple = (1,2,3,4)
+    let bar = Something(
+        a: 1,
+        b: "foo"
+    )
+    let a = [1, 2, 3]

@@ -4,7 +4,10 @@ pub mod hir;
 pub mod lexer;
 pub mod parser;
 
+use std::path::PathBuf;
+
 use chumsky::error::Rich;
+use internment::Intern;
 use lexer::Token;
 use spanner::Span;
 use thiserror::Error;
@@ -24,6 +27,8 @@ pub enum Error<'i> {
     Parser(Rich<'i, Token, Span>),
     #[error("{0:?}")]
     Redefinition(#[from] Redefinition),
+    #[error("UnresolvedInclude {0:?} {1:?}")]
+    UnresolvedModule(Span, Intern<PathBuf>),
     #[error("UnresolvedInclude {0:?}")]
     UnresolvedInclude(Span),
 }

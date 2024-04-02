@@ -74,6 +74,13 @@ impl Span {
             end: other.end,
         }
     }
+
+    pub fn spanned<T>(self, val: T) -> Spanned<T> {
+        Spanned {
+            span: self,
+            inner: val,
+        }
+    }
 }
 
 impl Debug for Span {

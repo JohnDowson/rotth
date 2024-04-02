@@ -426,7 +426,7 @@ impl ResolvedFile {
         let mut segments = path.iter();
         let segment = segments.next();
         let item = segment.and_then(|s| self.ast.get(s));
-        if let Some(path) = path.drop_first() {
+        if let Some((_first, path)) = path.drop_first() {
             match item {
                 Some(i) => match &i.inner {
                     ResolvedItem::Ref(_) => return None,
