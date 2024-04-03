@@ -187,6 +187,7 @@ impl std::fmt::Display for Token {
     }
 }
 
+#[tracing::instrument]
 pub fn lex(src: &str, path: Intern<PathBuf>) -> (Vec<(Token, Span)>, Span) {
     let tt: Vec<_> = Token::lexer(src)
         .spanned()

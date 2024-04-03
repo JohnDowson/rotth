@@ -1,7 +1,5 @@
 use crate::parser::ast::GenericParams;
-use fnv::FnvHashMap;
-use itempath::{path, ItemPath, ItemPathBuf};
-use smol_str::SmolStr;
+use itempath::{path, ItemPathBuf};
 use spanner::Spanned;
 use std::fmt::Write;
 
@@ -101,78 +99,4 @@ impl Primitive {
             Primitive::I8 => 1,
         }
     }
-}
-
-pub struct StructBuilder<'i> {
-    index: &'i mut StructIndex,
-    generics: Vec<Spanned<SmolStr>>,
-    fields: FnvHashMap<SmolStr, Spanned<Type>>,
-    name: ItemPathBuf,
-}
-
-impl<'i> StructBuilder<'i> {
-    pub fn field(&mut self, name: SmolStr, ty: Spanned<Type>) -> &mut Self {
-        self.fields.insert(name, ty);
-        self
-    }
-
-    pub fn finish(self) {
-        let struct_ = Struct {
-            name: self.name,
-            generics: self.generics,
-            fields: self.fields,
-        };
-        self.index.structs.push(struct_);
-    }
-}
-
-#[derive(Default, Debug, Clone)]
-pub struct StructIndex {
-    structs: Vec<Struct>,
-}
-
-impl StructIndex {
-    pub fn new_struct(
-        &'_ mut self,
-        name: ItemPathBuf,
-        generics: Vec<Spanned<SmolStr>>,
-    ) -> StructBuilder<'_> {
-        StructBuilder {
-            index: self,
-            fields: Default::default(),
-            generics,
-            name,
-        }
-    }
-
-    pub fn get(&self, name: &ItemPath) -> Option<&Struct> {
-        self.structs.iter().find(|s| s.name == name)
-    }
-}
-
-impl IntoIterator for StructIndex {
-    type Item = Struct;
-
-    type IntoIter = std::vec::IntoIter<Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.structs.into_iter()
-    }
-}
-
-impl<'s> IntoIterator for &'s StructIndex {
-    type Item = &'s Struct;
-
-    type IntoIter = std::slice::Iter<'s, Struct>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.structs.iter()
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Struct {
-    pub name: ItemPathBuf,
-    pub generics: Vec<Spanned<SmolStr>>,
-    pub fields: FnvHashMap<SmolStr, Spanned<Type>>,
 }

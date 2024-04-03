@@ -13,6 +13,8 @@ chumsky.workspace = true
 thiserror.workspace = true
 clap.workspace = true
 slotmap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 spanner = { path = "../spanner" }
 itempath = { path = "../itempath" }

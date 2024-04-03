@@ -14,9 +14,12 @@ use crate::{
 use self::ast::{Module, ModuleDef, ResolvedModule, Word};
 
 pub mod ast;
+pub mod flat_ast;
+mod flat_parsers;
 mod parsers;
 mod types;
 
+#[tracing::instrument]
 fn parse_file(tokens: Vec<(Token, Span)>, eoi: Span) -> Result<Module, ParserError<'static>> {
     parsers::file()
         .parse(Stream::from_iter(tokens).spanned(eoi))
@@ -24,18 +27,18 @@ fn parse_file(tokens: Vec<(Token, Span)>, eoi: Span) -> Result<Module, ParserErr
         .map_err(|e| e.into())
 }
 
+#[tracing::instrument]
 pub fn parse(
     tokens: Vec<(Token, Span)>,
     eoi: Span,
 ) -> Result<ResolvedModule, ParserError<'static>> {
-    let root = parsers::file()
-        .parse(Stream::from_iter(tokens).spanned(eoi))
-        .into_result()?;
+    let root = parse_file(tokens, eoi)?;
     let path = eoi.file.file_stem().unwrap().to_string_lossy();
     let path = Intern::<String>::from_ref(&*path);
     resolve_modules(root, ItemPathBuf::from(vec![path]))
 }
 
+#[tracing::instrument]
 pub fn resolve_modules(
     Module {
         funcs,

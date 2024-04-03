@@ -3,8 +3,7 @@ use std::fmt::Debug;
 use super::types::Type;
 use internment::Intern;
 use itempath::ItemPathBuf;
-use slotmap::SlotMap;
-use spanner::{Span, Spanned};
+use spanner::Spanned;
 
 #[derive(Debug, Clone)]
 pub struct ResolvedModule {
@@ -17,23 +16,6 @@ pub struct ResolvedModule {
     pub trait_impls: Vec<Spanned<TraitImpl>>,
     pub modules: Vec<Spanned<ResolvedModule>>,
     pub uses: Vec<Spanned<Use>>,
-}
-
-pub mod key {
-    slotmap::new_key_type! {
-        pub struct Module;
-        pub struct Span;
-        pub struct Func;
-        pub struct Expr;
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct Ast {
-    pub modules: SlotMap<key::Module, Module>,
-    pub funcs: SlotMap<key::Func, Func>,
-    pub spans: SlotMap<key::Span, Span>,
-    pub exprs: SlotMap<key::Expr, Expr>,
 }
 
 #[derive(Debug, Clone)]

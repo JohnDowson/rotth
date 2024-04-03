@@ -1,4 +1,7 @@
-use chumsky::{input::ValueInput, prelude::*};
+use chumsky::{
+    input::{MapExtra, ValueInput},
+    prelude::*,
+};
 use internment::Intern;
 use logos::Logos;
 use rotth_lexer::Token;
@@ -37,8 +40,8 @@ where
         let generic_params = lbracket()
             .then(ty.repeated().at_least(1).collect())
             .then(rbracket())
-            .map_with(|((left_bracket, tys), right_bracket), span| Spanned {
-                span: span.span(),
+            .map_with(|((left_bracket, tys), right_bracket), extra| Spanned {
+                span: extra.span(),
                 inner: GenericParams {
                     left_bracket,
                     tys,

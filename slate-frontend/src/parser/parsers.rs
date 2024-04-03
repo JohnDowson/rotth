@@ -15,42 +15,42 @@ use crate::lexer::Token;
 
 use super::{
     ast::{
-        key, Ast, Binary, Call, Const, Constraint, Else, Expr, FieldAccess, FieldValuePair, Func,
-        FuncDecl, FuncSignature, Generic, GenericParams, Generics, If, ImplLevel, InherentImpl,
-        Keyword, Lambda, LambdaArg, Let, Literal, Match, MatchBranch, Module, ModuleDef,
-        NameTypePair, Punctuation, Return, SignatureReturn, Static, Struct, StructLiteral,
-        TopLevel, Trait, TraitImpl, TypeAscription, Unary, Use, While, Word,
+        Binary, Call, Const, Constraint, Else, Expr, FieldAccess, FieldValuePair, Func, FuncDecl,
+        FuncSignature, Generic, GenericParams, Generics, If, ImplLevel, InherentImpl, Keyword,
+        Lambda, LambdaArg, Let, Literal, Match, MatchBranch, Module, ModuleDef, NameTypePair,
+        Punctuation, Return, SignatureReturn, Static, Struct, StructLiteral, TopLevel, Trait,
+        TraitImpl, TypeAscription, Unary, Use, While, Word,
     },
     types::{Custom, Primitive, Type},
 };
 
-pub trait NParser<'i, I, O, S: 'static>
+pub trait NParser<'i, I, O>
 where
-    Self: Parser<'i, I, O, extra::Full<Rich<'i, Token, Span>, S, usize>> + Clone,
+    Self: Parser<'i, I, O, extra::Full<Rich<'i, Token, Span>, (), usize>> + Clone,
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
 }
-impl<'i, I, O, T, S: 'static> NParser<'i, I, O, S> for T
+impl<'i, I, O, T> NParser<'i, I, O> for T
 where
-    T: Parser<'i, I, O, extra::Full<Rich<'i, Token, Span>, S, usize>> + Clone,
-    I: ValueInput<'i, Token = Token, Span = Span>,
-{
-}
-
-trait SParser<'i, I, O, S: 'static>
-where
-    Self: Parser<'i, I, Spanned<O>, extra::Full<Rich<'i, Token, Span>, S, usize>> + Clone,
-    I: ValueInput<'i, Token = Token, Span = Span>,
-{
-}
-impl<'i, I, O, T, S: 'static> SParser<'i, I, O, S> for T
-where
-    T: Parser<'i, I, Spanned<O>, extra::Full<Rich<'i, Token, Span>, S, usize>> + Clone,
+    T: Parser<'i, I, O, extra::Full<Rich<'i, Token, Span>, (), usize>> + Clone,
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
 }
 
-fn ty<'i, I>() -> impl SParser<'i, I, Type, Ast>
+trait SParser<'i, I, O>
+where
+    Self: Parser<'i, I, Spanned<O>, extra::Full<Rich<'i, Token, Span>, (), usize>> + Clone,
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+}
+impl<'i, I, O, T> SParser<'i, I, O> for T
+where
+    T: Parser<'i, I, Spanned<O>, extra::Full<Rich<'i, Token, Span>, (), usize>> + Clone,
+    I: ValueInput<'i, Token = Token, Span = Span>,
+{
+}
+
+fn ty<'i, I>() -> impl SParser<'i, I, Type>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -140,7 +140,7 @@ fn parse_string(s: &str, path: Intern<PathBuf>) -> Result<Intern<String>, Rich<'
         .map(Into::into)
 }
 
-fn literal<'i, I>(expr: impl SParser<'i, I, Expr, Ast>) -> impl SParser<'i, I, Literal, Ast>
+fn literal<'i, I>(expr: impl SParser<'i, I, Expr>) -> impl SParser<'i, I, Literal>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -222,7 +222,7 @@ where
     .labelled("Literal")
 }
 
-fn literal_expr<'i, I>(expr: impl SParser<'i, I, Expr, Ast>) -> impl SParser<'i, I, Expr, Ast>
+fn literal_expr<'i, I>(expr: impl SParser<'i, I, Expr>) -> impl SParser<'i, I, Expr>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -232,7 +232,7 @@ where
     })
 }
 
-fn kw_module<'i, I>() -> impl SParser<'i, I, Keyword, Ast>
+fn kw_module<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -242,7 +242,7 @@ where
     })
 }
 
-fn kw_use<'i, I>() -> impl SParser<'i, I, Keyword, Ast>
+fn kw_use<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -252,7 +252,7 @@ where
     })
 }
 
-fn kw_trait<'i, I>() -> impl SParser<'i, I, Keyword, Ast>
+fn kw_trait<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -262,7 +262,7 @@ where
     })
 }
 
-fn kw_let<'i, I>() -> impl SParser<'i, I, Keyword, Ast>
+fn kw_let<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -272,7 +272,7 @@ where
     })
 }
 
-fn kw_lambda<'i, I>() -> impl SParser<'i, I, Keyword, Ast>
+fn kw_lambda<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -282,7 +282,7 @@ where
     })
 }
 
-fn kw_while<'i, I>() -> impl SParser<'i, I, Keyword, Ast>
+fn kw_while<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -292,7 +292,7 @@ where
     })
 }
 
-fn kw_for<'i, I>() -> impl SParser<'i, I, Keyword, Ast>
+fn kw_for<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -302,7 +302,7 @@ where
     })
 }
 
-fn kw_match<'i, I>() -> impl SParser<'i, I, Keyword, Ast>
+fn kw_match<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -311,7 +311,7 @@ where
         inner: Keyword::Match,
     })
 }
-fn kw_if<'i, I>() -> impl SParser<'i, I, Keyword, Ast>
+fn kw_if<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -320,7 +320,7 @@ where
         inner: Keyword::If,
     })
 }
-fn kw_else<'i, I>() -> impl SParser<'i, I, Keyword, Ast>
+fn kw_else<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -330,7 +330,7 @@ where
     })
 }
 
-fn kw_ret<'i, I>() -> impl SParser<'i, I, Keyword, Ast>
+fn kw_ret<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -340,7 +340,7 @@ where
     })
 }
 
-fn kw_func<'i, I>() -> impl SParser<'i, I, Keyword, Ast>
+fn kw_func<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -350,7 +350,7 @@ where
     })
 }
 
-fn kw_const<'i, I>() -> impl SParser<'i, I, Keyword, Ast>
+fn kw_const<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -360,7 +360,7 @@ where
     })
 }
 
-fn kw_static<'i, I>() -> impl SParser<'i, I, Keyword, Ast>
+fn kw_static<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -370,7 +370,7 @@ where
     })
 }
 
-fn kw_struct<'i, I>() -> impl SParser<'i, I, Keyword, Ast>
+fn kw_struct<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -380,7 +380,7 @@ where
     })
 }
 
-fn kw_impl<'i, I>() -> impl SParser<'i, I, Keyword, Ast>
+fn kw_impl<'i, I>() -> impl SParser<'i, I, Keyword>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -390,7 +390,7 @@ where
     })
 }
 
-fn op_and<'i, I>() -> impl SParser<'i, I, Punctuation, Ast>
+fn op_and<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -400,7 +400,7 @@ where
     })
 }
 
-fn op_mul<'i, I>() -> impl SParser<'i, I, Punctuation, Ast>
+fn op_mul<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -410,7 +410,7 @@ where
     })
 }
 
-fn op_div<'i, I>() -> impl SParser<'i, I, Punctuation, Ast>
+fn op_div<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -420,7 +420,7 @@ where
     })
 }
 
-fn op_plus<'i, I>() -> impl SParser<'i, I, Punctuation, Ast>
+fn op_plus<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -430,7 +430,7 @@ where
     })
 }
 
-fn op_minus<'i, I>() -> impl SParser<'i, I, Punctuation, Ast>
+fn op_minus<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -440,7 +440,7 @@ where
     })
 }
 
-fn op_assign<'i, I>() -> impl SParser<'i, I, Punctuation, Ast>
+fn op_assign<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -450,7 +450,7 @@ where
     })
 }
 
-fn op_eq<'i, I>() -> impl SParser<'i, I, Punctuation, Ast>
+fn op_eq<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -460,7 +460,7 @@ where
     })
 }
 
-fn op_dot<'i, I>() -> impl SParser<'i, I, Punctuation, Ast>
+fn op_dot<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -470,7 +470,7 @@ where
     })
 }
 
-fn fat_arrow<'i, I>() -> impl SParser<'i, I, Punctuation, Ast>
+fn fat_arrow<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -480,7 +480,7 @@ where
     })
 }
 
-fn word<'i, I>() -> impl SParser<'i, I, Word, Ast>
+fn word<'i, I>() -> impl SParser<'i, I, Word>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -489,7 +489,7 @@ where
     }
 }
 
-fn word_expr<'i, I>() -> impl SParser<'i, I, Expr, Ast>
+fn word_expr<'i, I>() -> impl SParser<'i, I, Expr>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -498,7 +498,7 @@ where
     }
 }
 
-fn path<'i, I>() -> impl SParser<'i, I, ItemPathBuf, Ast>
+fn path<'i, I>() -> impl SParser<'i, I, ItemPathBuf>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -514,7 +514,7 @@ where
     })
 }
 
-fn path_expr<'i, I>() -> impl SParser<'i, I, Expr, Ast>
+fn path_expr<'i, I>() -> impl SParser<'i, I, Expr>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -530,7 +530,7 @@ where
     })
 }
 
-fn separator<'i, I>() -> impl SParser<'i, I, Punctuation, Ast>
+fn separator<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -540,7 +540,7 @@ where
     })
 }
 
-fn const_<'i: 'd, 'd, I>(expr: impl SParser<'i, I, Expr, Ast>) -> impl SParser<'i, I, Const, Ast>
+fn const_<'i: 'd, 'd, I>(expr: impl SParser<'i, I, Expr>) -> impl SParser<'i, I, Const>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -563,7 +563,7 @@ where
         )
 }
 
-fn const_toplevel<'i, I>() -> impl SParser<'i, I, TopLevel, Ast>
+fn const_toplevel<'i, I>() -> impl SParser<'i, I, TopLevel>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -573,7 +573,7 @@ where
     })
 }
 
-fn const_expr<'i, I>(expr: impl SParser<'i, I, Expr, Ast>) -> impl SParser<'i, I, Expr, Ast>
+fn const_expr<'i, I>(expr: impl SParser<'i, I, Expr>) -> impl SParser<'i, I, Expr>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -583,7 +583,7 @@ where
     })
 }
 
-fn static_<'i, I>(expr: impl SParser<'i, I, Expr, Ast>) -> impl SParser<'i, I, Static, Ast>
+fn static_<'i, I>(expr: impl SParser<'i, I, Expr>) -> impl SParser<'i, I, Static>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -606,7 +606,7 @@ where
         )
 }
 
-fn static_toplevel<'i, I>() -> impl SParser<'i, I, TopLevel, Ast>
+fn static_toplevel<'i, I>() -> impl SParser<'i, I, TopLevel>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -616,7 +616,7 @@ where
     })
 }
 
-fn static_expr<'i, I>(expr: impl SParser<'i, I, Expr, Ast>) -> impl SParser<'i, I, Expr, Ast>
+fn static_expr<'i, I>(expr: impl SParser<'i, I, Expr>) -> impl SParser<'i, I, Expr>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -626,7 +626,7 @@ where
     })
 }
 
-fn expr<'i: 'd, 'd, I>() -> impl SParser<'i, I, Expr, Ast>
+fn expr<'i: 'd, 'd, I>() -> impl SParser<'i, I, Expr>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -757,57 +757,77 @@ where
             ret_expr,
         ))
         .pratt((
-            pratt::prefix(1, op_and::<I>(), |op, expr, span| Spanned {
-                span,
-                inner: Expr::Ref(Box::new(Unary { op, expr })),
-            }),
-            pratt::infix(pratt::left(5), op_mul::<I>(), |left, op, right, span| {
-                Spanned {
-                    span,
+            pratt::prefix(
+                1,
+                op_and::<I>(),
+                |op, expr, span: &mut MapExtra<'i, '_, I, _>| Spanned {
+                    span: span.span(),
+                    inner: Expr::Ref(Box::new(Unary { op, expr })),
+                },
+            ),
+            pratt::infix(
+                pratt::left(5),
+                op_mul::<I>(),
+                |left, op, right, span: &mut MapExtra<'i, '_, I, _>| Spanned {
+                    span: span.span(),
                     inner: Expr::Mul(Box::new(Binary { left, op, right })),
-                }
-            }),
-            pratt::prefix(1, op_mul::<I>(), |op, expr, span| Spanned {
-                span,
-                inner: Expr::Deref(Box::new(Unary { op, expr })),
-            }),
-            pratt::infix(pratt::left(5), op_div::<I>(), |left, op, right, span| {
-                Spanned {
-                    span,
+                },
+            ),
+            pratt::prefix(
+                1,
+                op_mul::<I>(),
+                |op, expr, span: &mut MapExtra<'i, '_, I, _>| Spanned {
+                    span: span.span(),
+                    inner: Expr::Deref(Box::new(Unary { op, expr })),
+                },
+            ),
+            pratt::infix(
+                pratt::left(5),
+                op_div::<I>(),
+                |left, op, right, span: &mut MapExtra<'i, '_, I, _>| Spanned {
+                    span: span.span(),
                     inner: Expr::Div(Box::new(Binary { left, op, right })),
-                }
-            }),
-            pratt::infix(pratt::left(4), op_plus::<I>(), |left, op, right, span| {
-                Spanned {
-                    span,
+                },
+            ),
+            pratt::infix(
+                pratt::left(4),
+                op_plus::<I>(),
+                |left, op, right, span: &mut MapExtra<'i, '_, I, _>| Spanned {
+                    span: span.span(),
                     inner: Expr::Add(Box::new(Binary { left, op, right })),
-                }
-            }),
-            pratt::infix(pratt::left(4), op_minus::<I>(), |left, op, right, span| {
-                Spanned {
-                    span,
+                },
+            ),
+            pratt::infix(
+                pratt::left(4),
+                op_minus::<I>(),
+                |left, op, right, span: &mut MapExtra<'i, '_, I, _>| Spanned {
+                    span: span.span(),
                     inner: Expr::Sub(Box::new(Binary { left, op, right })),
-                }
-            }),
-            pratt::infix(pratt::left(3), op_eq::<I>(), |left, op, right, span| {
-                Spanned {
-                    span,
+                },
+            ),
+            pratt::infix(
+                pratt::left(3),
+                op_eq::<I>(),
+                |left, op, right, span: &mut MapExtra<'i, '_, I, _>| Spanned {
+                    span: span.span(),
                     inner: Expr::Eq(Box::new(Binary { left, op, right })),
-                }
-            }),
-            pratt::infix(pratt::left(3), op_assign::<I>(), |left, op, right, span| {
-                Spanned {
-                    span,
+                },
+            ),
+            pratt::infix(
+                pratt::left(3),
+                op_assign::<I>(),
+                |left, op, right, span: &mut MapExtra<'i, '_, I, _>| Spanned {
+                    span: span.span(),
                     inner: Expr::Assign(Box::new(Binary { left, op, right })),
-                }
-            }),
+                },
+            ),
             pratt::postfix(
                 6,
                 select! { Token::Indent(_) => () }
                     .or_not()
                     .ignore_then(op_dot::<I>().then(word())),
-                |expr, (op, field), span| Spanned {
-                    span,
+                |expr, (op, field), span: &mut MapExtra<'i, '_, I, _>| Spanned {
+                    span: span.span(),
                     inner: Expr::FieldAccess(Box::new(FieldAccess {
                         reciever: expr,
                         access: op,
@@ -815,21 +835,25 @@ where
                     })),
                 },
             ),
-            pratt::postfix(6, call, |callee, ((lparen, args), rparen), span| Spanned {
-                span,
-                inner: Expr::Call(Box::new(Call {
-                    callee,
-                    lparen,
-                    args,
-                    rparen,
-                })),
-            }),
+            pratt::postfix(
+                6,
+                call,
+                |callee, ((lparen, args), rparen), span: &mut MapExtra<'i, '_, I, _>| Spanned {
+                    span: span.span(),
+                    inner: Expr::Call(Box::new(Call {
+                        callee,
+                        lparen,
+                        args,
+                        rparen,
+                    })),
+                },
+            ),
         ))
     })
     .labelled("Expr")
 }
 
-fn indent_increase<'i, I>() -> impl NParser<'i, I, usize, Ast>
+fn indent_increase<'i, I>() -> impl NParser<'i, I, usize>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -840,7 +864,7 @@ where
     .labelled("indent increase")
 }
 
-fn indent_same<'i, I>() -> impl NParser<'i, I, (), Ast>
+fn indent_same<'i, I>() -> impl NParser<'i, I, ()>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -850,7 +874,7 @@ where
     })
     .labelled("same indent")
 }
-fn func_signature<'i, I>() -> impl NParser<'i, I, FuncSignature, Ast>
+fn func_signature<'i, I>() -> impl NParser<'i, I, FuncSignature>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -866,7 +890,7 @@ where
         .map(|(ins, return_)| FuncSignature { ins, return_ })
 }
 
-fn lbracket<'i, I>() -> impl SParser<'i, I, Punctuation, Ast>
+fn lbracket<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -875,7 +899,7 @@ where
         inner: Punctuation::LBracket,
     })
 }
-fn rbracket<'i, I>() -> impl SParser<'i, I, Punctuation, Ast>
+fn rbracket<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -885,7 +909,7 @@ where
     })
 }
 
-fn lparen<'i, I>() -> impl SParser<'i, I, Punctuation, Ast>
+fn lparen<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -894,7 +918,7 @@ where
         inner: Punctuation::RParen,
     })
 }
-fn rparen<'i, I>() -> impl SParser<'i, I, Punctuation, Ast>
+fn rparen<'i, I>() -> impl SParser<'i, I, Punctuation>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -904,7 +928,7 @@ where
     })
 }
 
-fn generics<'i, I>() -> impl NParser<'i, I, Generics, Ast>
+fn generics<'i, I>() -> impl NParser<'i, I, Generics>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -930,24 +954,22 @@ where
 }
 
 fn body<'i: 'd, 'd, I, O>(
-    expr: impl NParser<'i, I, Spanned<O>, Ast>,
-) -> impl NParser<'i, I, Vec<Spanned<O>>, Ast>
+    expr: impl NParser<'i, I, Spanned<O>>,
+) -> impl NParser<'i, I, Vec<Spanned<O>>>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
     indent_increase().ignore_with_ctx(expr.clone().separated_by(indent_same()).collect::<Vec<_>>())
 }
 
-fn body_unspanned<'i: 'd, 'd, I, O>(
-    expr: impl NParser<'i, I, O, Ast>,
-) -> impl NParser<'i, I, Vec<O>, Ast>
+fn body_unspanned<'i: 'd, 'd, I, O>(expr: impl NParser<'i, I, O>) -> impl NParser<'i, I, Vec<O>>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
     indent_increase().ignore_with_ctx(expr.clone().separated_by(indent_same()).collect::<Vec<_>>())
 }
 
-fn func<'i: 'd, 'd, I>() -> impl SParser<'i, I, Func, Ast>
+fn func<'i: 'd, 'd, I>() -> impl SParser<'i, I, Func>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -959,7 +981,7 @@ where
         })
 }
 
-fn func_decl<'i: 'd, 'd, I>() -> impl NParser<'i, I, FuncDecl, Ast>
+fn func_decl<'i: 'd, 'd, I>() -> impl NParser<'i, I, FuncDecl>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -975,7 +997,7 @@ where
         })
 }
 
-fn type_ascription<'i, I>() -> impl NParser<'i, I, TypeAscription, Ast>
+fn type_ascription<'i, I>() -> impl NParser<'i, I, TypeAscription>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -984,7 +1006,7 @@ where
         .map(|(sep, ty)| TypeAscription { sep, ty })
 }
 
-fn name_type_pair<'i, I>() -> impl NParser<'i, I, NameTypePair, Ast>
+fn name_type_pair<'i, I>() -> impl NParser<'i, I, NameTypePair>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -993,9 +1015,7 @@ where
         .map(|(name, TypeAscription { sep, ty })| NameTypePair { name, sep, ty })
 }
 
-fn field_value_pair<'i, I>(
-    expr: impl SParser<'i, I, Expr, Ast>,
-) -> impl NParser<'i, I, FieldValuePair, Ast>
+fn field_value_pair<'i, I>(expr: impl SParser<'i, I, Expr>) -> impl NParser<'i, I, FieldValuePair>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -1005,7 +1025,7 @@ where
         .map(|((name, sep), expr)| FieldValuePair { name, sep, expr })
 }
 
-fn struct_<'i, I>() -> impl SParser<'i, I, TopLevel, Ast>
+fn struct_<'i, I>() -> impl SParser<'i, I, TopLevel>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -1024,7 +1044,7 @@ where
         })
 }
 
-fn trait_<'i, I>() -> impl SParser<'i, I, TopLevel, Ast>
+fn trait_<'i, I>() -> impl SParser<'i, I, TopLevel>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -1045,7 +1065,7 @@ where
         })
 }
 
-fn inherent_impl<'i, I>() -> impl SParser<'i, I, TopLevel, Ast>
+fn inherent_impl<'i, I>() -> impl SParser<'i, I, TopLevel>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -1064,7 +1084,7 @@ where
         })
 }
 
-fn trait_impl<'i, I>() -> impl SParser<'i, I, TopLevel, Ast>
+fn trait_impl<'i, I>() -> impl SParser<'i, I, TopLevel>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -1089,7 +1109,7 @@ where
         )
 }
 
-fn module<'i, I>() -> impl SParser<'i, I, TopLevel, Ast>
+fn module<'i, I>() -> impl SParser<'i, I, TopLevel>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -1101,7 +1121,7 @@ where
         })
 }
 
-fn use_<'i, I>() -> impl SParser<'i, I, TopLevel, Ast>
+fn use_<'i, I>() -> impl SParser<'i, I, TopLevel>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -1113,7 +1133,7 @@ where
         })
 }
 
-pub fn file<'i, I>() -> impl NParser<'i, I, Module, Ast>
+pub fn file<'i, I>() -> impl NParser<'i, I, Module>
 where
     I: ValueInput<'i, Token = Token, Span = Span>,
 {
@@ -1133,7 +1153,7 @@ where
     .collect()
     .then_ignore(end())
     .or(end().to(vec![]))
-    .map_with(|items, extra| {
+    .map(|items| {
         let mut module = Module {
             funcs: Vec::new(),
             consts: Vec::new(),
